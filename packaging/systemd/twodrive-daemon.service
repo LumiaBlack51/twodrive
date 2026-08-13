@@ -1,0 +1,19 @@
+[Unit]
+Description=TwoDrive OneDrive Files-On-Demand daemon
+After=graphical-session.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'mountpoint -q "%h/TwoDrive/OneDrive" && /usr/bin/fusermount3 -uz "%h/TwoDrive/OneDrive" || true'
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env twodrive-daemon
+Restart=on-failure
+RestartSec=5s
+Nice=10
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+[package]
+name = "twodrive-cli"
+version = "0.2.2"
+edition.workspace = true
+
+[[bin]]
+name = "twodrive"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+twodrive-backend.workspace = true
+twodrive-core.workspace = true
+twodrive-fs.workspace = true

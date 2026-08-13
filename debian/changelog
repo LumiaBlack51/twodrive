@@ -1,0 +1,37 @@
+twodrive (0.2.2-2) unstable; urgency=medium
+
+  * Make the user service locate both packaged and user-local daemon binaries.
+  * Add bilingual release installation, configuration, and usage documentation.
+
+ -- TwoDrive Developers <noreply@localhost>  Thu, 13 Aug 2026 12:00:00 +0800
+
+twodrive (0.2.2-1) unstable; urgency=medium
+
+  * Upload files larger than 10 MiB with resumable Microsoft Graph sessions.
+  * Preserve ETag conflicts as stable, retryable local conflict copies.
+  * Refresh the winning remote metadata before exposing the original file.
+  * Keep read-only and concurrent handles valid after unlink until final release.
+
+ -- TwoDrive Developers <noreply@localhost>  Fri, 24 Jul 2026 19:45:00 +0800
+
+twodrive (0.2.1-1) unstable; urgency=medium
+
+  * Replay interrupted uploading rows and queued remote deletes.
+  * Protect ETag-based overwrites from silent remote conflicts.
+  * Honor Retry-After on transient Microsoft Graph failures.
+
+ -- TwoDrive Developers <noreply@localhost>  Fri, 24 Jul 2026 20:30:00 +0800
+
+twodrive (0.2.0-1) unstable; urgency=medium
+
+  * Persist and inherit always-keep policies.
+  * Support durable writes, fsync, atomic replacement, and dirty recovery.
+  * Fix Microsoft Graph parent resolution for rename and move.
+
+ -- TwoDrive Developers <noreply@localhost>  Fri, 24 Jul 2026 18:00:00 +0800
+
+twodrive (0.1.0-1) unstable; urgency=medium
+
+  * Initial desktop integration packaging draft.
+
+ -- TwoDrive Developers <noreply@localhost>  Sat, 04 Jul 2026 21:00:00 +0800

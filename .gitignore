@@ -1,0 +1,29 @@
+/target/
+target/
+/dist/
+
+# Local twodrive runtime/config artifacts. Real config may contain a local
+# Azure app id and tokens must never enter the repository.
+config.toml
+tokens.json
+*.tokens.json
+.config/twodrive/config.toml
+.config/twodrive/tokens.json
+twodrive.sqlite3
+twodrive.sqlite3-*
+cache/
+.cache/
+.local/share/twodrive/
+TwoDrive/
+
+# Editor/system noise
+*~
+*.swp
+*.tmp
+.idea/
+.vscode/
+
+# Internal implementation prompts/checklists are not release source.
+/c
+/doc/prompt*.md
+/doc/checklist*.md

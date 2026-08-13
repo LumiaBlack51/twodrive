@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TwoDrive Tray
+Comment=TwoDrive background status menu
+Exec=twodrive-tray
+TryExec=twodrive-tray
+Icon=folder-cloud
+Terminal=false
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=GNOME;Unity;

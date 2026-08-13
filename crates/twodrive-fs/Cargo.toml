@@ -1,0 +1,12 @@
+[package]
+name = "twodrive-fs"
+version = "0.2.2"
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fuser.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+twodrive-backend.workspace = true
+twodrive-core.workspace = true

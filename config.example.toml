@@ -1,0 +1,53 @@
+[graph]
+client_id = "YOUR_AZURE_APP_CLIENT_ID"
+tenant = "common"
+redirect_uri = "http://localhost:53682"
+scopes = [
+    "Files.ReadWrite",
+    "User.Read",
+    "offline_access",
+    "openid",
+    "profile",
+]
+
+[cache]
+retain_for = "30d"
+max_size = "20GiB"
+
+[power]
+ac_sync_interval = "15m"
+battery_sync_interval = "60m"
+ac_download_concurrency = 4
+battery_download_concurrency = 1
+
+[known_folders]
+enabled = false
+mode = "upload_only"
+debounce = "5s"
+rescan_interval = "0s"
+startup_scan = false
+upload_deletes = false
+exclude_suffixes = [
+    ".crdownload",
+    ".part",
+    ".tmp",
+    ".download",
+    ".temp",
+    ".partial",
+    ".filepart",
+    ".opdownload",
+    ".aria2",
+    ".!qB",
+    ".swp",
+    ".swo",
+    ".swx",
+    ".bak",
+]
+
+[[known_folders.folders]]
+local = "~/Pictures"
+remote = "/Pictures"
+
+[[known_folders.folders]]
+local = "~/Downloads"
+remote = "/Downloads"

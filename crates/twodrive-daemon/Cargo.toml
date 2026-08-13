@@ -1,0 +1,13 @@
+[package]
+name = "twodrive-daemon"
+version = "0.2.2"
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+twodrive-backend.workspace = true
+twodrive-core.workspace = true
+twodrive-fs.workspace = true

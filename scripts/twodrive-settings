@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+import os
+import shutil
+import subprocess
+import sys
+
+try:
+    import gi
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+except Exception as exc:
+    print(f"twodrive-settings: Gtk4 is required: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    gi.require_version("Adw", "1")
+    from gi.repository import Adw
+    ADW_AVAILABLE = True
+except Exception:
+    Adw = None
+    ADW_AVAILABLE = False
+
+
+def twodrive_bin():
+    return shutil.which("twodrive") or os.path.expanduser("~/.local/bin/twodrive")
+
+
+def run_status():
+    try:
+        result = subprocess.run(
+            [twodrive_bin(), "status"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=5,
+            check=False,
+        )
+        return result.stdout
+    except Exception as exc:
+        return f"status error: {exc}"
+
+
+def cache_size(path):
+    total = 0
+    for root, _, files in os.walk(os.path.expanduser(path)):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
+
+
+def human_size(value):
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+
+class SettingsApp(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id="dev.twodrive.Settings")
+
+    def do_activate(self):
+        if ADW_AVAILABLE:
+            Adw.init()
+        window = Gtk.ApplicationWindow(application=self)
+        window.set_title("TwoDrive Settings")
+        window.set_default_size(620, 520)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(18)
+        box.set_margin_bottom(18)
+        box.set_margin_start(18)
+        box.set_margin_end(18)
+
+        status = run_status()
+        fields = {}
+        for line in status.splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                fields[key.strip()] = value.strip()
+
+        rows = [
+            ("Login state", fields.get("token", "unknown")),
+            ("Sync folder", fields.get("mount", os.path.expanduser("~/TwoDrive/OneDrive"))),
+            ("Cache path", fields.get("cache", os.path.expanduser("~/.local/share/twodrive/cache"))),
+            ("Cache used", human_size(cache_size(fields.get("cache", "~/.local/share/twodrive/cache")))),
+            ("Pinned used", "Shown after pinned-size accounting is added"),
+            ("Cache retain for", fields.get("cache retain", "30d")),
+            ("Cache max size", fields.get("cache max", "20GiB")),
+            ("Battery sync interval", fields.get("sync interval battery", "60m")),
+            ("AC sync interval", fields.get("sync interval ac", "15m")),
+            ("Recent errors", "None recorded locally"),
+        ]
+
+        title = Gtk.Label(label="TwoDrive Settings")
+        title.add_css_class("title-1")
+        title.set_xalign(0)
+        box.append(title)
+
+        for label, value in rows:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            left = Gtk.Label(label=label)
+            left.set_xalign(0)
+            left.set_hexpand(True)
+            right = Gtk.Label(label=value)
+            right.set_xalign(1)
+            right.set_wrap(True)
+            row.append(left)
+            row.append(right)
+            box.append(row)
+
+        refresh = Gtk.Button(label="Refresh")
+        refresh.connect("clicked", lambda *_: self.do_activate())
+        box.append(refresh)
+
+        window.set_child(box)
+        window.present()
+
+
+if __name__ == "__main__":
+    SettingsApp().run(sys.argv)

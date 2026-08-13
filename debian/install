@@ -1,0 +1,11 @@
+target/release/twodrive usr/bin/
+target/release/twodrive-daemon usr/bin/
+scripts/twodrive-tray usr/bin/
+scripts/twodrive-settings usr/bin/
+packaging/systemd/twodrive-daemon.service usr/lib/systemd/user/
+packaging/autostart/twodrive-tray.desktop etc/xdg/autostart/
+packaging/applications/twodrive-settings.desktop usr/share/applications/
+packaging/nautilus/twodrive_nautilus.py usr/share/nautilus-python/extensions/
+packaging/icons/hicolor/scalable/emblems/*.svg usr/share/icons/hicolor/scalable/emblems/
+README.md usr/share/doc/twodrive/
+LICENSE usr/share/doc/twodrive/

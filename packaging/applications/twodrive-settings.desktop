@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TwoDrive Settings
+Comment=Configure TwoDrive cache and desktop integration
+Exec=twodrive-settings
+TryExec=twodrive-settings
+Icon=folder-cloud
+Terminal=false
+Categories=Settings;Utility;
+OnlyShowIn=GNOME;Unity;
