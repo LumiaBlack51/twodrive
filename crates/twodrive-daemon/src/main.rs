@@ -6,7 +6,7 @@ use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use twodrive_backend::{CloudBackend, GraphBackend};
@@ -75,6 +75,34 @@ fn run_known_folder_sync(paths: AppPaths, config: Config) -> anyhow::Result<()> 
     db.init()?;
     let backend = GraphBackend::from_paths(&paths)?;
     let mut state = KnownFolderState::load(&paths.data_dir)?;
+
+    if !state.pending.is_empty() {
+        state.prune_missing_pending();
+        state.save(&paths.data_dir)?;
+
+        let jobs = state
+            .pending
+            .iter()
+            .map(|(local_path, pending)| KnownFolderUploadJob {
+                local_path: PathBuf::from(local_path),
+                remote_path: pending.remote_path.clone(),
+                snapshot: pending.snapshot.clone(),
+            })
+            .collect::<Vec<_>>();
+        process_known_folder_uploads(&paths, &backend, &db, &config, jobs, &mut state)?;
+    }
+
+    if !state.baseline_initialized {
+        for root in &roots {
+            baseline_known_folder_path(&config, &root.local, &mut state)?;
+        }
+        state.baseline_initialized = true;
+        state.save(&paths.data_dir)?;
+        eprintln!(
+            "twodrive: initialized known folder baseline with {} files",
+            state.files.len()
+        );
+    }
 
     if config.known_folders.startup_scan {
         for root in &roots {
@@ -223,15 +251,16 @@ fn configured_known_folders(folders: &[KnownFolderConfig]) -> anyhow::Result<Vec
     Ok(roots)
 }
 
-fn sync_known_folder_paths(
+fn sync_known_folder_paths<B: CloudBackend>(
     paths: &AppPaths,
-    backend: &GraphBackend,
+    backend: &B,
     db: &Database,
     config: &Config,
     roots: &[KnownFolderRoot],
     pending: &HashSet<PathBuf>,
     state: &mut KnownFolderState,
 ) -> anyhow::Result<()> {
+    let mut jobs = Vec::new();
     for path in pending {
         let Some(root) = roots.iter().find(|root| path.starts_with(&root.local)) else {
             continue;
@@ -240,14 +269,14 @@ fn sync_known_folder_paths(
             state.remove_path(path);
             continue;
         }
-        sync_local_path(paths, backend, db, config, root, path, state)?;
+        collect_local_path(backend, db, config, root, path, state, &mut jobs)?;
     }
-    Ok(())
+    process_known_folder_uploads(paths, backend, db, config, jobs, state)
 }
 
-fn sync_known_folder_root(
+fn sync_known_folder_root<B: CloudBackend>(
     paths: &AppPaths,
-    backend: &GraphBackend,
+    backend: &B,
     db: &Database,
     config: &Config,
     root: &KnownFolderRoot,
@@ -260,15 +289,13 @@ fn sync_known_folder_root(
         );
         return Ok(());
     }
-    sync_local_path(paths, backend, db, config, root, &root.local, state)
+    let mut jobs = Vec::new();
+    collect_local_path(backend, db, config, root, &root.local, state, &mut jobs)?;
+    process_known_folder_uploads(paths, backend, db, config, jobs, state)
 }
 
-fn sync_local_path(
-    paths: &AppPaths,
-    backend: &GraphBackend,
-    db: &Database,
+fn baseline_known_folder_path(
     config: &Config,
-    root: &KnownFolderRoot,
     path: &Path,
     state: &mut KnownFolderState,
 ) -> anyhow::Result<()> {
@@ -284,11 +311,42 @@ fn sync_local_path(
         return Ok(());
     }
     if metadata.is_dir() {
-        let remote_dir = remote_path_for(root, path)?;
-        ensure_remote_dir(backend, db, &remote_dir)?;
+        for entry in fs::read_dir(path)? {
+            baseline_known_folder_path(config, &entry?.path(), state)?;
+        }
+    } else if metadata.is_file() {
+        state
+            .files
+            .entry(path.to_string_lossy().into_owned())
+            .or_insert_with(|| FileSnapshot::from_metadata(&metadata));
+    }
+    Ok(())
+}
+
+fn collect_local_path<B: CloudBackend>(
+    backend: &B,
+    db: &Database,
+    config: &Config,
+    root: &KnownFolderRoot,
+    path: &Path,
+    state: &KnownFolderState,
+    jobs: &mut Vec<KnownFolderUploadJob>,
+) -> anyhow::Result<()> {
+    if should_skip(path, config) {
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_dir() {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
-            sync_local_path(paths, backend, db, config, root, &entry.path(), state)?;
+            collect_local_path(backend, db, config, root, &entry.path(), state, jobs)?;
         }
         return Ok(());
     }
@@ -303,21 +361,93 @@ fn sync_local_path(
     }
 
     let remote_path = remote_path_for(root, path)?;
-    upload_known_folder_file(paths, backend, db, path, &remote_path, snapshot, state)
-}
-
-fn upload_known_folder_file(
-    paths: &AppPaths,
-    backend: &GraphBackend,
-    db: &Database,
-    local_path: &Path,
-    remote_path: &str,
-    snapshot: FileSnapshot,
-    state: &mut KnownFolderState,
-) -> anyhow::Result<()> {
-    if let Some(parent) = parent_cloud_path(remote_path) {
+    if let Some(parent) = parent_cloud_path(&remote_path) {
         ensure_remote_dir(backend, db, &parent)?;
     }
+    jobs.push(KnownFolderUploadJob {
+        local_path: path.to_path_buf(),
+        remote_path,
+        snapshot,
+    });
+    Ok(())
+}
+
+fn process_known_folder_uploads<B: CloudBackend>(
+    paths: &AppPaths,
+    backend: &B,
+    db: &Database,
+    config: &Config,
+    jobs: Vec<KnownFolderUploadJob>,
+    state: &mut KnownFolderState,
+) -> anyhow::Result<()> {
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    for job in &jobs {
+        state.pending.insert(
+            job.local_path.to_string_lossy().into_owned(),
+            PendingKnownFolderUpload {
+                remote_path: job.remote_path.clone(),
+                snapshot: job.snapshot.clone(),
+            },
+        );
+    }
+    state.save(&paths.data_dir)?;
+
+    let jobs = Arc::new(Mutex::new(jobs.into_iter()));
+    let (result_tx, result_rx) = mpsc::channel();
+    let concurrency = config.power.ac_upload_concurrency.max(1) as usize;
+    thread::scope(|scope| -> anyhow::Result<()> {
+        for _ in 0..concurrency {
+            let jobs = Arc::clone(&jobs);
+            let result_tx = result_tx.clone();
+            scope.spawn(move || {
+                loop {
+                    let job = match jobs.lock() {
+                        Ok(mut jobs) => jobs.next(),
+                        Err(_) => return,
+                    };
+                    let Some(job) = job else {
+                        return;
+                    };
+                    let result = upload_known_folder_file(paths, backend, db, &job);
+                    let _ = result_tx.send((job, result));
+                }
+            });
+        }
+        drop(result_tx);
+
+        for (job, result) in result_rx {
+            let local_key = job.local_path.to_string_lossy().into_owned();
+            match result {
+                Ok(uploaded) => {
+                    db.upsert_metadata(&uploaded)?;
+                    state.files.insert(local_key.clone(), job.snapshot);
+                    state.pending.remove(&local_key);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "twodrive: known folder upload remains queued for {}: {err:#}",
+                        job.local_path.display()
+                    );
+                }
+            }
+            state.save(&paths.data_dir)?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn upload_known_folder_file<B: CloudBackend>(
+    paths: &AppPaths,
+    backend: &B,
+    db: &Database,
+    job: &KnownFolderUploadJob,
+) -> anyhow::Result<twodrive_core::MetadataEntry> {
+    let local_path = &job.local_path;
+    let remote_path = &job.remote_path;
+    let snapshot = &job.snapshot;
 
     let name = local_path
         .file_name()
@@ -330,30 +460,36 @@ fn upload_known_folder_file(
         name,
         Some(snapshot.size),
     );
-    let content = fs::read(local_path)?;
-    activity.set_progress(content.len() as u64, Some(snapshot.size));
-
+    let before = fs::metadata(local_path)?;
+    if FileSnapshot::from_metadata(&before) != *snapshot {
+        anyhow::bail!("local file changed before upload started");
+    }
+    let existing = db.get_by_path(remote_path)?;
+    let uploaded = backend.upload_file_with_version(
+        remote_path,
+        local_path,
+        existing
+            .as_ref()
+            .map(|record| record.metadata.remote_id.as_str()),
+        existing
+            .as_ref()
+            .map(|record| record.metadata.etag.as_str()),
+        &mut |done, total| {
+            activity.set_progress(done, Some(total));
+            Ok(())
+        },
+    )?;
     let after = fs::metadata(local_path)?;
     let after_snapshot = FileSnapshot::from_metadata(&after);
-    if after_snapshot != snapshot {
-        eprintln!(
-            "twodrive: known folder file changed while reading; will retry later: {}",
-            local_path.display()
-        );
-        return Ok(());
+    if after_snapshot != *snapshot {
+        anyhow::bail!("local file changed while uploading");
     }
-
-    let uploaded = backend.upload(remote_path, content)?;
-    db.upsert_metadata(&uploaded)?;
-    state
-        .files
-        .insert(local_path.to_string_lossy().into_owned(), snapshot);
     activity.finish();
-    Ok(())
+    Ok(uploaded)
 }
 
-fn ensure_remote_dir(
-    backend: &GraphBackend,
+fn ensure_remote_dir<B: CloudBackend>(
+    backend: &B,
     db: &Database,
     remote_dir: &str,
 ) -> anyhow::Result<()> {
@@ -445,9 +581,27 @@ struct KnownFolderRoot {
     remote: String,
 }
 
+#[derive(Debug, Clone)]
+struct KnownFolderUploadJob {
+    local_path: PathBuf,
+    remote_path: String,
+    snapshot: FileSnapshot,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct KnownFolderState {
+    #[serde(default)]
+    baseline_initialized: bool,
+    #[serde(default)]
     files: HashMap<String, FileSnapshot>,
+    #[serde(default)]
+    pending: HashMap<String, PendingKnownFolderUpload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingKnownFolderUpload {
+    remote_path: String,
+    snapshot: FileSnapshot,
 }
 
 impl KnownFolderState {
@@ -463,7 +617,13 @@ impl KnownFolderState {
     fn save(&self, data_dir: &Path) -> anyhow::Result<()> {
         fs::create_dir_all(data_dir)?;
         let path = data_dir.join("known-folders-state.json");
-        fs::write(path, serde_json::to_string_pretty(self)?)?;
+        let tmp_path = data_dir.join("known-folders-state.json.tmp");
+        let mut file = fs::File::create(&tmp_path)?;
+        use std::io::Write;
+        file.write_all(serde_json::to_string_pretty(self)?.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(tmp_path, path)?;
         Ok(())
     }
 
@@ -472,6 +632,26 @@ impl KnownFolderState {
         self.files.retain(|local_path, _| {
             local_path != key.as_ref() && !local_path.starts_with(&format!("{key}/"))
         });
+        self.pending.retain(|local_path, _| {
+            local_path != key.as_ref() && !local_path.starts_with(&format!("{key}/"))
+        });
+    }
+
+    fn prune_missing_pending(&mut self) -> usize {
+        let missing = self
+            .pending
+            .keys()
+            .filter(|local_path| !Path::new(local_path).is_file())
+            .cloned()
+            .collect::<Vec<_>>();
+        for local_path in &missing {
+            eprintln!(
+                "twodrive: dropping queued known folder upload because the local file is gone: {local_path}"
+            );
+            self.pending.remove(local_path);
+            self.files.remove(local_path);
+        }
+        missing.len()
     }
 }
 
@@ -569,6 +749,11 @@ fn update_activity<F>(path: &Path, update: F) -> anyhow::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>),
 {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| anyhow::anyhow!("known-folder activity lock is poisoned"))?;
     let mut active = match fs::read_to_string(path) {
         Ok(data) => serde_json::from_str::<serde_json::Value>(&data)
             .ok()
@@ -589,7 +774,9 @@ where
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, serde_json::to_string_pretty(&snapshot)?)?;
+    let tmp_path = path.with_extension(format!("json.{}.tmp", unique_suffix()));
+    fs::write(&tmp_path, serde_json::to_string_pretty(&snapshot)?)?;
+    fs::rename(tmp_path, path)?;
     Ok(())
 }
 
@@ -599,4 +786,295 @@ fn unique_suffix() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{nanos}-{}", std::process::id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use twodrive_backend::{DeltaResult, MockBackend};
+    use twodrive_core::{FileRecord, MetadataEntry};
+
+    #[derive(Debug)]
+    struct DelayedBackend {
+        inner: MockBackend,
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+    }
+
+    impl DelayedBackend {
+        fn new() -> Self {
+            Self {
+                inner: MockBackend::new(),
+                active: AtomicUsize::new(0),
+                max_active: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CloudBackend for DelayedBackend {
+        fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+            self.inner.list_all()
+        }
+
+        fn list_delta(&self, delta_link: Option<&str>) -> anyhow::Result<DeltaResult> {
+            self.inner.list_delta(delta_link)
+        }
+
+        fn download(&self, remote_id: &str) -> anyhow::Result<Vec<u8>> {
+            self.inner.download(remote_id)
+        }
+
+        fn upload(&self, path: &str, content: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+            self.inner.upload(path, content)
+        }
+
+        fn upload_file_with_version(
+            &self,
+            path: &str,
+            source_path: &Path,
+            remote_id: Option<&str>,
+            if_match: Option<&str>,
+            on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
+        ) -> anyhow::Result<MetadataEntry> {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(active, Ordering::SeqCst);
+            thread::sleep(if path.contains("slow") {
+                Duration::from_millis(800)
+            } else {
+                Duration::from_millis(100)
+            });
+            let result = self.inner.upload_file_with_version(
+                path,
+                source_path,
+                remote_id,
+                if_match,
+                on_progress,
+            );
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            result
+        }
+
+        fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.create_folder(path)
+        }
+
+        fn rename(&self, remote_id: &str, new_path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.rename(remote_id, new_path)
+        }
+
+        fn delete(&self, remote_id: &str) -> anyhow::Result<()> {
+            self.inner.delete(remote_id)
+        }
+    }
+
+    fn test_paths(name: &str) -> (PathBuf, AppPaths) {
+        let root = std::env::temp_dir().join(format!(
+            "twodrive-daemon-{name}-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let paths = AppPaths {
+            config_dir: root.join("config"),
+            config_path: root.join("config/config.toml"),
+            data_dir: root.join("data"),
+            cache_dir: root.join("data/cache"),
+            db_path: root.join("data/test.sqlite3"),
+            mount_dir: root.join("mount"),
+            token_path: root.join("config/tokens.json"),
+        };
+        (root, paths)
+    }
+
+    #[test]
+    fn known_folder_state_persists_pending_uploads() {
+        let (root, paths) = test_paths("pending-state");
+        let mut state = KnownFolderState::default();
+        state.pending.insert(
+            "/local/a.txt".to_string(),
+            PendingKnownFolderUpload {
+                remote_path: "/remote/a.txt".to_string(),
+                snapshot: FileSnapshot {
+                    size: 12,
+                    modified_unix: 34,
+                },
+            },
+        );
+        state.save(&paths.data_dir).unwrap();
+
+        let loaded = KnownFolderState::load(&paths.data_dir).unwrap();
+        let pending = loaded.pending.get("/local/a.txt").unwrap();
+        assert_eq!(pending.remote_path, "/remote/a.txt");
+        assert_eq!(pending.snapshot.size, 12);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_pending_known_folder_file_is_pruned() {
+        let (root, paths) = test_paths("missing-pending");
+        let missing = root.join("no-longer-present.txt");
+        let key = missing.to_string_lossy().into_owned();
+        let mut state = KnownFolderState::default();
+        state.files.insert(
+            key.clone(),
+            FileSnapshot {
+                size: 5,
+                modified_unix: 10,
+            },
+        );
+        state.pending.insert(
+            key.clone(),
+            PendingKnownFolderUpload {
+                remote_path: "/Known/no-longer-present.txt".to_string(),
+                snapshot: FileSnapshot {
+                    size: 5,
+                    modified_unix: 10,
+                },
+            },
+        );
+
+        assert_eq!(state.prune_missing_pending(), 1);
+        assert!(!state.pending.contains_key(&key));
+        assert!(!state.files.contains_key(&key));
+        fs::remove_dir_all(paths.data_dir.parent().unwrap()).unwrap_or(());
+    }
+
+    #[test]
+    fn first_start_baseline_preserves_tracked_snapshots_and_adds_history() {
+        let (root, _paths) = test_paths("baseline");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let tracked = source.join("tracked.txt");
+        let historical = source.join("historical.txt");
+        fs::write(&tracked, b"changed since last upload").unwrap();
+        fs::write(&historical, b"old local history").unwrap();
+
+        let mut config = Config::default();
+        config.known_folders.exclude_suffixes = vec![".tmp".to_string()];
+        let mut state = KnownFolderState::default();
+        let old_snapshot = FileSnapshot {
+            size: 3,
+            modified_unix: 4,
+        };
+        state
+            .files
+            .insert(tracked.to_string_lossy().into_owned(), old_snapshot.clone());
+
+        baseline_known_folder_path(&config, &source, &mut state).unwrap();
+
+        assert_eq!(
+            state.files.get(&tracked.to_string_lossy().into_owned()),
+            Some(&old_snapshot)
+        );
+        assert_eq!(
+            state.files.get(&historical.to_string_lossy().into_owned()),
+            Some(&FileSnapshot::from_metadata(
+                &fs::metadata(&historical).unwrap()
+            ))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn known_folder_small_files_upload_concurrently() {
+        let (root, paths) = test_paths("parallel");
+        paths.ensure().unwrap();
+        let db = Database::new(paths.db_path.clone());
+        db.init().unwrap();
+        let backend = DelayedBackend::new();
+        let mut config = Config::default();
+        config.power.ac_upload_concurrency = 4;
+        let mut state = KnownFolderState::default();
+        let source_dir = root.join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+        let mut jobs = Vec::new();
+        for index in 0..4 {
+            let local_path = source_dir.join(format!("small-{index}.txt"));
+            fs::write(&local_path, format!("small-{index}")).unwrap();
+            jobs.push(KnownFolderUploadJob {
+                snapshot: FileSnapshot::from_metadata(&fs::metadata(&local_path).unwrap()),
+                local_path,
+                remote_path: format!("/Parallel/small-{index}.txt"),
+            });
+        }
+
+        process_known_folder_uploads(&paths, &backend, &db, &config, jobs, &mut state).unwrap();
+
+        assert!(state.pending.is_empty());
+        assert_eq!(state.files.len(), 4);
+        assert!(backend.max_active.load(Ordering::SeqCst) >= 2);
+        for index in 0..4 {
+            let record: FileRecord = db
+                .get_by_path(&format!("/Parallel/small-{index}.txt"))
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.metadata.size, format!("small-{index}").len() as u64);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_known_folder_job_is_persisted_while_slower_job_runs() {
+        let (root, paths) = test_paths("incremental-results");
+        paths.ensure().unwrap();
+        let db = Database::new(paths.db_path.clone());
+        db.init().unwrap();
+        let mut config = Config::default();
+        config.power.ac_upload_concurrency = 2;
+        let source_dir = root.join("source");
+        fs::create_dir_all(&source_dir).unwrap();
+        let fast_path = source_dir.join("fast.txt");
+        let slow_path = source_dir.join("slow.txt");
+        fs::write(&fast_path, b"fast").unwrap();
+        fs::write(&slow_path, b"slow").unwrap();
+        let jobs = vec![
+            KnownFolderUploadJob {
+                snapshot: FileSnapshot::from_metadata(&fs::metadata(&fast_path).unwrap()),
+                local_path: fast_path.clone(),
+                remote_path: "/Parallel/fast.txt".to_string(),
+            },
+            KnownFolderUploadJob {
+                snapshot: FileSnapshot::from_metadata(&fs::metadata(&slow_path).unwrap()),
+                local_path: slow_path.clone(),
+                remote_path: "/Parallel/slow.txt".to_string(),
+            },
+        ];
+        let worker_paths = paths.clone();
+        let worker = thread::spawn(move || {
+            let mut state = KnownFolderState::default();
+            process_known_folder_uploads(
+                &worker_paths,
+                &DelayedBackend::new(),
+                &db,
+                &config,
+                jobs,
+                &mut state,
+            )
+            .map(|()| state)
+        });
+
+        let fast_key = fast_path.to_string_lossy().into_owned();
+        let slow_key = slow_path.to_string_lossy().into_owned();
+        let mut observed_incremental_commit = false;
+        for _ in 0..25 {
+            if let Ok(state) = KnownFolderState::load(&paths.data_dir)
+                && state.files.contains_key(&fast_key)
+                && !state.pending.contains_key(&fast_key)
+                && state.pending.contains_key(&slow_key)
+            {
+                observed_incremental_commit = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(
+            observed_incremental_commit,
+            "the fast result should be durable before the slow upload finishes"
+        );
+        let final_state = worker.join().unwrap().unwrap();
+        assert!(final_state.pending.is_empty());
+        assert_eq!(final_state.files.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -1,5 +1,6 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::fs;
@@ -24,6 +25,7 @@ pub enum FileState {
     Hydrating,
     Cached,
     Pinned,
+    Writing,
     Dirty,
     Uploading,
     Conflict,
@@ -37,6 +39,7 @@ impl FileState {
             Self::Hydrating => "hydrating",
             Self::Cached => "cached",
             Self::Pinned => "pinned",
+            Self::Writing => "writing",
             Self::Dirty => "dirty",
             Self::Uploading => "uploading",
             Self::Conflict => "conflict",
@@ -60,6 +63,7 @@ impl FromStr for FileState {
             "hydrating" => Ok(Self::Hydrating),
             "cached" => Ok(Self::Cached),
             "pinned" => Ok(Self::Pinned),
+            "writing" => Ok(Self::Writing),
             "dirty" => Ok(Self::Dirty),
             "uploading" => Ok(Self::Uploading),
             "conflict" => Ok(Self::Conflict),
@@ -134,6 +138,7 @@ pub struct FileRecord {
     pub cache_accessed_unix: Option<i64>,
     pub pin_explicit: bool,
     pub pin_origin_remote_id: Option<String>,
+    pub pin_inheritance_blocked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +240,8 @@ pub struct PowerConfig {
     pub battery_sync_interval: String,
     pub ac_download_concurrency: u8,
     pub battery_download_concurrency: u8,
+    pub ac_upload_concurrency: u8,
+    pub battery_upload_concurrency: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -290,6 +297,8 @@ impl Default for PowerConfig {
             battery_sync_interval: "60m".to_string(),
             ac_download_concurrency: 4,
             battery_download_concurrency: 1,
+            ac_upload_concurrency: 4,
+            battery_upload_concurrency: 2,
         }
     }
 }
@@ -300,8 +309,8 @@ impl Default for KnownFoldersConfig {
             enabled: false,
             mode: "upload_only".to_string(),
             debounce: "5s".to_string(),
-            rescan_interval: "0s".to_string(),
-            startup_scan: false,
+            rescan_interval: "15m".to_string(),
+            startup_scan: true,
             upload_deletes: false,
             exclude_suffixes: vec![
                 ".crdownload".to_string(),
@@ -474,7 +483,8 @@ impl Database {
                 cache_path TEXT,
                 cache_accessed_unix INTEGER,
                 pin_explicit INTEGER NOT NULL DEFAULT 0,
-                pin_origin_remote_id TEXT
+                pin_origin_remote_id TEXT,
+                pin_inheritance_blocked INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_files_parent_path ON files(parent_path);
             CREATE TABLE IF NOT EXISTS app_state (
@@ -507,6 +517,12 @@ impl Database {
             "pin_origin_remote_id",
             "ALTER TABLE files ADD COLUMN pin_origin_remote_id TEXT",
         )?;
+        ensure_column(
+            &conn,
+            "files",
+            "pin_inheritance_blocked",
+            "ALTER TABLE files ADD COLUMN pin_inheritance_blocked INTEGER NOT NULL DEFAULT 0",
+        )?;
         let migrated = conn
             .query_row(
                 "SELECT value FROM app_state WHERE key = 'pin_policy_v1_migrated'",
@@ -534,32 +550,169 @@ impl Database {
             )?;
         }
         drop(conn);
-        self.recompute_pin_inheritance()?;
+        if !migrated {
+            self.recompute_pin_inheritance()?;
+        }
         Ok(())
     }
 
     pub fn upsert_metadata(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
+        self.upsert_metadata_inner(entry, true)
+    }
+
+    pub fn upsert_metadata_batch<'a>(
+        &self,
+        entries: impl IntoIterator<Item = &'a MetadataEntry>,
+    ) -> anyhow::Result<()> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for entry in entries {
+            let pending_delete = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pending_deletes WHERE remote_id = ?1 OR path = ?2)",
+                params![entry.remote_id, normalize_cloud_path(&entry.path)],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if pending_delete {
+                continue;
+            }
+
+            let protected_path = tx.query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1 FROM files
+                    WHERE path = ?1
+                      AND remote_id <> ?2
+                      AND state IN ('writing', 'dirty', 'uploading')
+                )
+                "#,
+                params![entry.path, entry.remote_id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            let protected_id = tx.query_row(
+                r#"
+                SELECT EXISTS(
+                    SELECT 1 FROM files
+                    WHERE remote_id = ?1
+                      AND state IN ('writing', 'dirty', 'uploading')
+                )
+                "#,
+                params![entry.remote_id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if protected_path || protected_id {
+                continue;
+            }
+
+            let old_path = tx
+                .query_row(
+                    "SELECT path FROM files WHERE remote_id = ?1",
+                    params![entry.remote_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            tx.execute(
+                "DELETE FROM files WHERE path = ?1 AND remote_id <> ?2",
+                params![entry.path, entry.remote_id],
+            )?;
+            tx.execute(
+                r#"
+                INSERT INTO files (
+                    remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state,
+                    pin_inheritance_blocked
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
+                ON CONFLICT(remote_id) DO UPDATE SET
+                    path = excluded.path,
+                    parent_path = excluded.parent_path,
+                    name = excluded.name,
+                    is_dir = excluded.is_dir,
+                    size = excluded.size,
+                    modified_unix = excluded.modified_unix,
+                    etag = excluded.etag
+                "#,
+                params![
+                    entry.remote_id,
+                    entry.path,
+                    entry.parent_path,
+                    entry.name,
+                    entry.is_dir as i64,
+                    entry.size as i64,
+                    entry.modified_unix,
+                    entry.etag,
+                    FileState::OnlineOnly.as_str(),
+                ],
+            )?;
+
+            if let Some(old_path) = old_path.filter(|old_path| old_path != &entry.path) {
+                let descendants = {
+                    let mut stmt = tx.prepare(
+                        r#"
+                        SELECT remote_id, path FROM files
+                        WHERE (
+                            ?1 = '/' AND path <> '/' AND substr(path, 1, 1) = '/'
+                        ) OR (
+                            ?1 <> '/' AND substr(path, 1, length(?1) + 1) = ?1 || '/'
+                        )
+                        ORDER BY path
+                        "#,
+                    )?;
+                    stmt.query_map(params![old_path], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?
+                };
+                for (remote_id, old_descendant_path) in descendants {
+                    let suffix = old_descendant_path
+                        .strip_prefix(&old_path)
+                        .ok_or_else(|| anyhow::anyhow!("descendant path lost its parent prefix"))?;
+                    let path = normalize_cloud_path(&format!("{}{suffix}", entry.path));
+                    tx.execute(
+                        "UPDATE files SET path = ?1, parent_path = ?2, name = ?3 WHERE remote_id = ?4",
+                        params![path, parent_cloud_path(&path), cloud_name(&path), remote_id],
+                    )?;
+                }
+            }
+        }
+        tx.commit()?;
+        self.recompute_pin_inheritance()
+    }
+
+    fn upsert_metadata_inner(
+        &self,
+        entry: &MetadataEntry,
+        recompute_pins: bool,
+    ) -> anyhow::Result<()> {
         if self.is_pending_delete(&entry.remote_id, &entry.path)? {
             return Ok(());
         }
         if self.get_by_path(&entry.path)?.is_some_and(|record| {
             record.metadata.remote_id != entry.remote_id
-                && matches!(record.state, FileState::Dirty | FileState::Uploading)
+                && matches!(
+                    record.state,
+                    FileState::Writing | FileState::Dirty | FileState::Uploading
+                )
         }) {
             return Ok(());
         }
         if self
             .get_by_remote_id(&entry.remote_id)?
-            .is_some_and(|record| matches!(record.state, FileState::Dirty | FileState::Uploading))
+            .is_some_and(|record| {
+                matches!(
+                    record.state,
+                    FileState::Writing | FileState::Dirty | FileState::Uploading
+                )
+            })
         {
-            self.recompute_pin_inheritance()?;
+            if recompute_pins {
+                self.recompute_pin_inheritance()?;
+            }
             return Ok(());
         }
         let old_path = self
             .get_by_remote_id(&entry.remote_id)?
             .map(|record| record.metadata.path);
         let mut conn = self.connect()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "DELETE FROM files WHERE path = ?1 AND remote_id <> ?2",
             params![entry.path, entry.remote_id],
@@ -595,7 +748,9 @@ impl Database {
         if let Some(old_path) = old_path.filter(|old_path| old_path != &entry.path) {
             self.move_descendants(&old_path, &entry.path)?;
         }
-        self.recompute_pin_inheritance()?;
+        if recompute_pins {
+            self.recompute_pin_inheritance()?;
+        }
         Ok(())
     }
 
@@ -605,6 +760,23 @@ impl Database {
             "UPDATE files SET state = ?1 WHERE remote_id = ?2",
             params![state.as_str(), remote_id],
         )?;
+        Ok(())
+    }
+
+    pub fn mark_dirty_with_size(&self, remote_id: &str, size: u64) -> anyhow::Result<()> {
+        let conn = self.connect()?;
+        let changed = conn.execute(
+            "UPDATE files SET state = ?1, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            params![
+                FileState::Dirty.as_str(),
+                i64::try_from(size).unwrap_or(i64::MAX),
+                now_unix(),
+                remote_id
+            ],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("cannot mark unknown item {remote_id} dirty");
+        }
         Ok(())
     }
 
@@ -667,23 +839,47 @@ impl Database {
     }
 
     pub fn set_explicit_pin(&self, remote_id: &str, pinned: bool) -> anyhow::Result<()> {
-        let conn = self.connect()?;
-        let changed = conn.execute(
-            "UPDATE files SET pin_explicit = ?1 WHERE remote_id = ?2",
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let record = self.query_record(
+            &tx,
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE remote_id = ?1",
+            params![remote_id],
+        )?;
+        let Some(record) = record else {
+            anyhow::bail!("cannot change pin policy for unknown item {remote_id}");
+        };
+        let changed = tx.execute(
+            r#"
+            UPDATE files
+            SET pin_explicit = ?1,
+                pin_inheritance_blocked = CASE WHEN ?1 = 1 THEN 0 ELSE pin_inheritance_blocked END
+            WHERE remote_id = ?2
+            "#,
             params![pinned as i64, remote_id],
         )?;
         if changed == 0 {
             anyhow::bail!("cannot change pin policy for unknown item {remote_id}");
         }
-        drop(conn);
+        if pinned && record.metadata.is_dir {
+            tx.execute(
+                r#"
+                UPDATE files
+                SET pin_inheritance_blocked = 0
+                WHERE substr(path, 1, length(?1) + 1) = ?1 || '/'
+                "#,
+                params![record.metadata.path],
+            )?;
+        }
+        tx.commit()?;
         self.recompute_pin_inheritance()
     }
 
     pub fn recompute_pin_inheritance(&self) -> anyhow::Result<()> {
         let mut conn = self.connect()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut stmt = tx.prepare(
-            "SELECT remote_id, path, pin_explicit FROM files ORDER BY length(path), path",
+            "SELECT remote_id, path, pin_explicit, pin_inheritance_blocked FROM files ORDER BY length(path), path",
         )?;
         let records = stmt
             .query_map([], |row| {
@@ -691,31 +887,35 @@ impl Database {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)? != 0,
+                    row.get::<_, i64>(3)? != 0,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
 
-        for (remote_id, path, explicit) in records {
-            let origin = if explicit {
+        let explicit_roots = records
+            .iter()
+            .filter(|(_, _, explicit, _)| *explicit)
+            .map(|(remote_id, path, _, _)| (path.clone(), remote_id.clone()))
+            .collect::<HashMap<_, _>>();
+
+        for (remote_id, path, explicit, inheritance_blocked) in records {
+            let origin = if explicit || inheritance_blocked {
                 None
             } else {
-                tx.query_row(
-                    r#"
-                    SELECT remote_id
-                    FROM files
-                    WHERE pin_explicit = 1
-                      AND (
-                        ?1 = path
-                        OR substr(?1, 1, length(path) + 1) = path || '/'
-                      )
-                    ORDER BY length(path) DESC
-                    LIMIT 1
-                    "#,
-                    params![path],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
+                let mut ancestor = parent_cloud_path(&path);
+                let mut origin = None;
+                loop {
+                    if let Some(remote_id) = explicit_roots.get(&ancestor) {
+                        origin = Some(remote_id.clone());
+                        break;
+                    }
+                    if ancestor == "/" {
+                        break;
+                    }
+                    ancestor = parent_cloud_path(&ancestor);
+                }
+                origin
             };
             let effective = explicit || origin.is_some();
             tx.execute(
@@ -723,7 +923,7 @@ impl Database {
                 UPDATE files
                 SET pin_origin_remote_id = ?1,
                     state = CASE
-                        WHEN state IN ('dirty', 'uploading', 'conflict', 'error') THEN state
+                        WHEN state IN ('writing', 'dirty', 'uploading', 'conflict', 'error') THEN state
                         WHEN ?2 = 1 AND is_dir = 1 THEN 'pinned'
                         WHEN ?2 = 1 AND cache_path IS NOT NULL THEN 'pinned'
                         WHEN ?2 = 1 THEN 'hydrating'
@@ -760,7 +960,31 @@ impl Database {
                 &record.metadata.etag,
             )
         };
-        self.upsert_metadata(&entry)
+        self.upsert_metadata(&entry)?;
+        self.allow_pin_inheritance(remote_id)
+    }
+
+    pub fn allow_pin_inheritance(&self, remote_id: &str) -> anyhow::Result<()> {
+        let conn = self.connect()?;
+        let record = self.query_record(
+            &conn,
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE remote_id = ?1",
+            params![remote_id],
+        )?;
+        let Some(record) = record else {
+            anyhow::bail!("cannot change pin inheritance for unknown item {remote_id}");
+        };
+        conn.execute(
+            r#"
+            UPDATE files
+            SET pin_inheritance_blocked = 0
+            WHERE remote_id = ?1
+               OR substr(path, 1, length(?2) + 1) = ?2 || '/'
+            "#,
+            params![remote_id, record.metadata.path],
+        )?;
+        drop(conn);
+        self.recompute_pin_inheritance()
     }
 
     fn move_descendants(&self, old_path: &str, new_path: &str) -> anyhow::Result<()> {
@@ -769,7 +993,7 @@ impl Database {
             return Ok(());
         }
         let mut conn = self.connect()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for record in descendants {
             let suffix = record
                 .metadata
@@ -795,6 +1019,7 @@ impl Database {
                 record.state,
                 FileState::Pinned
                     | FileState::Dirty
+                    | FileState::Writing
                     | FileState::Uploading
                     | FileState::Hydrating
                     | FileState::Error
@@ -867,7 +1092,7 @@ impl Database {
         let normalized = normalize_cloud_path(path);
         self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id FROM files WHERE path = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE path = ?1",
             params![normalized],
         )
     }
@@ -876,7 +1101,7 @@ impl Database {
         let conn = self.connect()?;
         self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE remote_id = ?1",
             params![remote_id],
         )
     }
@@ -886,7 +1111,7 @@ impl Database {
         let normalized = normalize_cloud_path(parent_path);
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked
             FROM files
             WHERE parent_path = ?1
             ORDER BY is_dir DESC, lower(name), name
@@ -903,7 +1128,7 @@ impl Database {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked
             FROM files
             WHERE (
                 ?1 = '/' AND path <> '/' AND substr(path, 1, 1) = '/'
@@ -923,7 +1148,7 @@ impl Database {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked
             FROM files
             ORDER BY path
             "#,
@@ -943,7 +1168,7 @@ impl Database {
 
     pub fn queue_pending_delete(&self, record: &FileRecord) -> anyhow::Result<()> {
         let mut conn = self.connect()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             r#"
             INSERT INTO pending_deletes(remote_id, path, cache_path, queued_unix)
@@ -1092,6 +1317,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
         cache_accessed_unix: row.get(10)?,
         pin_explicit: row.get::<_, i64>(11)? != 0,
         pin_origin_remote_id: row.get(12)?,
+        pin_inheritance_blocked: row.get::<_, i64>(13)? != 0,
     })
 }
 
@@ -1255,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn new_items_inherit_an_explicitly_pinned_ancestor() {
+    fn locally_added_items_inherit_an_explicitly_pinned_ancestor() {
         let test = TestDatabase::new("new-inherits");
         add_dir(&test.db, "courses", "/Courses");
         test.db.set_explicit_pin("courses", true).unwrap();
@@ -1268,6 +1494,37 @@ mod tests {
         assert!(week.effective_pinned());
         assert!(notes.effective_pinned());
         assert_eq!(week.pin_origin_remote_id.as_deref(), Some("courses"));
+        assert_eq!(notes.pin_origin_remote_id.as_deref(), Some("courses"));
+    }
+
+    #[test]
+    fn newly_discovered_cloud_items_stay_online_only() {
+        let test = TestDatabase::new("metadata-batch");
+        add_dir(&test.db, "courses", "/Courses");
+        test.db.set_explicit_pin("courses", true).unwrap();
+        add_file(&test.db, "local-draft", "/Courses/draft.txt");
+        test.db.mark_state("local-draft", FileState::Dirty).unwrap();
+
+        let entries = vec![
+            MetadataEntry::new_dir("week-1", "/Courses/Week 1", 1, "dir-etag"),
+            MetadataEntry::new_file("notes", "/Courses/Week 1/notes.txt", 4, 1, "file-etag"),
+            MetadataEntry::new_file("remote-draft", "/Courses/draft.txt", 99, 2, "remote-etag"),
+        ];
+        test.db.upsert_metadata_batch(&entries).unwrap();
+
+        let notes = test.db.get_by_remote_id("notes").unwrap().unwrap();
+        assert!(!notes.effective_pinned());
+        assert!(notes.pin_inheritance_blocked);
+        assert_eq!(notes.pin_origin_remote_id, None);
+        assert_eq!(notes.state, FileState::OnlineOnly);
+        let draft = test.db.get_by_path("/Courses/draft.txt").unwrap().unwrap();
+        assert_eq!(draft.metadata.remote_id, "local-draft");
+        assert_eq!(draft.state, FileState::Dirty);
+
+        test.db.set_explicit_pin("courses", true).unwrap();
+        let notes = test.db.get_by_remote_id("notes").unwrap().unwrap();
+        assert!(notes.effective_pinned());
+        assert!(!notes.pin_inheritance_blocked);
         assert_eq!(notes.pin_origin_remote_id.as_deref(), Some("courses"));
     }
 
@@ -1511,6 +1768,48 @@ mod tests {
             db.get_state_value("pin_policy_v1_migrated").unwrap(),
             Some("1".to_string())
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_metadata_writers_wait_instead_of_failing_snapshot_upgrade() {
+        let root = std::env::temp_dir().join(format!(
+            "twodrive-core-concurrent-writes-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let db = Database::new(root.join("concurrent.sqlite3"));
+        db.init().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers = (0..8)
+            .map(|worker| {
+                let db = db.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || -> anyhow::Result<()> {
+                    barrier.wait();
+                    for index in 0..20 {
+                        let id = format!("worker-{worker}-file-{index}");
+                        db.upsert_metadata(&MetadataEntry::new_file(
+                            &id,
+                            format!("/{id}.txt"),
+                            index,
+                            index as i64,
+                            format!("etag-{id}"),
+                        ))?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(db.all_records().unwrap().len(), 160);
         fs::remove_dir_all(root).unwrap();
     }
 }

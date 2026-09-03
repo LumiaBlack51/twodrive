@@ -11,9 +11,12 @@ Nautilus status emblems and actions, a tray status helper, and power-aware backg
 ### 功能与安全边界
 
 - 默认挂载到 `~/TwoDrive/OneDrive`，目录项先显示，文件在打开时才下载。
-- 支持本地新建、修改、移动和删除，上传失败会保留本地 dirty 缓存等待重试。
-- 支持“始终保留在此设备上”和“释放空间”，固定目录的策略会被后续新增文件继承。
-- 大于 10 MiB 的文件使用 Microsoft Graph upload session 分片上传。
+- 支持本地新建、修改、移动和删除；默认并发上传 4 个文件，失败任务持久化等待重试。
+- 支持“始终保留在此设备上”和“释放空间”。本地新增文件可继承固定目录策略；云端新发现的
+  文件默认保持仅云端，不会自动下载。
+- 大于 10 MiB 的文件使用 Microsoft Graph upload session 分片上传，并持久化会话以便重启后
+  从服务端确认的偏移继续。
+- FUSE 挂载会报告缓存磁盘的真实可用空间，支持文件管理器和解压工具的容量预检。
 - ETag 冲突时保留两份：云端新版本保留原名，本地修改保存为 `TwoDrive conflict` 副本。
 - TwoDrive 是 public desktop client，使用 OAuth2 Authorization Code + PKCE，不需要也不应创建 `client_secret`。
 - OAuth token 存放在 `~/.config/twodrive/tokens.json`，权限为 `0600`。当前尚未接入 Secret Service。
@@ -135,10 +138,13 @@ sudo apt remove twodrive
 
 - Mounts at `~/TwoDrive/OneDrive` by default. Metadata is shown first; file content is downloaded
   when an application opens the file.
-- Supports local create, edit, move, and delete. Failed uploads retain the durable local dirty cache
-  for retry.
-- Supports Always Keep and Release Space. New descendants inherit a pinned directory policy.
-- Files larger than 10 MiB use Microsoft Graph upload sessions.
+- Supports local create, edit, move, and delete with four concurrent uploads by default. Failed jobs
+  remain in durable retry queues.
+- Supports Always Keep and Release Space. Locally created descendants can inherit a pinned directory
+  policy; newly discovered cloud files stay online-only until opened or explicitly pinned.
+- Files larger than 10 MiB use Microsoft Graph upload sessions. Session URLs and source identity are
+  persisted so restart recovery resumes from the offset confirmed by the service.
+- The FUSE mount reports real backing-store capacity for file-manager and archive-tool preflight checks.
 - ETag conflicts preserve both versions: the cloud winner keeps the original name and the local edit
   is uploaded as a stable `TwoDrive conflict` copy.
 - TwoDrive is a public desktop client using OAuth2 Authorization Code + PKCE. Do not create a
@@ -285,9 +291,12 @@ database, cache, and mount remain untouched.
 - `twodrive-cli`: user commands and desktop integration helpers.
 - `twodrive-daemon`: background mount, known-folder upload-only watcher, and power policy.
 
-`write`, `flush`, and `fsync` persist data to the local cache before success. Interrupted `dirty` or
-`uploading` records replay after restart. Failed remote deletes are kept in a durable pending-delete
-queue. Delta metadata cannot overwrite a dirty local generation at the same path.
+`write`, `flush`, and `fsync` persist data to the local cache before success. A separate `writing`
+state prevents a crash from uploading a half-written generation. Closed `dirty` or `uploading`
+records replay concurrently after restart, and large uploads resume their persisted Graph session.
+Known-folder uploads use a durable per-file queue, startup scan, and periodic rescan. Failed remote
+deletes remain in a pending-delete queue. Delta metadata cannot overwrite a changing local generation
+at the same path.
 
 ## License
 

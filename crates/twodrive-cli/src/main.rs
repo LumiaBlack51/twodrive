@@ -68,6 +68,10 @@ fn print_status(paths: &AppPaths) -> anyhow::Result<()> {
         "download concurrency ac/battery: {}/{}",
         config.power.ac_download_concurrency, config.power.battery_download_concurrency
     );
+    println!(
+        "upload concurrency ac/battery: {}/{}",
+        config.power.ac_upload_concurrency, config.power.battery_upload_concurrency
+    );
     println!("known folders: {}", config.known_folders.enabled);
     println!("known folders mode: {}", config.known_folders.mode);
     println!("known folders debounce: {}", config.known_folders.debounce);
@@ -120,6 +124,7 @@ fn status_path(paths: &AppPaths, path: &str) -> anyhow::Result<()> {
     println!("name={}", record.metadata.name);
     println!("state={}", record.state);
     println!("pin_explicit={}", record.pin_explicit);
+    println!("pin_inheritance_blocked={}", record.pin_inheritance_blocked);
     println!("effective_pinned={}", record.effective_pinned());
     println!(
         "pin_origin={}",
@@ -269,7 +274,9 @@ fn cloud_path_from_arg(paths: &AppPaths, value: &str) -> String {
 fn emblem_for_state(state: FileState) -> &'static str {
     match state {
         FileState::OnlineOnly => "emblem-twodrive-cloud",
-        FileState::Hydrating | FileState::Uploading => "emblem-twodrive-syncing",
+        FileState::Hydrating | FileState::Writing | FileState::Uploading => {
+            "emblem-twodrive-syncing"
+        }
         FileState::Cached => "emblem-twodrive-synced",
         FileState::Pinned => "emblem-twodrive-pinned",
         FileState::Dirty => "emblem-documents",

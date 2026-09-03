@@ -6,11 +6,14 @@ use reqwest::header::{CONTENT_RANGE, IF_MATCH, RANGE, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(test)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
@@ -304,6 +307,8 @@ pub struct GraphBackend {
     token_store: TokenStore,
     token: Mutex<TokenData>,
     client: Client,
+    upload_sessions_path: PathBuf,
+    upload_sessions: Arc<Mutex<UploadSessionStore>>,
 }
 
 impl GraphBackend {
@@ -314,6 +319,8 @@ impl GraphBackend {
         let token = token_store
             .load()?
             .ok_or_else(|| anyhow::anyhow!("not logged in; run twodrive login first"))?;
+        let upload_sessions_path = paths.data_dir.join("upload-sessions.json");
+        let upload_sessions = shared_upload_session_store(&upload_sessions_path)?;
 
         Ok(Self {
             config,
@@ -325,7 +332,57 @@ impl GraphBackend {
                 .timeout(Duration::from_secs(60))
                 .redirect(reqwest::redirect::Policy::limited(10))
                 .build()?,
+            upload_sessions_path,
+            upload_sessions,
         })
+    }
+
+    fn matching_upload_session(
+        &self,
+        key: &str,
+        source_size: u64,
+        source_modified_unix: i64,
+        remote_id: Option<&str>,
+        if_match: Option<&str>,
+    ) -> anyhow::Result<Option<PersistedUploadSession>> {
+        let sessions = self
+            .upload_sessions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload session store lock is poisoned"))?;
+        Ok(sessions
+            .sessions
+            .get(key)
+            .filter(|session| {
+                session.source_size == source_size
+                    && session.source_modified_unix == source_modified_unix
+                    && session.remote_id.as_deref() == remote_id
+                    && session.if_match.as_deref() == if_match
+            })
+            .cloned())
+    }
+
+    fn save_upload_session(
+        &self,
+        key: String,
+        session: PersistedUploadSession,
+    ) -> anyhow::Result<()> {
+        let mut sessions = self
+            .upload_sessions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload session store lock is poisoned"))?;
+        sessions.sessions.insert(key, session);
+        sessions.save(&self.upload_sessions_path)
+    }
+
+    fn remove_upload_session(&self, key: &str) -> anyhow::Result<()> {
+        let mut sessions = self
+            .upload_sessions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload session store lock is poisoned"))?;
+        if sessions.sessions.remove(key).is_some() {
+            sessions.save(&self.upload_sessions_path)?;
+        }
+        Ok(())
     }
 
     pub fn login(paths: &AppPaths) -> anyhow::Result<()> {
@@ -595,45 +652,89 @@ impl CloudBackend for GraphBackend {
         if_match: Option<&str>,
         on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
     ) -> anyhow::Result<MetadataEntry> {
-        let size = fs::metadata(source_path)?.len();
+        let source_metadata = fs::metadata(source_path)?;
+        let size = source_metadata.len();
         if !uses_upload_session(size) {
             let uploaded = self.upload_with_etag(path, fs::read(source_path)?, if_match)?;
             on_progress(size, size)?;
             return Ok(uploaded);
         }
 
-        let access_token = self.access_token()?;
-        let create_url = upload_session_create_url(path, remote_id);
-        let (_, name) = split_cloud_parent_name(path)?;
-        let body = serde_json::json!({
-            "item": {
-                "@microsoft.graph.conflictBehavior": "replace",
-                "name": name,
-                "fileSize": size
-            }
+        let source_modified_unix = source_metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|value| value.as_secs() as i64)
+            .unwrap_or_default();
+        let session_key = normalize_cloud_path(path);
+        let persisted = self.matching_upload_session(
+            &session_key,
+            size,
+            source_modified_unix,
+            remote_id,
+            if_match,
+        )?;
+        let resumed = persisted.and_then(|session| {
+            query_upload_offset(&self.client, &session.upload_url)
+                .ok()
+                .flatten()
+                .filter(|offset| *offset < size)
+                .map(|offset| (session.upload_url, offset))
         });
-        let session: GraphUploadSession = retry_request(|| {
-            let builder = self
-                .client
-                .post(&create_url)
-                .bearer_auth(&access_token)
-                .json(&body);
-            if let Some(etag) = if_match.filter(|etag| !etag.trim().is_empty()) {
-                builder.header(IF_MATCH, etag.to_string())
+        let (upload_url, initial_offset) = if let Some(resumed) = resumed {
+            resumed
+        } else {
+            let _ = self.remove_upload_session(&session_key);
+            let access_token = self.access_token()?;
+            let (parent_path, name) = split_cloud_parent_name(path)?;
+            let parent_id = if remote_id.is_none() {
+                let parent_url = graph_parent_lookup_url(&parent_path);
+                let parent: GraphDriveItem = self.get_with_retry(&parent_url)?.json()?;
+                Some(parent.id)
             } else {
-                builder
-            }
-        })?
-        .json()?;
+                None
+            };
+            let create_url = upload_session_create_url(remote_id, parent_id.as_deref(), &name)?;
+            let body = upload_session_request_body();
+            let session: GraphUploadSession = retry_request(|| {
+                let builder = self
+                    .client
+                    .post(&create_url)
+                    .bearer_auth(&access_token)
+                    .json(&body);
+                if let Some(etag) = if_match.filter(|etag| !etag.trim().is_empty()) {
+                    builder.header(IF_MATCH, etag.to_string())
+                } else {
+                    builder
+                }
+            })?
+            .json()?;
+            self.save_upload_session(
+                session_key.clone(),
+                PersistedUploadSession {
+                    upload_url: session.upload_url.clone(),
+                    source_size: size,
+                    source_modified_unix,
+                    remote_id: remote_id.map(str::to_string),
+                    if_match: if_match.map(str::to_string),
+                },
+            )?;
+            (session.upload_url, 0)
+        };
 
-        upload_session_file(
+        let result = upload_session_file(
             &self.client,
-            &session.upload_url,
+            &upload_url,
             path,
             source_path,
             size,
+            initial_offset,
             on_progress,
-        )
+        );
+        if result.is_ok() {
+            let _ = self.remove_upload_session(&session_key);
+        }
+        result
     }
 
     fn upload_with_etag(
@@ -726,6 +827,73 @@ struct GraphDeltaResponse {
 struct GraphUploadSession {
     #[serde(rename = "uploadUrl")]
     upload_url: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct UploadSessionStore {
+    sessions: HashMap<String, PersistedUploadSession>,
+}
+
+fn shared_upload_session_store(path: &Path) -> anyhow::Result<Arc<Mutex<UploadSessionStore>>> {
+    static STORES: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<UploadSessionStore>>>>> =
+        OnceLock::new();
+    let stores = STORES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut stores = stores
+        .lock()
+        .map_err(|_| anyhow::anyhow!("upload session registry lock is poisoned"))?;
+    if let Some(store) = stores.get(path).and_then(Weak::upgrade) {
+        return Ok(store);
+    }
+    let store = Arc::new(Mutex::new(UploadSessionStore::load(path)?));
+    stores.insert(path.to_path_buf(), Arc::downgrade(&store));
+    Ok(store)
+}
+
+impl UploadSessionStore {
+    fn load(path: &Path) -> anyhow::Result<Self> {
+        match fs::read_to_string(path) {
+            Ok(data) => Ok(serde_json::from_str(&data)?),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn save(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let tmp_path = path.with_extension(format!(
+            "json.tmp-{}-{}",
+            std::process::id(),
+            random_string(8)
+        ));
+        let result = (|| -> anyhow::Result<()> {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&tmp_path)?;
+            file.write_all(&serde_json::to_vec_pretty(self)?)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&tmp_path, path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
+        }
+        result?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedUploadSession {
+    upload_url: String,
+    source_size: u64,
+    source_modified_unix: i64,
+    remote_id: Option<String>,
+    if_match: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -916,15 +1084,34 @@ fn uses_upload_session(size: u64) -> bool {
     size > SIMPLE_UPLOAD_MAX
 }
 
-fn upload_session_create_url(path: &str, remote_id: Option<&str>) -> String {
+fn upload_session_request_body() -> serde_json::Value {
+    serde_json::json!({
+        "item": {
+            "@microsoft.graph.conflictBehavior": "replace"
+        }
+    })
+}
+
+fn upload_session_create_url(
+    remote_id: Option<&str>,
+    parent_id: Option<&str>,
+    name: &str,
+) -> anyhow::Result<String> {
     if let Some(remote_id) = remote_id.filter(|remote_id| !remote_id.trim().is_empty()) {
-        format!("https://graph.microsoft.com/v1.0/me/drive/items/{remote_id}/createUploadSession")
-    } else {
-        format!(
-            "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/createUploadSession",
-            encode_graph_path(path)
-        )
+        return Ok(format!(
+            "https://graph.microsoft.com/v1.0/me/drive/items/{remote_id}/createUploadSession"
+        ));
     }
+    let parent_id = parent_id
+        .filter(|parent_id| !parent_id.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("new upload session requires a parent item id"))?;
+    if name.is_empty() {
+        anyhow::bail!("new upload session requires a file name");
+    }
+    Ok(format!(
+        "https://graph.microsoft.com/v1.0/me/drive/items/{parent_id}:/{}:/createUploadSession",
+        percent_encode_path_segment(name)
+    ))
 }
 
 fn upload_session_file(
@@ -933,10 +1120,14 @@ fn upload_session_file(
     cloud_path: &str,
     source_path: &Path,
     total_size: u64,
+    initial_offset: u64,
     on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
 ) -> anyhow::Result<MetadataEntry> {
     let mut file = fs::File::open(source_path)?;
-    let mut offset = 0_u64;
+    let mut offset = initial_offset.min(total_size);
+    if offset > 0 {
+        on_progress(offset, total_size)?;
+    }
     let mut stalled_responses = 0_u8;
 
     while offset < total_size {
@@ -1252,6 +1443,35 @@ mod tests {
     }
 
     #[test]
+    fn new_upload_session_uses_parent_item_id_and_encoded_file_name() {
+        assert_eq!(
+            upload_session_create_url(None, Some("parent-id"), "JFLAP notes #1.jar").unwrap(),
+            "https://graph.microsoft.com/v1.0/me/drive/items/parent-id:/JFLAP%20notes%20%231.jar:/createUploadSession"
+        );
+        assert!(upload_session_create_url(None, None, "large.bin").is_err());
+    }
+
+    #[test]
+    fn existing_upload_session_uses_remote_item_id() {
+        assert_eq!(
+            upload_session_create_url(Some("remote-id"), None, "ignored.bin").unwrap(),
+            "https://graph.microsoft.com/v1.0/me/drive/items/remote-id/createUploadSession"
+        );
+    }
+
+    #[test]
+    fn upload_session_body_uses_graph_compatible_minimal_properties() {
+        assert_eq!(
+            upload_session_request_body(),
+            serde_json::json!({
+                "item": {
+                    "@microsoft.graph.conflictBehavior": "replace"
+                }
+            })
+        );
+    }
+
+    #[test]
     fn upload_session_sends_sequential_ranges_and_finishes_with_metadata() {
         let server = Server::http("127.0.0.1:0").unwrap();
         let upload_url = format!("http://{}/upload", server.server_addr());
@@ -1301,6 +1521,7 @@ mod tests {
             "/large.bin",
             &source_path,
             UPLOAD_FRAGMENT_SIZE as u64 + 3,
+            0,
             &mut |done, total| {
                 progress.push((done, total));
                 Ok(())
@@ -1335,5 +1556,117 @@ mod tests {
                 UPLOAD_FRAGMENT_SIZE as u64 + 3
             ))
         );
+    }
+
+    #[test]
+    fn upload_session_resumes_from_a_persisted_offset() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let upload_url = format!("http://{}/upload", server.server_addr());
+        let (range_tx, range_rx) = mpsc::channel();
+        let server_thread = thread::spawn(move || {
+            let mut request = server.recv().unwrap();
+            let range = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Content-Range"))
+                .map(|header| header.value.as_str().to_string())
+                .unwrap();
+            std::io::copy(request.as_reader(), &mut std::io::sink()).unwrap();
+            range_tx.send(range).unwrap();
+            request
+                .respond(
+                    Response::from_string(format!(
+                        r#"{{"id":"resumed-id","name":"large.bin","size":{},"eTag":"etag"}}"#,
+                        UPLOAD_FRAGMENT_SIZE + 3
+                    ))
+                    .with_status_code(StatusCode(201))
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap()),
+                )
+                .unwrap();
+        });
+
+        let source_path = std::env::temp_dir().join(format!(
+            "twodrive-upload-resume-{}-{}.bin",
+            std::process::id(),
+            now_unix()
+        ));
+        let source = fs::File::create(&source_path).unwrap();
+        source.set_len(UPLOAD_FRAGMENT_SIZE as u64 + 3).unwrap();
+        drop(source);
+        let uploaded = upload_session_file(
+            &Client::new(),
+            &upload_url,
+            "/large.bin",
+            &source_path,
+            UPLOAD_FRAGMENT_SIZE as u64 + 3,
+            UPLOAD_FRAGMENT_SIZE as u64,
+            &mut |_, _| Ok(()),
+        )
+        .unwrap();
+
+        server_thread.join().unwrap();
+        fs::remove_file(source_path).unwrap();
+        assert_eq!(
+            range_rx.recv().unwrap(),
+            format!(
+                "bytes {}-{}/{}",
+                UPLOAD_FRAGMENT_SIZE,
+                UPLOAD_FRAGMENT_SIZE + 2,
+                UPLOAD_FRAGMENT_SIZE + 3
+            )
+        );
+        assert_eq!(uploaded.remote_id, "resumed-id");
+    }
+
+    #[test]
+    fn upload_session_store_round_trips_with_private_permissions() {
+        let root = std::env::temp_dir().join(format!(
+            "twodrive-upload-store-{}-{}",
+            std::process::id(),
+            now_unix()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("upload-sessions.json");
+        let mut store = UploadSessionStore::default();
+        store.sessions.insert(
+            "/large.bin".to_string(),
+            PersistedUploadSession {
+                upload_url: "https://upload.example/session".to_string(),
+                source_size: 42,
+                source_modified_unix: 7,
+                remote_id: Some("remote-id".to_string()),
+                if_match: Some("etag".to_string()),
+            },
+        );
+        store.save(&path).unwrap();
+
+        let loaded = UploadSessionStore::load(&path).unwrap();
+        let session = loaded.sessions.get("/large.bin").unwrap();
+        assert_eq!(session.source_size, 42);
+        assert_eq!(session.remote_id.as_deref(), Some("remote-id"));
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn upload_session_store_is_shared_for_the_same_data_path() {
+        let root = std::env::temp_dir().join(format!(
+            "twodrive-shared-upload-store-{}-{}",
+            std::process::id(),
+            now_unix()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("upload-sessions.json");
+
+        let first = shared_upload_session_store(&path).unwrap();
+        let second = shared_upload_session_store(&path).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        drop(first);
+        drop(second);
+        fs::remove_dir_all(root).unwrap();
     }
 }
