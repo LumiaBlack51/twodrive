@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use twodrive_backend::{CloudBackend, GraphBackend, MockBackend};
 use twodrive_core::{
-    AppPaths, Config, Database, FileRecord, FileState, MetadataEntry, join_cloud_path,
-    normalize_cloud_path,
+    AppPaths, Config, Database, FileRecord, FileState, MetadataEntry, PendingMetadataKind,
+    PendingMetadataOperation, join_cloud_path, normalize_cloud_path,
 };
 
 const ROOT_INO: u64 = 1;
@@ -75,15 +75,22 @@ pub fn sync_delta_metadata<B: CloudBackend>(db: &Database, backend: &B) -> anyho
     let delta = backend.list_delta(db.delta_link()?.as_deref())?;
     for remote_id in &delta.deleted_remote_ids {
         db.remove_pending_delete(remote_id)?;
-        if db.get_by_remote_id(remote_id)?.is_some_and(|record| {
+        let record = db.get_by_cloud_remote_id(remote_id)?;
+        if record.as_ref().is_some_and(|record| {
             matches!(
                 record.state,
                 FileState::Writing | FileState::Dirty | FileState::Uploading
-            )
+            ) || db
+                .pending_metadata_operation(&record.metadata.remote_id)
+                .ok()
+                .flatten()
+                .is_some()
         }) {
             continue;
         }
-        db.remove_by_remote_id(remote_id)?;
+        if let Some(record) = record {
+            db.remove_by_remote_id(&record.metadata.remote_id)?;
+        }
     }
 
     let count = delta.entries.len();
@@ -224,11 +231,21 @@ fn recover_dirty_record<B: CloudBackend>(
             let _commit_guard = upload_commit_lock()
                 .lock()
                 .map_err(|_| anyhow::anyhow!("upload commit lock is poisoned"))?;
-            if uploaded.remote_id != record.metadata.remote_id {
-                db.remove_by_remote_id(&record.metadata.remote_id)?;
+            let committed = match db.commit_uploaded(
+                &record.metadata.remote_id,
+                &record.metadata.path,
+                &uploaded,
+                &cache_path,
+            ) {
+                Ok(committed) => committed,
+                Err(err) => {
+                    db.queue_remote_delete(&uploaded.remote_id, &record.metadata.path)?;
+                    return Err(err);
+                }
+            };
+            if committed.cloud_remote_id.as_deref() != Some(uploaded.remote_id.as_str()) {
+                db.queue_remote_delete(&uploaded.remote_id, &record.metadata.path)?;
             }
-            db.upsert_metadata(&uploaded)?;
-            db.mark_cached(&uploaded.remote_id, &cache_path)?;
             Ok(true)
         }
         Err(err) => {
@@ -314,6 +331,76 @@ pub fn recover_pending_deletes<B: CloudBackend>(
     Ok(recovered)
 }
 
+fn recover_pending_delete_id<B: CloudBackend>(
+    db: &Database,
+    backend: &B,
+    cloud_remote_id: &str,
+) -> anyhow::Result<bool> {
+    let Some(delete) = db
+        .pending_deletes()?
+        .into_iter()
+        .find(|delete| delete.remote_id == cloud_remote_id)
+    else {
+        return Ok(false);
+    };
+    backend.delete(&delete.remote_id)?;
+    if let Some(cache_path) = &delete.cache_path {
+        match fs::remove_file(cache_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    db.remove_pending_delete(&delete.remote_id)?;
+    Ok(true)
+}
+
+pub fn recover_pending_metadata_operations<B: CloudBackend>(
+    db: &Database,
+    backend: &B,
+) -> anyhow::Result<usize> {
+    let operations = db.pending_metadata_operations()?;
+    let mut recovered = 0;
+    for operation in operations {
+        match recover_pending_metadata_record(db, backend, &operation) {
+            Ok(true) => recovered += 1,
+            Ok(false) => {}
+            Err(err) => eprintln!(
+                "twodrive: pending metadata operation remains queued for {}: {err:#}",
+                operation.path
+            ),
+        }
+    }
+    Ok(recovered)
+}
+
+fn recover_pending_metadata_record<B: CloudBackend>(
+    db: &Database,
+    backend: &B,
+    operation: &PendingMetadataOperation,
+) -> anyhow::Result<bool> {
+    let Some(record) = db.get_by_remote_id(&operation.local_id)? else {
+        return Ok(false);
+    };
+    let entry = match operation.kind {
+        PendingMetadataKind::CreateFolder => match backend.create_folder(&operation.path) {
+            Ok(entry) => entry,
+            Err(create_err) => backend
+                .get_metadata_by_path(&operation.path)?
+                .filter(|entry| entry.is_dir)
+                .ok_or(create_err)?,
+        },
+        PendingMetadataKind::Move => {
+            let cloud_remote_id = record
+                .cloud_remote_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("move has no cloud identity"))?;
+            backend.rename(cloud_remote_id, &operation.path)?
+        }
+    };
+    db.complete_metadata_operation(&operation.local_id, &operation.path, &entry)
+}
+
 pub fn mount_mock(paths: AppPaths) -> anyhow::Result<()> {
     cleanup_stale_mountpoint(&paths.mount_dir);
     paths.ensure()?;
@@ -326,12 +413,13 @@ pub fn mount_mock(paths: AppPaths) -> anyhow::Result<()> {
         .max(1) as usize;
     let deleted = recover_pending_deletes(&db, &backend)?;
     let count = sync_metadata(&db, &backend)?;
+    let metadata_recovered = recover_pending_metadata_operations(&db, &backend)?;
     let recovered = recover_dirty_uploads_concurrent(&db, &backend, upload_concurrency)?;
     let hydrated = hydrate_pending_pins(&db, &paths.cache_dir, &backend)?;
     println!("twodrive: loaded {count} mock metadata entries");
-    if deleted > 0 || recovered > 0 || hydrated > 0 {
+    if deleted > 0 || metadata_recovered > 0 || recovered > 0 || hydrated > 0 {
         println!(
-            "twodrive: recovered {deleted} delete(s), {recovered} upload(s), hydrated {hydrated} pinned file(s)"
+            "twodrive: recovered {deleted} delete(s), {metadata_recovered} metadata operation(s), {recovered} upload(s), hydrated {hydrated} pinned file(s)"
         );
     }
     println!("twodrive: database {}", db.path().display());
@@ -360,6 +448,7 @@ pub fn mount_graph(paths: AppPaths) -> anyhow::Result<()> {
         .max(1) as usize;
     let deleted = recover_pending_deletes(&db, &backend)?;
     let count = sync_delta_metadata(&db, &backend)?;
+    let metadata_recovered = recover_pending_metadata_operations(&db, &backend)?;
     let recovered = recover_dirty_uploads_concurrent(&db, &backend, upload_concurrency)?;
     let hydrated = hydrate_pending_pins(&db, &paths.cache_dir, &backend)?;
     println!("twodrive: synced {count} OneDrive metadata entries");
@@ -368,6 +457,9 @@ pub fn mount_graph(paths: AppPaths) -> anyhow::Result<()> {
     }
     if deleted > 0 {
         println!("twodrive: recovered {deleted} interrupted delete(s)");
+    }
+    if metadata_recovered > 0 {
+        println!("twodrive: recovered {metadata_recovered} interrupted metadata operation(s)");
     }
     if hydrated > 0 {
         println!("twodrive: hydrated {hydrated} inherited pinned file(s)");
@@ -441,8 +533,12 @@ pub fn hydrate_record<B: CloudBackend>(
         .write(true)
         .truncate(true)
         .open(&tmp_path)?;
+    let cloud_remote_id = record
+        .cloud_remote_id
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content to hydrate"))?;
     backend.download_sized_to(
-        &record.metadata.remote_id,
+        cloud_remote_id,
         record.metadata.size,
         &mut tmp_file,
         &mut |bytes_done| {
@@ -510,6 +606,7 @@ pub fn unpin_path(db: &Database, path: &str) -> anyhow::Result<usize> {
 
 enum UploadCommand {
     Upload(String),
+    Delete(String),
     Shutdown,
 }
 
@@ -545,6 +642,12 @@ impl<B: CloudBackend> UploadPool<B> {
             .send(UploadCommand::Upload(remote_id))
             .map_err(|_| anyhow::anyhow!("upload worker queue is closed"))
     }
+
+    fn enqueue_delete(&self, cloud_remote_id: String) -> anyhow::Result<()> {
+        self.sender
+            .send(UploadCommand::Delete(cloud_remote_id))
+            .map_err(|_| anyhow::anyhow!("sync worker queue is closed"))
+    }
 }
 
 impl<B: CloudBackend> Drop for UploadPool<B> {
@@ -572,9 +675,38 @@ fn run_upload_worker<B: CloudBackend>(
         let Ok(command) = command else {
             return;
         };
-        let UploadCommand::Upload(remote_id) = command else {
-            return;
+        let remote_id = match command {
+            UploadCommand::Upload(remote_id) => remote_id,
+            UploadCommand::Delete(cloud_remote_id) => {
+                if let Err(err) = recover_pending_delete_id(&db, backend.as_ref(), &cloud_remote_id)
+                {
+                    eprintln!("twodrive: queued delete failed for {cloud_remote_id}: {err:#}");
+                }
+                continue;
+            }
+            UploadCommand::Shutdown => return,
         };
+        let item_lock = item_sync_lock(&remote_id);
+        let Ok(_item_guard) = item_lock.lock() else {
+            continue;
+        };
+        if let Ok(Some(operation)) = db.pending_metadata_operation(&remote_id)
+            && let Err(err) = recover_pending_metadata_record(&db, backend.as_ref(), &operation)
+        {
+            eprintln!(
+                "twodrive: queued metadata operation failed for {}: {err:#}",
+                operation.path
+            );
+            continue;
+        }
+        if let Ok(Some(record)) = db.get_by_remote_id(&remote_id)
+            && !record.metadata.is_dir
+            && record.effective_pinned()
+            && !record.cache_path.as_deref().is_some_and(Path::exists)
+            && let Err(err) = hydrate_record(&db, &cache_dir, backend.as_ref(), &record)
+        {
+            eprintln!("twodrive: queued pinned hydration failed for {remote_id}: {err:#}");
+        }
         let record = match db.get_by_remote_id(&remote_id) {
             Ok(Some(record))
                 if matches!(
@@ -605,6 +737,19 @@ fn run_upload_worker<B: CloudBackend>(
         }
         activity.finish();
     }
+}
+
+fn item_sync_lock(local_id: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().expect("item sync lock registry is poisoned");
+    if let Some(lock) = locks.get(local_id).and_then(Weak::upgrade) {
+        return lock;
+    }
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(local_id.to_string(), Arc::downgrade(&lock));
+    lock
 }
 
 pub struct TwoDriveFs<B: CloudBackend> {
@@ -800,19 +945,19 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             return Ok(false);
         }
 
-        let created_locally = write_fhs.iter().any(|fh| {
-            self.write_handles
-                .get(fh)
-                .is_some_and(|handle| handle.created_new_record)
-        });
-        if !created_locally && let Err(err) = self.backend.delete(&record.metadata.remote_id) {
-            eprintln!(
-                "twodrive: queued open-file delete for {} after backend failure: {err:#}",
-                record.metadata.path
-            );
+        let created_locally = record.cloud_remote_id.is_none()
+            || write_fhs.iter().any(|fh| {
+                self.write_handles
+                    .get(fh)
+                    .is_some_and(|handle| handle.created_new_record)
+            });
+        if !created_locally {
             let mut queued_record = record.clone();
             queued_record.cache_path = None;
             self.db.queue_pending_delete(&queued_record)?;
+            if let Some(cloud_remote_id) = &record.cloud_remote_id {
+                self.upload_pool.enqueue_delete(cloud_remote_id.clone())?;
+            }
         } else {
             self.db.remove_by_remote_id(&record.metadata.remote_id)?;
         }
@@ -839,7 +984,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             anyhow::bail!("cannot delete a file while it is changing");
         }
 
-        if record.metadata.remote_id.starts_with("local-upload-") {
+        if record.cloud_remote_id.is_none() {
             if let Some(cache_path) = &record.cache_path {
                 match fs::remove_file(cache_path) {
                     Ok(()) => {}
@@ -853,23 +998,10 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             return Ok(());
         }
 
-        if let Err(err) = self.backend.delete(&record.metadata.remote_id) {
-            eprintln!(
-                "twodrive: queued delete for {} after backend failure: {err:#}",
-                record.metadata.path
-            );
-            self.db.queue_pending_delete(record)?;
-            self.inodes.remove_ino(ino);
-            return Ok(());
+        self.db.queue_pending_delete(record)?;
+        if let Some(cloud_remote_id) = &record.cloud_remote_id {
+            self.upload_pool.enqueue_delete(cloud_remote_id.clone())?;
         }
-        if let Some(cache_path) = &record.cache_path {
-            match fs::remove_file(cache_path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
-            }
-        }
-        self.db.remove_by_remote_id(&record.metadata.remote_id)?;
         self.inodes.remove_ino(ino);
         Ok(())
     }
@@ -1061,12 +1193,14 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 .mark_state(&record.metadata.remote_id, FileState::Uploading);
         }
 
-        let remote_id = (!handle.record_remote_id.starts_with("local-upload-"))
-            .then_some(handle.record_remote_id.as_str());
+        let remote_id = self
+            .db
+            .get_by_remote_id(&handle.record_remote_id)?
+            .and_then(|record| record.cloud_remote_id);
         let uploaded = match self.backend.upload_file_with_version(
             &handle.path,
             &handle.cache_path,
-            remote_id,
+            remote_id.as_deref(),
             handle.base_etag.as_deref(),
             &mut |bytes_done, bytes_total| {
                 if let Some(activity) = &mut handle.activity {
@@ -1116,16 +1250,23 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 return Err(err);
             }
         };
-        if handle.record_remote_id != uploaded.remote_id {
-            self.db.remove_by_remote_id(&handle.record_remote_id)?;
+        let record = match self.db.commit_uploaded(
+            &handle.record_remote_id,
+            &handle.path,
+            &uploaded,
+            &handle.cache_path,
+        ) {
+            Ok(record) => record,
+            Err(err) => {
+                self.db
+                    .queue_remote_delete(&uploaded.remote_id, &handle.path)?;
+                return Err(err);
+            }
+        };
+        if record.cloud_remote_id.as_deref() != Some(uploaded.remote_id.as_str()) {
+            self.db
+                .queue_remote_delete(&uploaded.remote_id, &handle.path)?;
         }
-        self.db.upsert_metadata(&uploaded)?;
-        self.db
-            .mark_cached(&uploaded.remote_id, &handle.cache_path)?;
-        let record = self
-            .db
-            .get_by_remote_id(&uploaded.remote_id)?
-            .ok_or_else(|| anyhow::anyhow!("uploaded record disappeared"))?;
         self.inodes.replace_ino_record(handle.ino, record);
         handle.uploaded = true;
         handle.activity.take();
@@ -1193,6 +1334,41 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         Ok(())
     }
 
+    fn truncate_without_handle(&mut self, ino: u64, size: u64) -> anyhow::Result<()> {
+        let record = self
+            .record_for_ino(ino)
+            .map(|record| self.refresh_record(&record))
+            .ok_or_else(|| anyhow::anyhow!("truncate record does not exist"))?;
+        if record.metadata.is_dir {
+            anyhow::bail!("cannot truncate a directory");
+        }
+        fs::create_dir_all(&self.cache_dir)?;
+        let cache_path = if size == 0 {
+            record.cache_path.clone().unwrap_or_else(|| {
+                self.cache_dir
+                    .join(sanitize_cache_name(&record.metadata.remote_id))
+            })
+        } else {
+            self.ensure_cached(&record)?
+        };
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&cache_path)?;
+        file.set_len(size)?;
+        file.sync_all()?;
+        self.db
+            .mark_cached(&record.metadata.remote_id, &cache_path)?;
+        self.db
+            .mark_dirty_with_size(&record.metadata.remote_id, size)?;
+        self.inodes.replace_size(ino, size);
+        self.upload_pool
+            .enqueue(record.metadata.remote_id.clone())?;
+        Ok(())
+    }
+
     fn create_directory(&mut self, parent: u64, name: &OsStr) -> anyhow::Result<(u64, FileAttr)> {
         let parent_path = self
             .inodes
@@ -1211,13 +1387,10 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             anyhow::bail!("path already exists");
         }
 
-        let entry = self.backend.create_folder(&path)?;
-        self.db.upsert_metadata(&entry)?;
-        let record = self
-            .db
-            .get_by_remote_id(&entry.remote_id)?
-            .ok_or_else(|| anyhow::anyhow!("created directory record disappeared"))?;
+        let local_id = format!("local-upload-{}", unique_suffix());
+        let record = self.db.create_local_directory(&local_id, &path)?;
         let ino = self.inodes.insert_or_update(record.clone());
+        self.upload_pool.enqueue(local_id)?;
         Ok((ino, attr_for_record(ino, &record)))
     }
 
@@ -1270,80 +1443,72 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 .inodes
                 .ino_for_path(&target.metadata.path)
                 .ok_or_else(|| anyhow::anyhow!("target inode does not exist"))?;
-            if active_fh.is_some() {
-                if let Some(fh) = active_fh
-                    && let Some(handle) = self.write_handles.get_mut(&fh)
-                {
-                    handle.base_etag = record_upload_etag(&target);
-                }
-                self.db.remove_by_remote_id(&target.metadata.remote_id)?;
-                self.inodes.remove_ino(target_ino);
-            } else {
-                let cache_path = record
-                    .cache_path
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("rename source has no stable local cache"))?;
-                let uploaded = self.backend.upload_file_with_version(
-                    &new_path,
-                    &cache_path,
-                    Some(&target.metadata.remote_id),
-                    record_upload_etag(&target).as_deref(),
-                    &mut |_, _| Ok(()),
-                )?;
-                if uploaded.remote_id != record.metadata.remote_id {
-                    if let Err(err) = self.backend.delete(&record.metadata.remote_id) {
-                        eprintln!(
-                            "twodrive: replaced target but could not remove old source item {}: {err:#}",
-                            record.metadata.remote_id
-                        );
-                    }
-                    self.db.remove_by_remote_id(&record.metadata.remote_id)?;
-                }
-                if let Some(target_cache) = &target.cache_path
-                    && target_cache != &cache_path
-                {
-                    let _ = fs::remove_file(target_cache);
-                }
-                self.db.remove_by_remote_id(&target.metadata.remote_id)?;
-                self.inodes.remove_ino(target_ino);
-                self.db.upsert_metadata(&uploaded)?;
-                self.db.mark_cached(&uploaded.remote_id, &cache_path)?;
-                let updated = self
-                    .db
-                    .get_by_remote_id(&uploaded.remote_id)?
-                    .ok_or_else(|| anyhow::anyhow!("replacement record disappeared"))?;
-                self.inodes.replace_ino_record(ino, updated);
-                return Ok(());
-            }
-        }
-        if let Some(fh) = active_fh {
-            self.db
-                .move_subtree(&record.metadata.remote_id, &new_path)?;
-            let updated = self
-                .db
-                .get_by_remote_id(&record.metadata.remote_id)?
-                .ok_or_else(|| anyhow::anyhow!("locally renamed record disappeared"))?;
+            let target_cache = target.cache_path.clone();
+            let source_cloud_id = record.cloud_remote_id.clone();
+            let target_cloud_id = target.cloud_remote_id.clone();
+            let updated = self.db.replace_file_locally(
+                &record.metadata.remote_id,
+                &target.metadata.remote_id,
+                &new_path,
+            )?;
+            self.inodes.remove_ino(target_ino);
             self.inodes.replace_ino_record(ino, updated);
-            if let Some(handle) = self.write_handles.get_mut(&fh) {
-                handle.path = new_path;
+            for handle in self
+                .write_handles
+                .values_mut()
+                .filter(|handle| handle.record_remote_id == target.metadata.remote_id)
+            {
+                handle.unlinked = true;
             }
+            for handle in self
+                .read_handles
+                .values_mut()
+                .filter(|handle| handle.ino == target_ino)
+            {
+                handle.unlinked = true;
+            }
+            if let Some(fh) = active_fh
+                && let Some(handle) = self.write_handles.get_mut(&fh)
+            {
+                handle.path = new_path.clone();
+                handle.base_etag = record_upload_etag(&target);
+            }
+            if let Some(target_cache) = target_cache
+                && record.cache_path.as_ref() != Some(&target_cache)
+                && let Err(err) = self.cleanup_unlinked_cache(&target_cache)
+            {
+                eprintln!("twodrive: replaced cache cleanup deferred: {err:#}");
+            }
+            if let Some(source_cloud_id) = source_cloud_id
+                && Some(source_cloud_id.as_str()) != target_cloud_id.as_deref()
+            {
+                self.upload_pool.enqueue_delete(source_cloud_id)?;
+            }
+            self.upload_pool
+                .enqueue(record.metadata.remote_id.clone())?;
             return Ok(());
         }
-        let entry = self.backend.rename(&record.metadata.remote_id, &new_path)?;
-        self.db.upsert_metadata(&entry)?;
-        self.db.allow_pin_inheritance(&entry.remote_id)?;
-        hydrate_pending_pins(&self.db, &self.cache_dir, self.backend.as_ref())?;
+
+        self.db
+            .move_subtree_and_queue(&record.metadata.remote_id, &new_path)?;
+        if let Some(fh) = active_fh
+            && let Some(handle) = self.write_handles.get_mut(&fh)
+        {
+            handle.path = new_path.clone();
+        }
         for updated in std::iter::once(
             self.db
-                .get_by_remote_id(&entry.remote_id)?
-                .ok_or_else(|| anyhow::anyhow!("renamed record disappeared"))?,
+                .get_by_remote_id(&record.metadata.remote_id)?
+                .ok_or_else(|| anyhow::anyhow!("locally renamed record disappeared"))?,
         )
-        .chain(self.db.list_descendants(&entry.path)?)
+        .chain(self.db.list_descendants(&new_path)?)
         {
             if let Some(updated_ino) = self.inodes.ino_for_remote_id(&updated.metadata.remote_id) {
                 self.inodes.replace_ino_record(updated_ino, updated);
             }
         }
+        self.upload_pool
+            .enqueue(record.metadata.remote_id.clone())?;
         Ok(())
     }
 }
@@ -1423,15 +1588,16 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         reply: ReplyAttr,
     ) {
         if let Some(size) = size {
-            let Some(handle) = fh.and_then(|fh| self.write_handles.get(&fh)) else {
-                reply.error(libc::EBADF);
-                return;
+            let result = if let Some(handle) = fh.and_then(|fh| self.write_handles.get(&fh)) {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&handle.cache_path)
+                    .and_then(|file| file.set_len(size))
+                    .map_err(anyhow::Error::from)
+            } else {
+                self.truncate_without_handle(ino, size)
             };
-            match OpenOptions::new()
-                .write(true)
-                .open(&handle.cache_path)
-                .and_then(|file| file.set_len(size))
-            {
+            match result {
                 Ok(()) => self.inodes.replace_size(ino, size),
                 Err(err) => {
                     eprintln!("twodrive truncate error: {err}");
@@ -2337,7 +2503,7 @@ fn has_existing_cache(record: &FileRecord) -> bool {
 }
 
 fn record_upload_etag(record: &FileRecord) -> Option<String> {
-    if record.metadata.remote_id.starts_with("local-upload-") || record.metadata.etag.is_empty() {
+    if record.cloud_remote_id.is_none() || record.metadata.etag.is_empty() {
         None
     } else {
         Some(record.metadata.etag.clone())
@@ -2345,8 +2511,7 @@ fn record_upload_etag(record: &FileRecord) -> Option<String> {
 }
 
 fn record_upload_remote_id(record: &FileRecord) -> Option<&str> {
-    (!record.metadata.remote_id.starts_with("local-upload-"))
-        .then_some(record.metadata.remote_id.as_str())
+    record.cloud_remote_id.as_deref()
 }
 
 fn preserve_conflict_copy<B: CloudBackend>(
@@ -2359,14 +2524,16 @@ fn preserve_conflict_copy<B: CloudBackend>(
     let conflict_path = conflict_copy_path(original, cache_path);
     let conflict =
         backend.upload_file_with_version(&conflict_path, cache_path, None, None, on_progress)?;
-    let latest_original = backend
-        .get_metadata(&original.metadata.remote_id)?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "original remote item disappeared while preserving conflict {}",
-                original.metadata.path
-            )
-        })?;
+    let cloud_remote_id = original
+        .cloud_remote_id
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("local-only item cannot have an etag conflict"))?;
+    let latest_original = backend.get_metadata(cloud_remote_id)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "original remote item disappeared while preserving conflict {}",
+            original.metadata.path
+        )
+    })?;
     db.upsert_metadata(&conflict)?;
     db.mark_cached(&conflict.remote_id, cache_path)?;
     db.upsert_metadata(&latest_original)?;
@@ -2709,6 +2876,38 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct LostCreateAckBackend {
+        inner: MockBackend,
+    }
+
+    impl CloudBackend for LostCreateAckBackend {
+        fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+            self.inner.list_all()
+        }
+
+        fn download(&self, remote_id: &str) -> anyhow::Result<Vec<u8>> {
+            self.inner.download(remote_id)
+        }
+
+        fn upload(&self, path: &str, content: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+            self.inner.upload(path, content)
+        }
+
+        fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.create_folder(path)?;
+            anyhow::bail!("simulated lost create acknowledgement")
+        }
+
+        fn rename(&self, remote_id: &str, new_path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.rename(remote_id, new_path)
+        }
+
+        fn delete(&self, remote_id: &str) -> anyhow::Result<()> {
+            self.inner.delete(remote_id)
+        }
+    }
+
     struct TestFs {
         fs: TwoDriveFs<MockBackend>,
         root: PathBuf,
@@ -2799,8 +2998,109 @@ mod tests {
     }
 
     #[test]
+    fn path_truncate_is_local_and_queues_an_upload() {
+        let mut test = TestFs::new("path-truncate");
+        let ino = test.fs.inodes.ino_for_path("/README-cloud.txt").unwrap();
+
+        test.fs.truncate_without_handle(ino, 0).unwrap();
+
+        let local = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(local.metadata.size, 0);
+        assert!(matches!(
+            local.state,
+            FileState::Dirty | FileState::Uploading | FileState::Cached
+        ));
+        assert_eq!(fs::metadata(local.cache_path.unwrap()).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn folder_create_recovery_rebinds_after_a_lost_remote_acknowledgement() {
+        let root = test_root("lost-folder-create-ack");
+        fs::create_dir_all(&root).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let backend = LostCreateAckBackend {
+            inner: MockBackend::new(),
+        };
+        db.create_local_directory("local-folder", "/Recovered folder")
+            .unwrap();
+
+        assert_eq!(
+            recover_pending_metadata_operations(&db, &backend).unwrap(),
+            1
+        );
+        let record = db.get_by_remote_id("local-folder").unwrap().unwrap();
+        assert_eq!(record.metadata.path, "/Recovered folder");
+        assert!(record.cloud_remote_id.is_some());
+        assert!(db.pending_metadata_operations().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn immediate_reopen_during_upload_keeps_the_local_record() {
+        let root = test_root("immediate-reopen");
+        fs::create_dir_all(&root).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let backend = ConcurrentBackend::new();
+        sync_metadata(&db, &backend).unwrap();
+        let mut fuse =
+            TwoDriveFs::new_with_upload_concurrency(db, root.join("cache"), backend, 2).unwrap();
+
+        let (ino, first_fh, _) = fuse
+            .create_upload(ROOT_INO, OsStr::new("rapid.pdf"), libc::O_CREAT)
+            .unwrap();
+        let local_id = fuse.write_handles[&first_fh].record_remote_id.clone();
+        let cache_path = fuse.write_handles[&first_fh].cache_path.clone();
+        write_slice(&cache_path, 0, b"first generation").unwrap();
+        fuse.inodes.set_size(ino, 16);
+        fuse.queue_upload_handle(first_fh).unwrap();
+        fuse.write_handles.remove(&first_fh);
+
+        let record = fuse.db.get_by_path("/rapid.pdf").unwrap().unwrap();
+        let (_, second_fh, _) = fuse.create_overwrite_upload(record, true).unwrap();
+        let second_cache = fuse.write_handles[&second_fh].cache_path.clone();
+        write_slice(&second_cache, 0, b"second generation").unwrap();
+        fuse.queue_upload_handle(second_fh).unwrap();
+        fuse.write_handles.remove(&second_fh);
+
+        for _ in 0..80 {
+            let record = fuse.db.get_by_remote_id(&local_id).unwrap().unwrap();
+            if record.state == FileState::Cached && record.cloud_remote_id.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let record = fuse.db.get_by_remote_id(&local_id).unwrap().unwrap();
+        assert_eq!(record.metadata.remote_id, local_id);
+        assert_eq!(record.state, FileState::Cached);
+        assert_eq!(
+            fs::read(record.cache_path.unwrap()).unwrap(),
+            b"second generation"
+        );
+        drop(fuse);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn editor_style_temp_file_can_replace_an_existing_remote_file() {
         let mut test = TestFs::new("atomic-replace");
+        let old_target = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        let old_target_ino = test.fs.inodes.ino_for_path("/README-cloud.txt").unwrap();
+        let old_target_cache = test.fs.ensure_cached(&old_target).unwrap();
+        let old_target_fh = test
+            .fs
+            .open_read_handle(old_target_ino, old_target_cache.clone());
         let (ino, fh, _) = test
             .fs
             .create_upload(
@@ -2824,6 +3124,33 @@ mod tests {
             )
             .unwrap();
 
+        assert_eq!(
+            test.fs.read_open_handle(old_target_fh, 0, 7).unwrap(),
+            b"Welcome"
+        );
+        assert!(old_target_cache.exists());
+        test.fs.release_read_handle(old_target_fh).unwrap();
+        assert!(!old_target_cache.exists());
+
+        for _ in 0..40 {
+            let current = test
+                .fs
+                .db
+                .get_by_path("/README-cloud.txt")
+                .unwrap()
+                .unwrap();
+            if test
+                .fs
+                .backend
+                .download(current.cloud_remote_id.as_deref().unwrap())
+                .ok()
+                .as_deref()
+                == Some(b"new atomically saved content\n")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
         let record = test
             .fs
             .db
@@ -2833,7 +3160,7 @@ mod tests {
         assert_eq!(
             test.fs
                 .backend
-                .download(&record.metadata.remote_id)
+                .download(record.cloud_remote_id.as_deref().unwrap())
                 .unwrap(),
             b"new atomically saved content\n"
         );
@@ -2900,7 +3227,7 @@ mod tests {
         assert_eq!(
             test.fs
                 .backend
-                .download(&recovered.metadata.remote_id)
+                .download(recovered.cloud_remote_id.as_deref().unwrap())
                 .unwrap(),
             b"durable before restart"
         );
@@ -2990,10 +3317,11 @@ mod tests {
         let stale_record = stale_record.unwrap();
         let refreshed = fuse.refresh_record(&stale_record);
         assert_eq!(refreshed.metadata.path, "/small-0.txt");
-        assert_ne!(
+        assert_eq!(
             refreshed.metadata.remote_id, stale_record.metadata.remote_id,
-            "the stale temporary remote id should refresh through the stable path"
+            "the local identity must remain stable after upload"
         );
+        assert!(refreshed.cloud_remote_id.is_some());
         drop(fuse);
         fs::remove_dir_all(root).unwrap();
     }
@@ -3020,7 +3348,7 @@ mod tests {
         assert_eq!(
             test.fs
                 .backend
-                .download(&recovered.metadata.remote_id)
+                .download(recovered.cloud_remote_id.as_deref().unwrap())
                 .unwrap(),
             b"uploading before restart"
         );
@@ -3274,6 +3602,21 @@ mod tests {
                 OsStr::new("twodrive-notes.txt"),
             )
             .unwrap();
+
+        for _ in 0..40 {
+            let moved = test
+                .fs
+                .db
+                .get_by_path("/Courses/twodrive-notes.txt")
+                .unwrap()
+                .unwrap();
+            if moved.state == FileState::Pinned
+                && moved.cache_path.as_deref().is_some_and(Path::exists)
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
 
         let moved = test
             .fs

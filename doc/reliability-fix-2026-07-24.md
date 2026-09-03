@@ -2,6 +2,9 @@
 
 Date: 2026-07-24
 
+> Update: the 2026-09-03 local-first redesign supersedes the foreground metadata-operation limits
+> described here. See [local-first-sync-2026-09-03.md](local-first-sync-2026-09-03.md).
+
 ## Reproduction and root causes
 
 The previous database represented "always keep" only as the current `state = pinned`. Pinning a
@@ -94,10 +97,8 @@ SQLite will otherwise leave them intact.
 ## Remaining limits
 
 No destructive test was run against the user's existing OneDrive. Real-account acceptance still
-needs an explicitly approved disposable cloud directory. Upload/create-folder/rename are still not
-represented by a general multi-operation journal; failed file uploads replay from dirty cache, and
-failed deletes replay from `pending_deletes`. Upload sessions resume within the running process;
-after a process restart, TwoDrive safely starts a new session from the durable cache rather than
-persisting the pre-authenticated upload URL. OneDrive does not store full POSIX mode, uid, gid, or
-directory timestamps, so TwoDrive acknowledges those metadata operations for compatibility but
-does not sync them as remote filesystem metadata.
+needs an explicitly approved disposable cloud directory. The later local-first redesign added
+stable local identities plus durable create-folder/move and delete queues; file content continues
+to replay from dirty cache. Upload sessions persist their resumable state. OneDrive does not store
+full POSIX mode, uid, gid, or directory timestamps, so TwoDrive acknowledges those metadata
+operations for compatibility but does not sync them as remote filesystem metadata.

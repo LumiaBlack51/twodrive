@@ -37,6 +37,13 @@ pub trait CloudBackend: Send + Sync + 'static {
             .into_iter()
             .find(|entry| entry.remote_id == remote_id))
     }
+    fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        let path = normalize_cloud_path(path);
+        Ok(self
+            .list_all()?
+            .into_iter()
+            .find(|entry| entry.path == path))
+    }
     fn list_delta(&self, _delta_link: Option<&str>) -> anyhow::Result<DeltaResult> {
         Ok(DeltaResult {
             entries: self.list_all()?,
@@ -288,11 +295,7 @@ impl CloudBackend for MockBackend {
             .entries
             .lock()
             .map_err(|_| anyhow::anyhow!("mock entries lock is poisoned"))?;
-        let before = entries.len();
         entries.retain(|entry| entry.remote_id != remote_id);
-        if entries.len() == before {
-            anyhow::bail!("mock backend has no item with remote id {remote_id}");
-        }
         self.files
             .lock()
             .map_err(|_| anyhow::anyhow!("mock files lock is poisoned"))?
@@ -512,8 +515,32 @@ impl CloudBackend for GraphBackend {
 
     fn get_metadata(&self, remote_id: &str) -> anyhow::Result<Option<MetadataEntry>> {
         let url = format!("https://graph.microsoft.com/v1.0/me/drive/items/{remote_id}");
-        let item: GraphDriveItem = self.get_with_retry(&url)?.json()?;
+        let Some(response) = retry_optional_request(|| {
+            let access_token = self.access_token()?;
+            Ok(self.client.get(&url).bearer_auth(access_token))
+        })?
+        else {
+            return Ok(None);
+        };
+        let item: GraphDriveItem = response.json()?;
         Ok(item.into_metadata())
+    }
+
+    fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        let path = normalize_cloud_path(path);
+        let url = format!(
+            "https://graph.microsoft.com/v1.0/me/drive/root:/{}",
+            encode_graph_path(&path)
+        );
+        let Some(response) = retry_optional_request(|| {
+            let access_token = self.access_token()?;
+            Ok(self.client.get(&url).bearer_auth(access_token))
+        })?
+        else {
+            return Ok(None);
+        };
+        let item: GraphDriveItem = response.json()?;
+        Ok(item.into_metadata_at_path(&path))
     }
 
     fn list_delta(&self, delta_link: Option<&str>) -> anyhow::Result<DeltaResult> {
@@ -807,9 +834,11 @@ impl CloudBackend for GraphBackend {
     }
 
     fn delete(&self, remote_id: &str) -> anyhow::Result<()> {
-        let access_token = self.access_token()?;
         let url = format!("https://graph.microsoft.com/v1.0/me/drive/items/{remote_id}");
-        retry_request(|| self.client.delete(&url).bearer_auth(&access_token))?;
+        retry_optional_request(|| {
+            let access_token = self.access_token()?;
+            Ok(self.client.delete(&url).bearer_auth(access_token))
+        })?;
         Ok(())
     }
 }
@@ -1264,6 +1293,40 @@ where
                 anyhow::bail!("Graph request failed with HTTP {status}: {body}");
             }
             Err(err) => last_error = Some(err.into()),
+        }
+
+        sleep(Duration::from_millis(250 * attempt));
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Graph request failed")))
+}
+
+fn retry_optional_request<F>(mut build: F) -> anyhow::Result<Option<reqwest::blocking::Response>>
+where
+    F: FnMut() -> anyhow::Result<RequestBuilder>,
+{
+    let mut last_error = None;
+    for attempt in 1..=3 {
+        match build().and_then(|request| request.send().map_err(Into::into)) {
+            Ok(response) if response.status().is_success() => return Ok(Some(response)),
+            Ok(response) if response.status().as_u16() == 404 => return Ok(None),
+            Ok(response)
+                if response.status().as_u16() == 429 || response.status().is_server_error() =>
+            {
+                let status = response.status();
+                let delay = retry_after_delay(response.headers(), attempt);
+                let body = response.text().unwrap_or_default();
+                last_error = Some(anyhow::anyhow!("HTTP {status}: {body}"));
+                eprintln!("twodrive: Graph request attempt {attempt} failed; retrying");
+                sleep(delay);
+                continue;
+            }
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().unwrap_or_default();
+                anyhow::bail!("Graph request failed with HTTP {status}: {body}");
+            }
+            Err(err) => last_error = Some(err),
         }
 
         sleep(Duration::from_millis(250 * attempt));

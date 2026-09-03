@@ -12,6 +12,8 @@ Nautilus status emblems and actions, a tray status helper, and power-aware backg
 
 - 默认挂载到 `~/TwoDrive/OneDrive`，目录项先显示，文件在打开时才下载。
 - 支持本地新建、修改、移动和删除；默认并发上传 4 个文件，失败任务持久化等待重试。
+- 文件系统修改采用本地优先语义：保存、建目录、重命名和删除先提交到本地缓存与 SQLite，
+  随后由后台队列更新 OneDrive。网络故障不会反向造成编辑器保存失败。
 - 支持“始终保留在此设备上”和“释放空间”。本地新增文件可继承固定目录策略；云端新发现的
   文件默认保持仅云端，不会自动下载。
 - 大于 10 MiB 的文件使用 Microsoft Graph upload session 分片上传，并持久化会话以便重启后
@@ -140,6 +142,9 @@ sudo apt remove twodrive
   when an application opens the file.
 - Supports local create, edit, move, and delete with four concurrent uploads by default. Failed jobs
   remain in durable retry queues.
+- Filesystem mutations are local-first: save, mkdir, rename, and delete commit to the local cache and
+  SQLite before background workers update OneDrive. A network outage does not turn a durable local
+  editor save into an application error.
 - Supports Always Keep and Release Space. Locally created descendants can inherit a pinned directory
   policy; newly discovered cloud files stay online-only until opened or explicitly pinned.
 - Files larger than 10 MiB use Microsoft Graph upload sessions. Session URLs and source identity are
@@ -291,12 +296,17 @@ database, cache, and mount remain untouched.
 - `twodrive-cli`: user commands and desktop integration helpers.
 - `twodrive-daemon`: background mount, known-folder upload-only watcher, and power policy.
 
-`write`, `flush`, and `fsync` persist data to the local cache before success. A separate `writing`
-state prevents a crash from uploading a half-written generation. Closed `dirty` or `uploading`
-records replay concurrently after restart, and large uploads resume their persisted Graph session.
-Known-folder uploads use a durable per-file queue, startup scan, and periodic rescan. Failed remote
-deletes remain in a pending-delete queue. Delta metadata cannot overwrite a changing local generation
-at the same path.
+`write`, `flush`, `fsync`, path-based `truncate`, `mkdir`, `rename`, and `unlink` commit locally before
+success. A separate `writing` state prevents a crash from uploading a half-written generation.
+Locally created records keep a stable local identity for their whole lifetime; the OneDrive item ID
+is bound separately after upload, so a fast close/reopen cannot race with identity replacement.
+
+Closed `dirty` or `uploading` records replay concurrently after restart. Folder creation and moves
+use `pending_metadata_operations`, while deletes use `pending_deletes`; both queues survive restart.
+Operations for one item are serialized, and remote delta metadata cannot overwrite a pending local
+move or changing content generation. Large uploads resume their persisted Graph session. A successful
+application save means the local generation is durable; cloud completion, retry, conflict, or error is
+reported as separate synchronization state.
 
 ## License
 

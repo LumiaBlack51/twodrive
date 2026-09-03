@@ -133,6 +133,9 @@ impl MetadataEntry {
 #[derive(Debug, Clone)]
 pub struct FileRecord {
     pub metadata: MetadataEntry,
+    /// Stable remote identity assigned by OneDrive. `metadata.remote_id` is the
+    /// local identity used by the cache/database and never changes after create.
+    pub cloud_remote_id: Option<String>,
     pub state: FileState,
     pub cache_path: Option<PathBuf>,
     pub cache_accessed_unix: Option<i64>,
@@ -146,6 +149,29 @@ pub struct PendingDelete {
     pub remote_id: String,
     pub path: String,
     pub cache_path: Option<PathBuf>,
+    pub queued_unix: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingMetadataKind {
+    CreateFolder,
+    Move,
+}
+
+impl PendingMetadataKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateFolder => "create_folder",
+            Self::Move => "move",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingMetadataOperation {
+    pub local_id: String,
+    pub kind: PendingMetadataKind,
+    pub path: String,
     pub queued_unix: i64,
 }
 
@@ -472,6 +498,7 @@ impl Database {
             PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS files (
                 remote_id TEXT PRIMARY KEY,
+                cloud_remote_id TEXT,
                 path TEXT NOT NULL UNIQUE,
                 parent_path TEXT NOT NULL,
                 name TEXT NOT NULL,
@@ -497,7 +524,27 @@ impl Database {
                 cache_path TEXT,
                 queued_unix INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS pending_metadata_operations (
+                local_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                path TEXT NOT NULL,
+                queued_unix INTEGER NOT NULL
+            );
             "#,
+        )?;
+        ensure_column(
+            &conn,
+            "files",
+            "cloud_remote_id",
+            "ALTER TABLE files ADD COLUMN cloud_remote_id TEXT",
+        )?;
+        conn.execute(
+            "UPDATE files SET cloud_remote_id = remote_id WHERE cloud_remote_id IS NULL AND remote_id NOT LIKE 'local-upload-%'",
+            [],
+        )?;
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_files_cloud_remote_id ON files(cloud_remote_id) WHERE cloud_remote_id IS NOT NULL",
+            [],
         )?;
         ensure_column(
             &conn,
@@ -576,6 +623,23 @@ impl Database {
                 continue;
             }
 
+            let local_id = tx
+                .query_row(
+                    "SELECT remote_id FROM files WHERE cloud_remote_id = ?1",
+                    params![entry.remote_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .unwrap_or_else(|| entry.remote_id.clone());
+            let pending_metadata = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pending_metadata_operations WHERE local_id = ?1)",
+                params![local_id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if pending_metadata {
+                continue;
+            }
+
             let protected_path = tx.query_row(
                 r#"
                 SELECT EXISTS(
@@ -585,7 +649,7 @@ impl Database {
                       AND state IN ('writing', 'dirty', 'uploading')
                 )
                 "#,
-                params![entry.path, entry.remote_id],
+                params![entry.path, local_id],
                 |row| row.get::<_, bool>(0),
             )?;
             let protected_id = tx.query_row(
@@ -596,7 +660,7 @@ impl Database {
                       AND state IN ('writing', 'dirty', 'uploading')
                 )
                 "#,
-                params![entry.remote_id],
+                params![local_id],
                 |row| row.get::<_, bool>(0),
             )?;
             if protected_path || protected_id {
@@ -606,21 +670,22 @@ impl Database {
             let old_path = tx
                 .query_row(
                     "SELECT path FROM files WHERE remote_id = ?1",
-                    params![entry.remote_id],
+                    params![local_id],
                     |row| row.get::<_, String>(0),
                 )
                 .optional()?;
             tx.execute(
                 "DELETE FROM files WHERE path = ?1 AND remote_id <> ?2",
-                params![entry.path, entry.remote_id],
+                params![entry.path, local_id],
             )?;
             tx.execute(
                 r#"
                 INSERT INTO files (
                     remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state,
+                    cloud_remote_id,
                     pin_inheritance_blocked
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
                 ON CONFLICT(remote_id) DO UPDATE SET
                     path = excluded.path,
                     parent_path = excluded.parent_path,
@@ -628,10 +693,11 @@ impl Database {
                     is_dir = excluded.is_dir,
                     size = excluded.size,
                     modified_unix = excluded.modified_unix,
-                    etag = excluded.etag
+                    etag = excluded.etag,
+                    cloud_remote_id = excluded.cloud_remote_id
                 "#,
                 params![
-                    entry.remote_id,
+                    local_id,
                     entry.path,
                     entry.parent_path,
                     entry.name,
@@ -640,6 +706,7 @@ impl Database {
                     entry.modified_unix,
                     entry.etag,
                     FileState::OnlineOnly.as_str(),
+                    entry.remote_id,
                 ],
             )?;
 
@@ -685,8 +752,21 @@ impl Database {
         if self.is_pending_delete(&entry.remote_id, &entry.path)? {
             return Ok(());
         }
+        let incoming_cloud_id =
+            (!entry.remote_id.starts_with("local-upload-")).then_some(entry.remote_id.clone());
+        let existing = match incoming_cloud_id.as_deref() {
+            Some(cloud_remote_id) => self.get_by_cloud_remote_id(cloud_remote_id)?,
+            None => self.get_by_remote_id(&entry.remote_id)?,
+        };
+        let local_id = existing
+            .as_ref()
+            .map(|record| record.metadata.remote_id.clone())
+            .unwrap_or_else(|| entry.remote_id.clone());
+        if self.pending_metadata_operation(&local_id)?.is_some() {
+            return Ok(());
+        }
         if self.get_by_path(&entry.path)?.is_some_and(|record| {
-            record.metadata.remote_id != entry.remote_id
+            record.metadata.remote_id != local_id
                 && matches!(
                     record.state,
                     FileState::Writing | FileState::Dirty | FileState::Uploading
@@ -694,35 +774,33 @@ impl Database {
         }) {
             return Ok(());
         }
-        if self
-            .get_by_remote_id(&entry.remote_id)?
-            .is_some_and(|record| {
-                matches!(
-                    record.state,
-                    FileState::Writing | FileState::Dirty | FileState::Uploading
-                )
-            })
-        {
+        if self.get_by_remote_id(&local_id)?.is_some_and(|record| {
+            matches!(
+                record.state,
+                FileState::Writing | FileState::Dirty | FileState::Uploading
+            )
+        }) {
             if recompute_pins {
                 self.recompute_pin_inheritance()?;
             }
             return Ok(());
         }
         let old_path = self
-            .get_by_remote_id(&entry.remote_id)?
+            .get_by_remote_id(&local_id)?
             .map(|record| record.metadata.path);
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "DELETE FROM files WHERE path = ?1 AND remote_id <> ?2",
-            params![entry.path, entry.remote_id],
+            params![entry.path, local_id],
         )?;
         tx.execute(
             r#"
             INSERT INTO files (
-                remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state
+                remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state,
+                cloud_remote_id
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(remote_id) DO UPDATE SET
                 path = excluded.path,
                 parent_path = excluded.parent_path,
@@ -730,10 +808,11 @@ impl Database {
                 is_dir = excluded.is_dir,
                 size = excluded.size,
                 modified_unix = excluded.modified_unix,
-                etag = excluded.etag
+                etag = excluded.etag,
+                cloud_remote_id = excluded.cloud_remote_id
             "#,
             params![
-                entry.remote_id,
+                local_id,
                 entry.path,
                 entry.parent_path,
                 entry.name,
@@ -742,6 +821,7 @@ impl Database {
                 entry.modified_unix,
                 entry.etag,
                 FileState::OnlineOnly.as_str(),
+                incoming_cloud_id,
             ],
         )?;
         tx.commit()?;
@@ -843,7 +923,7 @@ impl Database {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let record = self.query_record(
             &tx,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
             params![remote_id],
         )?;
         let Some(record) = record else {
@@ -964,11 +1044,249 @@ impl Database {
         self.allow_pin_inheritance(remote_id)
     }
 
+    pub fn create_local_directory(&self, local_id: &str, path: &str) -> anyhow::Result<FileRecord> {
+        let path = normalize_cloud_path(path);
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1 LIMIT 1",
+                params![path],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            anyhow::bail!("path already exists: {path}");
+        }
+        tx.execute(
+            r#"
+            INSERT INTO files(
+                remote_id, cloud_remote_id, path, parent_path, name, is_dir, size,
+                modified_unix, etag, state, pin_inheritance_blocked
+            ) VALUES (?1, NULL, ?2, ?3, ?4, 1, 0, ?5, '', 'dirty', 0)
+            "#,
+            params![
+                local_id,
+                path,
+                parent_cloud_path(&path),
+                cloud_name(&path),
+                now_unix()
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO pending_metadata_operations(local_id, kind, path, queued_unix) VALUES (?1, 'create_folder', ?2, ?3)",
+            params![local_id, path, now_unix()],
+        )?;
+        tx.commit()?;
+        self.recompute_pin_inheritance()?;
+        self.get_by_remote_id(local_id)?
+            .ok_or_else(|| anyhow::anyhow!("created local directory disappeared"))
+    }
+
+    pub fn move_subtree_and_queue(&self, local_id: &str, new_path: &str) -> anyhow::Result<()> {
+        let record = self
+            .get_by_remote_id(local_id)?
+            .ok_or_else(|| anyhow::anyhow!("cannot move unknown item {local_id}"))?;
+        let old_path = record.metadata.path.clone();
+        let new_path = normalize_cloud_path(new_path);
+        let descendants = self.list_descendants(&old_path)?;
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0 WHERE remote_id = ?4",
+            params![new_path, parent_cloud_path(&new_path), cloud_name(&new_path), local_id],
+        )?;
+        for descendant in descendants {
+            let suffix = descendant
+                .metadata
+                .path
+                .strip_prefix(&old_path)
+                .ok_or_else(|| anyhow::anyhow!("descendant path lost its parent prefix"))?;
+            let descendant_path = normalize_cloud_path(&format!("{new_path}{suffix}"));
+            tx.execute(
+                "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0 WHERE remote_id = ?4",
+                params![
+                    descendant_path,
+                    parent_cloud_path(&descendant_path),
+                    cloud_name(&descendant_path),
+                    descendant.metadata.remote_id
+                ],
+            )?;
+        }
+        if record.cloud_remote_id.is_some() {
+            tx.execute(
+                r#"
+                INSERT INTO pending_metadata_operations(local_id, kind, path, queued_unix)
+                VALUES (?1, 'move', ?2, ?3)
+                ON CONFLICT(local_id) DO UPDATE SET
+                    kind = CASE
+                        WHEN pending_metadata_operations.kind = 'create_folder' THEN 'create_folder'
+                        ELSE 'move'
+                    END,
+                    path = excluded.path,
+                    queued_unix = excluded.queued_unix
+                "#,
+                params![local_id, new_path, now_unix()],
+            )?;
+        } else if record.metadata.is_dir {
+            tx.execute(
+                "UPDATE pending_metadata_operations SET path = ?1, queued_unix = ?2 WHERE local_id = ?3",
+                params![new_path, now_unix(), local_id],
+            )?;
+        }
+        tx.commit()?;
+        self.recompute_pin_inheritance()
+    }
+
+    pub fn replace_file_locally(
+        &self,
+        source_local_id: &str,
+        target_local_id: &str,
+        new_path: &str,
+    ) -> anyhow::Result<FileRecord> {
+        let source = self
+            .get_by_remote_id(source_local_id)?
+            .ok_or_else(|| anyhow::anyhow!("replacement source disappeared"))?;
+        let target = self
+            .get_by_remote_id(target_local_id)?
+            .ok_or_else(|| anyhow::anyhow!("replacement target disappeared"))?;
+        if source.metadata.is_dir || target.metadata.is_dir {
+            anyhow::bail!("cannot replace a directory as a file");
+        }
+        let new_path = normalize_cloud_path(new_path);
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM pending_metadata_operations WHERE local_id IN (?1, ?2)",
+            params![source_local_id, target_local_id],
+        )?;
+        if let Some(source_cloud_id) = source
+            .cloud_remote_id
+            .as_deref()
+            .filter(|source_id| Some(*source_id) != target.cloud_remote_id.as_deref())
+        {
+            tx.execute(
+                r#"
+                INSERT INTO pending_deletes(remote_id, path, cache_path, queued_unix)
+                VALUES (?1, ?2, NULL, ?3)
+                ON CONFLICT(remote_id) DO UPDATE SET path = excluded.path, queued_unix = excluded.queued_unix
+                "#,
+                params![source_cloud_id, source.metadata.path, now_unix()],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM files WHERE remote_id = ?1",
+            params![target_local_id],
+        )?;
+        tx.execute(
+            r#"
+            UPDATE files
+            SET path = ?1,
+                parent_path = ?2,
+                name = ?3,
+                cloud_remote_id = ?4,
+                etag = ?5,
+                state = CASE WHEN state = 'writing' THEN 'writing' ELSE 'dirty' END
+            WHERE remote_id = ?6
+            "#,
+            params![
+                new_path,
+                parent_cloud_path(&new_path),
+                cloud_name(&new_path),
+                target.cloud_remote_id,
+                target.metadata.etag,
+                source_local_id,
+            ],
+        )?;
+        tx.commit()?;
+        self.recompute_pin_inheritance()?;
+        self.get_by_remote_id(source_local_id)?
+            .ok_or_else(|| anyhow::anyhow!("local replacement disappeared"))
+    }
+
+    pub fn pending_metadata_operation(
+        &self,
+        local_id: &str,
+    ) -> anyhow::Result<Option<PendingMetadataOperation>> {
+        let conn = self.connect()?;
+        Ok(conn
+            .query_row(
+                "SELECT local_id, kind, path, queued_unix FROM pending_metadata_operations WHERE local_id = ?1",
+                params![local_id],
+                |row| {
+                    let kind: String = row.get(1)?;
+                    let kind = match kind.as_str() {
+                        "create_folder" => PendingMetadataKind::CreateFolder,
+                        "move" => PendingMetadataKind::Move,
+                        _ => return Err(rusqlite::Error::InvalidQuery),
+                    };
+                    Ok(PendingMetadataOperation {
+                        local_id: row.get(0)?,
+                        kind,
+                        path: row.get(2)?,
+                        queued_unix: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn pending_metadata_operations(&self) -> anyhow::Result<Vec<PendingMetadataOperation>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT local_id FROM pending_metadata_operations ORDER BY queued_unix, local_id",
+        )?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        ids.into_iter()
+            .filter_map(|local_id| self.pending_metadata_operation(&local_id).transpose())
+            .collect()
+    }
+
+    pub fn complete_metadata_operation(
+        &self,
+        local_id: &str,
+        expected_path: &str,
+        entry: &MetadataEntry,
+    ) -> anyhow::Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current_path = tx
+            .query_row(
+                "SELECT path FROM files WHERE remote_id = ?1",
+                params![local_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let still_current = current_path.as_deref() == Some(&normalize_cloud_path(expected_path));
+        tx.execute(
+            "UPDATE files SET cloud_remote_id = ?1, etag = ?2, modified_unix = ?3, state = CASE WHEN ?4 = 1 AND state = 'dirty' THEN 'cached' ELSE state END WHERE remote_id = ?5",
+            params![
+                entry.remote_id,
+                entry.etag,
+                entry.modified_unix,
+                entry.is_dir as i64,
+                local_id
+            ],
+        )?;
+        if still_current {
+            tx.execute(
+                "DELETE FROM pending_metadata_operations WHERE local_id = ?1 AND path = ?2",
+                params![local_id, normalize_cloud_path(expected_path)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(still_current)
+    }
+
     pub fn allow_pin_inheritance(&self, remote_id: &str) -> anyhow::Result<()> {
         let conn = self.connect()?;
         let record = self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
             params![remote_id],
         )?;
         let Some(record) = record else {
@@ -1092,7 +1410,7 @@ impl Database {
         let normalized = normalize_cloud_path(path);
         self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE path = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE path = ?1",
             params![normalized],
         )
     }
@@ -1101,9 +1419,111 @@ impl Database {
         let conn = self.connect()?;
         self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
             params![remote_id],
         )
+    }
+
+    pub fn get_by_cloud_remote_id(
+        &self,
+        cloud_remote_id: &str,
+    ) -> anyhow::Result<Option<FileRecord>> {
+        let conn = self.connect()?;
+        self.query_record(
+            &conn,
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE cloud_remote_id = ?1",
+            params![cloud_remote_id],
+        )
+    }
+
+    pub fn bind_cloud_identity(
+        &self,
+        local_id: &str,
+        cloud_remote_id: &str,
+        etag: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.connect()?;
+        let changed = conn.execute(
+            "UPDATE files SET cloud_remote_id = ?1, etag = ?2 WHERE remote_id = ?3",
+            params![cloud_remote_id, etag, local_id],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("cannot bind cloud identity for unknown item {local_id}");
+        }
+        Ok(())
+    }
+
+    pub fn commit_uploaded(
+        &self,
+        local_id: &str,
+        requested_path: &str,
+        uploaded: &MetadataEntry,
+        cache_path: &Path,
+    ) -> anyhow::Result<FileRecord> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = self
+            .query_record(
+                &tx,
+                "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
+                params![local_id],
+            )?
+            .ok_or_else(|| anyhow::anyhow!("uploaded local item disappeared: {local_id}"))?;
+        let is_current_generation = current.metadata.path == normalize_cloud_path(requested_path)
+            && current.state == FileState::Uploading;
+        let cloud_identity_matches = current
+            .cloud_remote_id
+            .as_deref()
+            .is_none_or(|remote_id| remote_id == uploaded.remote_id);
+        let needs_cloud_move = current.metadata.path != normalize_cloud_path(requested_path)
+            && current.cloud_remote_id.is_none();
+        tx.execute(
+            r#"
+            UPDATE files
+            SET cloud_remote_id = CASE
+                    WHEN ?3 = 1 OR cloud_remote_id IS NULL THEN ?1
+                    ELSE cloud_remote_id
+                END,
+                etag = CASE WHEN ?9 = 1 THEN ?2 ELSE etag END,
+                modified_unix = CASE WHEN ?3 = 1 THEN ?4 ELSE modified_unix END,
+                size = CASE WHEN ?3 = 1 THEN ?5 ELSE size END,
+                state = CASE
+                    WHEN ?3 = 0 THEN state
+                    WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned'
+                    ELSE 'cached'
+                END,
+                cache_path = ?6,
+                cache_accessed_unix = ?7
+            WHERE remote_id = ?8
+            "#,
+            params![
+                uploaded.remote_id,
+                uploaded.etag,
+                is_current_generation as i64,
+                uploaded.modified_unix,
+                i64::try_from(uploaded.size).unwrap_or(i64::MAX),
+                cache_path.to_string_lossy(),
+                now_unix(),
+                local_id,
+                cloud_identity_matches as i64,
+            ],
+        )?;
+        if needs_cloud_move {
+            tx.execute(
+                r#"
+                INSERT INTO pending_metadata_operations(local_id, kind, path, queued_unix)
+                VALUES (?1, 'move', ?2, ?3)
+                ON CONFLICT(local_id) DO UPDATE SET
+                    kind = 'move',
+                    path = excluded.path,
+                    queued_unix = excluded.queued_unix
+                "#,
+                params![local_id, current.metadata.path, now_unix()],
+            )?;
+        }
+        tx.commit()?;
+        self.get_by_remote_id(local_id)?
+            .ok_or_else(|| anyhow::anyhow!("committed upload disappeared: {local_id}"))
     }
 
     pub fn list_children(&self, parent_path: &str) -> anyhow::Result<Vec<FileRecord>> {
@@ -1111,7 +1531,7 @@ impl Database {
         let normalized = normalize_cloud_path(parent_path);
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id
             FROM files
             WHERE parent_path = ?1
             ORDER BY is_dir DESC, lower(name), name
@@ -1128,7 +1548,7 @@ impl Database {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id
             FROM files
             WHERE (
                 ?1 = '/' AND path <> '/' AND substr(path, 1, 1) = '/'
@@ -1148,7 +1568,7 @@ impl Database {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id
             FROM files
             ORDER BY path
             "#,
@@ -1160,15 +1580,28 @@ impl Database {
     }
 
     pub fn remove_by_remote_id(&self, remote_id: &str) -> anyhow::Result<()> {
-        let conn = self.connect()?;
-        conn.execute("DELETE FROM files WHERE remote_id = ?1", params![remote_id])?;
-        drop(conn);
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
+            params![remote_id],
+        )?;
+        tx.execute("DELETE FROM files WHERE remote_id = ?1", params![remote_id])?;
+        tx.commit()?;
         self.recompute_pin_inheritance()
     }
 
     pub fn queue_pending_delete(&self, record: &FileRecord) -> anyhow::Result<()> {
+        let cloud_remote_id = record
+            .cloud_remote_id
+            .as_deref()
+            .unwrap_or(&record.metadata.remote_id);
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
+            params![record.metadata.remote_id],
+        )?;
         tx.execute(
             r#"
             INSERT INTO pending_deletes(remote_id, path, cache_path, queued_unix)
@@ -1179,7 +1612,7 @@ impl Database {
                 queued_unix = excluded.queued_unix
             "#,
             params![
-                record.metadata.remote_id,
+                cloud_remote_id,
                 record.metadata.path,
                 record
                     .cache_path
@@ -1206,6 +1639,19 @@ impl Database {
         }
         tx.commit()?;
         self.recompute_pin_inheritance()
+    }
+
+    pub fn queue_remote_delete(&self, cloud_remote_id: &str, path: &str) -> anyhow::Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            r#"
+            INSERT INTO pending_deletes(remote_id, path, cache_path, queued_unix)
+            VALUES (?1, ?2, NULL, ?3)
+            ON CONFLICT(remote_id) DO UPDATE SET path = excluded.path, queued_unix = excluded.queued_unix
+            "#,
+            params![cloud_remote_id, normalize_cloud_path(path), now_unix()],
+        )?;
+        Ok(())
     }
 
     pub fn pending_deletes(&self) -> anyhow::Result<Vec<PendingDelete>> {
@@ -1310,6 +1756,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
             modified_unix: row.get(6)?,
             etag: row.get(7)?,
         },
+        cloud_remote_id: row.get(14)?,
         state: FileState::from_str(&state_value).map_err(|err| {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(err))
         })?,
@@ -1811,5 +2258,154 @@ mod tests {
         }
         assert_eq!(db.all_records().unwrap().len(), 160);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn upload_binding_preserves_the_local_identity() {
+        let test = TestDatabase::new("stable-local-identity");
+        let local_id = "local-upload-stable";
+        let cache_path = test.root.join("stable.cache");
+        fs::write(&cache_path, b"local data").unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(local_id, "/stable.pdf", 10, 1, ""))
+            .unwrap();
+        test.db.mark_cached(local_id, &cache_path).unwrap();
+        test.db.mark_state(local_id, FileState::Uploading).unwrap();
+
+        let uploaded = MetadataEntry::new_file("cloud-stable", "/stable.pdf", 10, 2, "etag-cloud");
+        let committed = test
+            .db
+            .commit_uploaded(local_id, "/stable.pdf", &uploaded, &cache_path)
+            .unwrap();
+
+        assert_eq!(committed.metadata.remote_id, local_id);
+        assert_eq!(committed.cloud_remote_id.as_deref(), Some("cloud-stable"));
+        assert_eq!(committed.state, FileState::Cached);
+        assert!(test.db.get_by_remote_id("cloud-stable").unwrap().is_none());
+    }
+
+    #[test]
+    fn upload_completion_after_a_local_move_queues_the_remote_move() {
+        let test = TestDatabase::new("upload-finished-after-move");
+        let local_id = "local-upload-moving";
+        let cache_path = test.root.join("moving.cache");
+        fs::write(&cache_path, b"local data").unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(local_id, "/before.pdf", 10, 1, ""))
+            .unwrap();
+        test.db.mark_cached(local_id, &cache_path).unwrap();
+        test.db.mark_state(local_id, FileState::Uploading).unwrap();
+        test.db
+            .move_subtree_and_queue(local_id, "/after.pdf")
+            .unwrap();
+
+        let uploaded = MetadataEntry::new_file("cloud-moving", "/before.pdf", 10, 2, "etag-cloud");
+        let committed = test
+            .db
+            .commit_uploaded(local_id, "/before.pdf", &uploaded, &cache_path)
+            .unwrap();
+
+        assert_eq!(committed.metadata.path, "/after.pdf");
+        assert_eq!(committed.cloud_remote_id.as_deref(), Some("cloud-moving"));
+        let pending = test
+            .db
+            .pending_metadata_operation(local_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.kind, PendingMetadataKind::Move);
+        assert_eq!(pending.path, "/after.pdf");
+    }
+
+    #[test]
+    fn stale_temp_upload_does_not_replace_the_target_cloud_etag() {
+        let test = TestDatabase::new("stale-temp-upload-etag");
+        let source_id = "local-upload-temp";
+        let cache_path = test.root.join("temp.cache");
+        fs::write(&cache_path, b"replacement").unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(
+                source_id,
+                "/.target.pdf.tmp",
+                11,
+                1,
+                "",
+            ))
+            .unwrap();
+        test.db.mark_cached(source_id, &cache_path).unwrap();
+        test.db.mark_state(source_id, FileState::Uploading).unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(
+                "cloud-target",
+                "/target.pdf",
+                4,
+                1,
+                "etag-target",
+            ))
+            .unwrap();
+        test.db
+            .replace_file_locally(source_id, "cloud-target", "/target.pdf")
+            .unwrap();
+
+        let stale_upload =
+            MetadataEntry::new_file("cloud-temp", "/.target.pdf.tmp", 11, 2, "etag-temp");
+        let committed = test
+            .db
+            .commit_uploaded(source_id, "/.target.pdf.tmp", &stale_upload, &cache_path)
+            .unwrap();
+
+        assert_eq!(committed.cloud_remote_id.as_deref(), Some("cloud-target"));
+        assert_eq!(committed.metadata.etag, "etag-target");
+        assert_eq!(committed.metadata.path, "/target.pdf");
+    }
+
+    #[test]
+    fn metadata_operations_are_durable_and_moves_coalesce() {
+        let test = TestDatabase::new("durable-metadata-operations");
+        let directory = test
+            .db
+            .create_local_directory("local-upload-folder", "/Draft")
+            .unwrap();
+        assert!(directory.cloud_remote_id.is_none());
+        test.db
+            .move_subtree_and_queue("local-upload-folder", "/Final")
+            .unwrap();
+
+        let reopened = Database::new(test.db.path().to_path_buf());
+        reopened.init().unwrap();
+        let operations = reopened.pending_metadata_operations().unwrap();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].kind, PendingMetadataKind::CreateFolder);
+        assert_eq!(operations[0].path, "/Final");
+        assert_eq!(
+            reopened
+                .get_by_remote_id("local-upload-folder")
+                .unwrap()
+                .unwrap()
+                .metadata
+                .path,
+            "/Final"
+        );
+    }
+
+    #[test]
+    fn delta_metadata_does_not_undo_a_pending_local_move() {
+        let test = TestDatabase::new("pending-move-protection");
+        let remote = MetadataEntry::new_file("cloud-move", "/Old.pdf", 12, 1, "etag-1");
+        test.db.upsert_metadata(&remote).unwrap();
+        test.db
+            .move_subtree_and_queue("cloud-move", "/New.pdf")
+            .unwrap();
+
+        test.db.upsert_metadata(&remote).unwrap();
+
+        assert!(test.db.get_by_path("/Old.pdf").unwrap().is_none());
+        let moved = test.db.get_by_path("/New.pdf").unwrap().unwrap();
+        assert_eq!(moved.cloud_remote_id.as_deref(), Some("cloud-move"));
+        assert!(
+            test.db
+                .pending_metadata_operation(&moved.metadata.remote_id)
+                .unwrap()
+                .is_some()
+        );
     }
 }

@@ -5,7 +5,8 @@ use twodrive_backend::{GraphBackend, MockBackend};
 use twodrive_core::{AppPaths, Config, Database, FileState, TokenStore, normalize_cloud_path};
 use twodrive_fs::{
     hydrate_pending_pins, mount_graph, mount_mock, pin_path, recover_dirty_uploads,
-    recover_pending_deletes, sync_delta_metadata, sync_metadata, unpin_path,
+    recover_pending_deletes, recover_pending_metadata_operations, sync_delta_metadata,
+    sync_metadata, unpin_path,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -98,6 +99,11 @@ fn print_status(paths: &AppPaths) -> anyhow::Result<()> {
             "(none)"
         }
     );
+    println!("pending deletes: {}", db.pending_deletes()?.len());
+    println!(
+        "pending metadata operations: {}",
+        db.pending_metadata_operations()?.len()
+    );
     println!(
         "token: {}",
         if paths.token_path.exists() {
@@ -132,6 +138,15 @@ fn status_path(paths: &AppPaths, path: &str) -> anyhow::Result<()> {
     );
     println!("is_dir={}", record.metadata.is_dir);
     println!("size={}", record.metadata.size);
+    println!("local_id={}", record.metadata.remote_id);
+    println!(
+        "cloud_remote_id={}",
+        record.cloud_remote_id.as_deref().unwrap_or_default()
+    );
+    let metadata_pending = db
+        .pending_metadata_operation(&record.metadata.remote_id)?
+        .is_some();
+    println!("metadata_operation_pending={metadata_pending}");
     println!(
         "cache_path={}",
         record
@@ -140,7 +155,14 @@ fn status_path(paths: &AppPaths, path: &str) -> anyhow::Result<()> {
             .map(|path| path.display().to_string())
             .unwrap_or_default()
     );
-    println!("emblem={}", emblem_for_state(record.state));
+    println!(
+        "emblem={}",
+        if metadata_pending {
+            "emblem-twodrive-syncing"
+        } else {
+            emblem_for_state(record.state)
+        }
+    );
     Ok(())
 }
 
@@ -174,9 +196,10 @@ fn sync(paths: &AppPaths) -> anyhow::Result<()> {
         let backend = MockBackend::new();
         let deleted = recover_pending_deletes(&db, &backend)?;
         let count = sync_metadata(&db, &backend)?;
+        let metadata = recover_pending_metadata_operations(&db, &backend)?;
         let recovered = recover_dirty_uploads(&db, &backend)?;
         println!(
-            "synced {count} mock metadata entries; recovered {deleted} delete(s), {recovered} upload(s); file contents were not downloaded"
+            "synced {count} mock metadata entries; recovered {deleted} delete(s), {metadata} metadata operation(s), {recovered} upload(s); file contents were not downloaded"
         );
         return Ok(());
     }
@@ -184,10 +207,11 @@ fn sync(paths: &AppPaths) -> anyhow::Result<()> {
     let backend = GraphBackend::from_paths(paths)?;
     let deleted = recover_pending_deletes(&db, &backend)?;
     let count = sync_delta_metadata(&db, &backend)?;
+    let metadata = recover_pending_metadata_operations(&db, &backend)?;
     let recovered = recover_dirty_uploads(&db, &backend)?;
     let hydrated = hydrate_pending_pins(&db, &paths.cache_dir, &backend)?;
     println!(
-        "synced {count} metadata entries; recovered {deleted} delete(s), {recovered} upload(s); hydrated {hydrated} inherited pinned file(s)"
+        "synced {count} metadata entries; recovered {deleted} delete(s), {metadata} metadata operation(s), {recovered} upload(s); hydrated {hydrated} inherited pinned file(s)"
     );
     Ok(())
 }
