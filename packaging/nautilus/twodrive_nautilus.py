@@ -28,17 +28,67 @@ def mount_dir():
     return os.path.expanduser("~/TwoDrive/OneDrive")
 
 
+def cloud_path_from_local_path(path):
+    root = os.path.realpath(mount_dir())
+    resolved = os.path.realpath(path)
+    try:
+        if os.path.commonpath((resolved, root)) != root:
+            return None
+    except ValueError:
+        return None
+    if resolved == root:
+        return "/"
+    return "/" + os.path.relpath(resolved, root)
+
+
 def cloud_path(file_info):
     location = file_info.get_location()
     path = location.get_path() if location else None
     if not path:
         return None
-    root = mount_dir()
-    if path == root:
-        return "/"
-    if path.startswith(root + os.sep):
-        return "/" + os.path.relpath(path, root)
-    return None
+    return cloud_path_from_local_path(path)
+
+
+def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local):
+    if directory_state in {"conflict", "error"} or has_error:
+        return "error"
+    syncing_states = {"hydrating", "writing", "dirty", "uploading"}
+    if directory_state in syncing_states or has_syncing:
+        return "uploading"
+    if directory_state == "pinned":
+        return "pinned"
+    if has_local:
+        return "cached"
+    return "online_only"
+
+
+def directory_state_for(conn, path, state):
+    prefix = path.rstrip("/") + "/"
+    has_error, has_syncing, has_local = conn.execute(
+        """
+        SELECT
+            EXISTS(
+                SELECT 1 FROM files
+                WHERE is_dir = 0 AND path >= ? AND path < ?
+                  AND state IN ('conflict', 'error')
+            ),
+            EXISTS(
+                SELECT 1 FROM files
+                WHERE is_dir = 0 AND path >= ? AND path < ?
+                  AND state IN ('hydrating', 'writing', 'dirty', 'uploading')
+            ),
+            EXISTS(
+                SELECT 1 FROM files
+                WHERE is_dir = 0 AND path >= ? AND path < ?
+                  AND (
+                      state IN ('cached', 'synced', 'pinned')
+                      OR coalesce(cache_path, '') != ''
+                  )
+            )
+        """,
+        (prefix, path.rstrip("/") + "0") * 3,
+    ).fetchone()
+    return aggregate_directory_flags(state, has_error, has_syncing, has_local)
 
 
 def run_local(*args):
@@ -130,7 +180,6 @@ def status_for(path):
             "select state, coalesce(cache_path, ''), is_dir, size from files where path = ?",
             (path,),
         ).fetchone()
-        conn.close()
         if row:
             data = {
                 "state": row[0],
@@ -138,6 +187,9 @@ def status_for(path):
                 "is_dir": str(bool(row[2])).lower(),
                 "size": str(row[3]),
             }
+            if row[2]:
+                data["state"] = directory_state_for(conn, path, row[0])
+        conn.close()
     except Exception:
         pass
     with STATE_LOCK:
@@ -157,10 +209,11 @@ def db_states_for(paths):
             chunk = paths[index : index + 200]
             placeholders = ",".join("?" for _path in chunk)
             rows = conn.execute(
-                f"select path, state from files where path in ({placeholders})",
+                f"select path, state, is_dir from files where path in ({placeholders})",
                 chunk,
             ).fetchall()
-            states.update({path: state for path, state in rows})
+            for path, state, is_dir in rows:
+                states[path] = directory_state_for(conn, path, state) if is_dir else state
         conn.close()
     except Exception as exc:
         log(f"state poll failed: {exc}")
