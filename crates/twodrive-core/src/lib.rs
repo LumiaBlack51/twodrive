@@ -570,6 +570,12 @@ impl Database {
             "pin_inheritance_blocked",
             "ALTER TABLE files ADD COLUMN pin_inheritance_blocked INTEGER NOT NULL DEFAULT 0",
         )?;
+        ensure_column(
+            &conn,
+            "files",
+            "release_pending",
+            "ALTER TABLE files ADD COLUMN release_pending INTEGER NOT NULL DEFAULT 0",
+        )?;
         let migrated = conn
             .query_row(
                 "SELECT value FROM app_state WHERE key = 'pin_policy_v1_migrated'",
@@ -1002,6 +1008,7 @@ impl Database {
                 r#"
                 UPDATE files
                 SET pin_origin_remote_id = ?1,
+                    release_pending = CASE WHEN ?2 = 1 THEN 0 ELSE release_pending END,
                     state = CASE
                         WHEN state IN ('writing', 'dirty', 'uploading', 'conflict', 'error') THEN state
                         WHEN ?2 = 1 AND is_dir = 1 THEN 'pinned'
@@ -1094,7 +1101,7 @@ impl Database {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0 WHERE remote_id = ?4",
+            "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
             params![new_path, parent_cloud_path(&new_path), cloud_name(&new_path), local_id],
         )?;
         for descendant in descendants {
@@ -1105,7 +1112,7 @@ impl Database {
                 .ok_or_else(|| anyhow::anyhow!("descendant path lost its parent prefix"))?;
             let descendant_path = normalize_cloud_path(&format!("{new_path}{suffix}"));
             tx.execute(
-                "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0 WHERE remote_id = ?4",
+                "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
                 params![
                     descendant_path,
                     parent_cloud_path(&descendant_path),
@@ -1177,7 +1184,7 @@ impl Database {
         }
         tx.execute(
             "DELETE FROM files WHERE remote_id = ?1",
-            params![target_local_id],
+            params![source_local_id],
         )?;
         tx.execute(
             r#"
@@ -1185,23 +1192,31 @@ impl Database {
             SET path = ?1,
                 parent_path = ?2,
                 name = ?3,
-                cloud_remote_id = ?4,
-                etag = ?5,
-                state = CASE WHEN state = 'writing' THEN 'writing' ELSE 'dirty' END
-            WHERE remote_id = ?6
+                size = ?4,
+                modified_unix = ?5,
+                state = CASE WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
+                cache_path = ?7,
+                cache_accessed_unix = ?8
+            WHERE remote_id = ?9
             "#,
             params![
                 new_path,
                 parent_cloud_path(&new_path),
                 cloud_name(&new_path),
-                target.cloud_remote_id,
-                target.metadata.etag,
-                source_local_id,
+                i64::try_from(source.metadata.size).unwrap_or(i64::MAX),
+                source.metadata.modified_unix,
+                source.state.as_str(),
+                source
+                    .cache_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy()),
+                now_unix(),
+                target_local_id,
             ],
         )?;
         tx.commit()?;
         self.recompute_pin_inheritance()?;
-        self.get_by_remote_id(source_local_id)?
+        self.get_by_remote_id(target_local_id)?
             .ok_or_else(|| anyhow::anyhow!("local replacement disappeared"))
     }
 
@@ -1330,34 +1345,71 @@ impl Database {
         Ok(())
     }
 
+    // Re-read under a write transaction: the caller's snapshot may predate a save.
     pub fn release_record(&self, record: &FileRecord) -> anyhow::Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = self.query_record(&tx,
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
+            params![record.metadata.remote_id])?;
+        let Some(record) = current else {
+            return Ok(false);
+        };
         if record.metadata.is_dir
             || record.effective_pinned()
-            || matches!(
-                record.state,
-                FileState::Pinned
-                    | FileState::Dirty
-                    | FileState::Writing
-                    | FileState::Uploading
-                    | FileState::Hydrating
-                    | FileState::Error
-            )
+            || !matches!(record.state, FileState::Cached)
+            || record.cloud_remote_id.is_none()
         {
             return Ok(false);
         }
-
-        if let Some(cache_path) = &record.cache_path
-            && cache_path.exists()
-        {
-            fs::remove_file(cache_path)?;
+        let cache_file = match record.cache_path.as_ref().map(fs::File::open).transpose() {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err.into()),
+        };
+        if let Some(file) = &cache_file {
+            match file.try_lock() {
+                Ok(()) => {}
+                Err(std::fs::TryLockError::WouldBlock) => return Ok(false),
+                Err(err) => return Err(err.into()),
+            }
         }
-
-        let conn = self.connect()?;
-        conn.execute(
-            "UPDATE files SET state = ?1, cache_path = NULL, cache_accessed_unix = NULL WHERE remote_id = ?2",
-            params![FileState::OnlineOnly.as_str(), record.metadata.remote_id],
+        if let Some(cache_path) = &record.cache_path {
+            match fs::remove_file(cache_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        tx.execute(
+            "UPDATE files SET state = 'online_only', cache_path = NULL, cache_accessed_unix = NULL, release_pending = 0 WHERE remote_id = ?1",
+            params![record.metadata.remote_id],
         )?;
+        tx.commit()?;
         Ok(true)
+    }
+
+    pub fn finish_pending_releases(&self) -> anyhow::Result<usize> {
+        let conn = self.connect()?;
+        let ids = conn
+            .prepare("SELECT remote_id FROM files WHERE release_pending = 1")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(conn);
+        let mut count = 0;
+        for id in ids {
+            if let Some(record) = self.get_by_remote_id(&id)? {
+                count += usize::from(self.release_record(&record)?);
+            }
+        }
+        Ok(count)
+    }
+
+    pub fn pending_release_count(&self, path: &str) -> anyhow::Result<usize> {
+        let path = normalize_cloud_path(path);
+        Ok(self.connect()?.query_row(
+            "SELECT count(*) FROM files WHERE release_pending = 1 AND (path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/')",
+            params![path], |row| row.get(0))?)
     }
 
     pub fn release_path(&self, path: &str) -> anyhow::Result<usize> {
@@ -1368,15 +1420,20 @@ impl Database {
             );
         };
 
-        if !record.metadata.is_dir {
-            return Ok(usize::from(self.release_record(&record)?));
-        }
-
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE files SET release_pending = 1 WHERE is_dir = 0 AND pin_explicit = 0 AND pin_origin_remote_id IS NULL AND state != 'online_only' AND (path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/')",
+            params![record.metadata.path],
+        )?;
+        drop(conn);
+        let records = if record.metadata.is_dir {
+            self.list_descendants(&record.metadata.path)?
+        } else {
+            vec![record]
+        };
         let mut released = 0;
-        for child in self.list_descendants(&record.metadata.path)? {
-            if self.release_record(&child)? {
-                released += 1;
-            }
+        for record in records {
+            released += usize::from(self.release_record(&record)?);
         }
         Ok(released)
     }
@@ -1492,8 +1549,8 @@ impl Database {
                     WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned'
                     ELSE 'cached'
                 END,
-                cache_path = ?6,
-                cache_accessed_unix = ?7
+                cache_path = CASE WHEN ?3 = 1 THEN ?6 ELSE cache_path END,
+                cache_accessed_unix = CASE WHEN ?3 = 1 THEN ?7 ELSE cache_accessed_unix END
             WHERE remote_id = ?8
             "#,
             params![
@@ -1920,6 +1977,94 @@ mod tests {
     }
 
     #[test]
+    fn deferred_release_survives_restart_and_waits_for_latest_upload() {
+        let test = TestDatabase::new("deferred-release");
+        let id = "local-upload-deferred";
+        let cache = test.root.join("content");
+        fs::write(&cache, b"latest local contents").unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(id, "/paper.pdf", 21, 1, ""))
+            .unwrap();
+        test.db.mark_cached(id, &cache).unwrap();
+        for state in [
+            FileState::Writing,
+            FileState::Dirty,
+            FileState::Uploading,
+            FileState::Error,
+            FileState::Conflict,
+        ] {
+            test.db.mark_state(id, state).unwrap();
+            assert_eq!(test.db.release_path("/paper.pdf").unwrap(), 0);
+            assert!(cache.exists());
+        }
+        let restarted = Database::new(test.db.db_path.clone());
+        restarted.init().unwrap();
+        assert_eq!(restarted.pending_release_count("/").unwrap(), 1);
+        restarted.mark_state(id, FileState::Uploading).unwrap();
+        restarted
+            .commit_uploaded(
+                id,
+                "/paper.pdf",
+                &MetadataEntry::new_file("cloud-paper", "/paper.pdf", 21, 2, "etag"),
+                &cache,
+            )
+            .unwrap();
+        assert_eq!(restarted.finish_pending_releases().unwrap(), 1);
+        assert!(!cache.exists());
+        let record = restarted.get_by_remote_id(id).unwrap().unwrap();
+        assert_eq!(record.state, FileState::OnlineOnly);
+        assert_eq!(record.cloud_remote_id.as_deref(), Some("cloud-paper"));
+        assert_eq!(restarted.pending_release_count("/").unwrap(), 0);
+    }
+
+    #[test]
+    fn renaming_failed_local_upload_requeues_without_losing_release_request() {
+        let test = TestDatabase::new("rename-failed-release");
+        let id = "local-upload-invalid";
+        let cache = test.root.join("content");
+        fs::write(&cache, b"safe").unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(id, "/bad:name", 4, 1, ""))
+            .unwrap();
+        test.db.mark_cached(id, &cache).unwrap();
+        test.db.mark_state(id, FileState::Error).unwrap();
+        test.db.release_path("/bad:name").unwrap();
+        test.db.move_subtree_and_queue(id, "/good-name").unwrap();
+        assert_eq!(
+            test.db.get_by_path("/good-name").unwrap().unwrap().state,
+            FileState::Dirty
+        );
+        assert_eq!(test.db.pending_release_count("/good-name").unwrap(), 1);
+        assert!(cache.exists());
+    }
+
+    #[test]
+    fn release_rechecks_state_and_preserves_open_or_pinned_cache() {
+        let test = TestDatabase::new("release-locks");
+        let cache = test.root.join("content");
+        fs::write(&cache, b"safe").unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file("cloud", "/file", 4, 1, "etag"))
+            .unwrap();
+        test.db.mark_cached("cloud", &cache).unwrap();
+        let stale = test.db.get_by_path("/file").unwrap().unwrap();
+        test.db.mark_state("cloud", FileState::Dirty).unwrap();
+        assert!(!test.db.release_record(&stale).unwrap());
+        test.db.mark_cached("cloud", &cache).unwrap();
+        let reader = fs::File::open(&cache).unwrap();
+        reader.lock_shared().unwrap();
+        assert_eq!(test.db.release_path("/file").unwrap(), 0);
+        assert_eq!(test.db.pending_release_count("/file").unwrap(), 1);
+        test.db.set_explicit_pin("cloud", true).unwrap();
+        assert_eq!(test.db.pending_release_count("/file").unwrap(), 0);
+        drop(reader);
+        assert_eq!(test.db.finish_pending_releases().unwrap(), 0);
+        assert!(cache.exists());
+        test.db.set_explicit_pin("cloud", false).unwrap();
+        assert_eq!(test.db.release_path("/file").unwrap(), 1);
+    }
+
+    #[test]
     fn normalizes_cloud_paths() {
         assert_eq!(normalize_cloud_path(""), "/");
         assert_eq!(normalize_cloud_path("/"), "/");
@@ -2317,7 +2462,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_temp_upload_does_not_replace_the_target_cloud_etag() {
+    fn stale_temp_upload_is_discarded_after_replacement() {
         let test = TestDatabase::new("stale-temp-upload-etag");
         let source_id = "local-upload-temp";
         let cache_path = test.root.join("temp.cache");
@@ -2348,14 +2493,93 @@ mod tests {
 
         let stale_upload =
             MetadataEntry::new_file("cloud-temp", "/.target.pdf.tmp", 11, 2, "etag-temp");
-        let committed = test
+        let error = test
             .db
             .commit_uploaded(source_id, "/.target.pdf.tmp", &stale_upload, &cache_path)
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(committed.cloud_remote_id.as_deref(), Some("cloud-target"));
-        assert_eq!(committed.metadata.etag, "etag-target");
-        assert_eq!(committed.metadata.path, "/target.pdf");
+        assert!(
+            error
+                .to_string()
+                .contains("uploaded local item disappeared")
+        );
+        let target = test.db.get_by_remote_id("cloud-target").unwrap().unwrap();
+        assert_eq!(target.cloud_remote_id.as_deref(), Some("cloud-target"));
+        assert_eq!(target.metadata.etag, "etag-target");
+        assert_eq!(target.metadata.path, "/target.pdf");
+        assert_eq!(target.cache_path.as_deref(), Some(cache_path.as_path()));
+    }
+
+    #[test]
+    fn replacement_preserves_target_identity_during_inflight_upload() {
+        let test = TestDatabase::new("replace-inflight-target");
+        let target_id = "local-upload-target";
+        let source_id = "local-upload-temp";
+        let old_cache = test.root.join("old.cache");
+        let new_cache = test.root.join("new.cache");
+        fs::write(&old_cache, b"initial generation").unwrap();
+        fs::write(&new_cache, b"new generation").unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(
+                target_id,
+                "/target.pdf",
+                18,
+                1,
+                "",
+            ))
+            .unwrap();
+        test.db.mark_cached(target_id, &old_cache).unwrap();
+        test.db.mark_state(target_id, FileState::Uploading).unwrap();
+        test.db
+            .upsert_metadata(&MetadataEntry::new_file(
+                source_id,
+                "/.target.pdf.tmp",
+                14,
+                2,
+                "",
+            ))
+            .unwrap();
+        test.db.mark_cached(source_id, &new_cache).unwrap();
+        test.db.mark_state(source_id, FileState::Writing).unwrap();
+
+        let replaced = test
+            .db
+            .replace_file_locally(source_id, target_id, "/target.pdf")
+            .unwrap();
+        assert_eq!(replaced.metadata.remote_id, target_id);
+        assert_eq!(replaced.cache_path.as_deref(), Some(new_cache.as_path()));
+        assert_eq!(replaced.state, FileState::Writing);
+        assert!(test.db.get_by_remote_id(source_id).unwrap().is_none());
+
+        let initial_upload =
+            MetadataEntry::new_file("cloud-target", "/target.pdf", 18, 3, "etag-initial");
+        let after_initial = test
+            .db
+            .commit_uploaded(target_id, "/target.pdf", &initial_upload, &old_cache)
+            .unwrap();
+        assert_eq!(after_initial.metadata.remote_id, target_id);
+        assert_eq!(
+            after_initial.cloud_remote_id.as_deref(),
+            Some("cloud-target")
+        );
+        assert_eq!(
+            after_initial.cache_path.as_deref(),
+            Some(new_cache.as_path())
+        );
+        assert_eq!(after_initial.metadata.size, 14);
+        assert_eq!(after_initial.state, FileState::Writing);
+
+        test.db.mark_dirty_with_size(target_id, 14).unwrap();
+        test.db.mark_state(target_id, FileState::Uploading).unwrap();
+        let latest_upload =
+            MetadataEntry::new_file("cloud-target", "/target.pdf", 14, 4, "etag-latest");
+        let committed = test
+            .db
+            .commit_uploaded(target_id, "/target.pdf", &latest_upload, &new_cache)
+            .unwrap();
+        assert_eq!(committed.cache_path.as_deref(), Some(new_cache.as_path()));
+        assert_eq!(committed.metadata.etag, "etag-latest");
+        assert_eq!(committed.state, FileState::Cached);
     }
 
     #[test]

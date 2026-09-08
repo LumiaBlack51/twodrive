@@ -27,6 +27,15 @@ def load_extension():
     class DummyNautilus:
         pass
 
+    class MenuItem:
+        def __init__(self, **kwargs):
+            self.label = kwargs["label"]
+            self.callback = None
+
+        def connect(self, _signal, callback, *args):
+            self.callback = lambda: callback(self, *args)
+
+    DummyNautilus.MenuItem = MenuItem
     DummyNautilus.MenuProvider = MenuProvider
     DummyNautilus.InfoProvider = InfoProvider
 
@@ -88,6 +97,27 @@ class CloudPathTests(unittest.TestCase):
                 EXTENSION.mount_dir = original_mount_dir
 
 
+class CopyPathTests(unittest.TestCase):
+    def test_copy_path_outside_mount_preserves_exact_names(self):
+        paths = ["/tmp/a folder/report.txt", '/tmp/a"b$`c']
+        files = []
+        for path in paths:
+            location = types.SimpleNamespace(get_path=lambda path=path: path)
+            files.append(types.SimpleNamespace(get_location=lambda location=location: location))
+        clipboard = []
+        repository = sys.modules["gi.repository"]
+        sys.modules["gi"].require_version = lambda *_args: None
+        repository.Gdk = types.SimpleNamespace(
+            Display=types.SimpleNamespace(get_default=lambda: types.SimpleNamespace(
+                get_clipboard=lambda: types.SimpleNamespace(set=clipboard.append)
+            ))
+        )
+        items = EXTENSION.TwoDriveExtension().get_file_items(files)
+        self.assertEqual([item.label for item in items], ["Copy path"])
+        items[0].callback()
+        self.assertEqual(clipboard, ["\n".join(paths)])
+
+
 class DirectoryStateTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
@@ -114,6 +144,21 @@ class DirectoryStateTests(unittest.TestCase):
 
     def test_all_online_only_descendants_leave_folder_online_only(self):
         self.add_file("/project/cloud.txt")
+        self.assertEqual(
+            EXTENSION.directory_state_for(self.conn, "/project", "online_only"),
+            "online_only",
+        )
+
+    def test_stale_folder_state_does_not_imply_active_files(self):
+        self.add_file("/project/local.txt", "cached", "/cache/local")
+        self.add_file("/project/cloud.txt")
+        for state in ("hydrating", "writing", "dirty", "uploading"):
+            self.assertEqual(
+                EXTENSION.directory_state_for(self.conn, "/project", state), "cached"
+            )
+
+    def test_sibling_prefix_does_not_affect_folder(self):
+        self.add_file("/project2/busy.txt", "uploading")
         self.assertEqual(
             EXTENSION.directory_state_for(self.conn, "/project", "online_only"),
             "online_only",

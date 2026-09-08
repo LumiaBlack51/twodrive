@@ -246,6 +246,9 @@ fn recover_dirty_record<B: CloudBackend>(
             if committed.cloud_remote_id.as_deref() != Some(uploaded.remote_id.as_str()) {
                 db.queue_remote_delete(&uploaded.remote_id, &record.metadata.path)?;
             }
+            if let Err(err) = db.finish_pending_releases() {
+                eprintln!("twodrive: deferred release remains queued: {err:#}");
+            }
             Ok(true)
         }
         Err(err) => {
@@ -273,7 +276,12 @@ fn recover_dirty_record<B: CloudBackend>(
                     }
                 }
             } else {
-                db.mark_state(&record.metadata.remote_id, FileState::Dirty)?;
+                let state = if err.to_string().contains("unsupported OneDrive file name") {
+                    FileState::Error
+                } else {
+                    FileState::Dirty
+                };
+                db.mark_state(&record.metadata.remote_id, state)?;
             }
             eprintln!(
                 "twodrive: dirty upload remains queued for {}: {err:#}",
@@ -777,6 +785,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     ) -> anyhow::Result<Self> {
         let records = db.all_records()?;
         let _ = clear_activity_file(&cache_dir);
+        db.finish_pending_releases()?;
         let backend = Arc::new(backend);
         let upload_pool = UploadPool::new(
             db.clone(),
@@ -857,18 +866,21 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         result
     }
 
-    fn open_read_handle(&mut self, ino: u64, cache_path: PathBuf) -> u64 {
+    fn open_read_handle(&mut self, ino: u64, cache_path: PathBuf) -> anyhow::Result<u64> {
+        let cache_guard = fs::File::open(&cache_path)?;
+        cache_guard.lock_shared()?;
         let fh = self.next_fh;
         self.next_fh += 1;
         self.read_handles.insert(
             fh,
             ReadHandle {
+                _cache_guard: cache_guard,
                 ino,
                 cache_path,
                 unlinked: false,
             },
         );
-        fh
+        Ok(fh)
     }
 
     fn read_open_handle(&self, fh: u64, offset: u64, size: u32) -> anyhow::Result<Vec<u8>> {
@@ -902,6 +914,8 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         if handle.unlinked {
             self.cleanup_unlinked_cache(&handle.cache_path)?;
         }
+        drop(handle);
+        self.db.finish_pending_releases()?;
         Ok(())
     }
 
@@ -1048,11 +1062,12 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         let cache_path = self
             .cache_dir
             .join(sanitize_cache_name(&temporary_remote_id));
-        OpenOptions::new()
+        let cache_guard = OpenOptions::new()
             .create_new(true)
             .read(true)
             .write(true)
             .open(&cache_path)?;
+        cache_guard.lock_shared()?;
 
         let now = current_unix_i64();
         let metadata = MetadataEntry::new_file(
@@ -1088,6 +1103,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         self.write_handles.insert(
             fh,
             WriteHandle {
+                _cache_guard: cache_guard,
                 ino,
                 path,
                 record_remote_id: temporary_remote_id,
@@ -1133,10 +1149,16 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         };
         let mut options = OpenOptions::new();
         options.create(true).read(true).write(true);
-        if truncate {
-            options.truncate(true);
+        let cache_guard = options.open(&cache_path)?;
+        cache_guard.lock_shared()?;
+        // A release may have won before the shared lock. Never write to an
+        // unlinked cache inode and then claim the save succeeded.
+        if !cache_path.exists() {
+            anyhow::bail!("cache was released while opening; retry the save");
         }
-        options.open(&cache_path)?;
+        if truncate {
+            cache_guard.set_len(0)?;
+        }
         self.db
             .mark_cached(&record.metadata.remote_id, &cache_path)?;
         self.db
@@ -1153,6 +1175,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         self.write_handles.insert(
             fh,
             WriteHandle {
+                _cache_guard: cache_guard,
                 ino,
                 path: record.metadata.path,
                 record_remote_id: record.metadata.remote_id,
@@ -1443,7 +1466,6 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 .inodes
                 .ino_for_path(&target.metadata.path)
                 .ok_or_else(|| anyhow::anyhow!("target inode does not exist"))?;
-            let target_cache = target.cache_path.clone();
             let source_cloud_id = record.cloud_remote_id.clone();
             let target_cloud_id = target.cloud_remote_id.clone();
             let updated = self.db.replace_file_locally(
@@ -1452,7 +1474,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 &new_path,
             )?;
             self.inodes.remove_ino(target_ino);
-            self.inodes.replace_ino_record(ino, updated);
+            self.inodes.replace_ino_record(ino, updated.clone());
             for handle in self
                 .write_handles
                 .values_mut()
@@ -1467,17 +1489,17 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             {
                 handle.unlinked = true;
             }
-            if let Some(fh) = active_fh
-                && let Some(handle) = self.write_handles.get_mut(&fh)
+            for handle in self
+                .write_handles
+                .values_mut()
+                .filter(|handle| handle.record_remote_id == record.metadata.remote_id)
             {
                 handle.path = new_path.clone();
-                handle.base_etag = record_upload_etag(&target);
-            }
-            if let Some(target_cache) = target_cache
-                && record.cache_path.as_ref() != Some(&target_cache)
-                && let Err(err) = self.cleanup_unlinked_cache(&target_cache)
-            {
-                eprintln!("twodrive: replaced cache cleanup deferred: {err:#}");
+                handle.record_remote_id = target.metadata.remote_id.clone();
+                handle.created_new_record = target.cloud_remote_id.is_none();
+                if !handle.uploaded {
+                    handle.base_etag = record_upload_etag(&target);
+                }
             }
             if let Some(source_cloud_id) = source_cloud_id
                 && Some(source_cloud_id.as_str()) != target_cloud_id.as_deref()
@@ -1485,7 +1507,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 self.upload_pool.enqueue_delete(source_cloud_id)?;
             }
             self.upload_pool
-                .enqueue(record.metadata.remote_id.clone())?;
+                .enqueue(updated.metadata.remote_id.clone())?;
             return Ok(());
         }
 
@@ -1674,9 +1696,11 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                     return;
                 }
 
-                match self.ensure_cached(&record) {
-                    Ok(cache_path) => {
-                        let fh = self.open_read_handle(ino, cache_path);
+                match self
+                    .ensure_cached(&record)
+                    .and_then(|path| self.open_read_handle(ino, path))
+                {
+                    Ok(fh) => {
                         reply.opened(fh, 0);
                     }
                     Err(err) => {
@@ -1851,6 +1875,9 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
             .and_then(|handle| handle.unlinked.then_some(handle.cache_path.clone()));
         let result = self.queue_upload_handle(fh);
         self.write_handles.remove(&fh);
+        if let Err(err) = self.db.finish_pending_releases() {
+            eprintln!("twodrive: deferred release remains queued: {err:#}");
+        }
         if let Some(cache_path) = unlinked_cache
             && let Err(err) = self.cleanup_unlinked_cache(&cache_path)
         {
@@ -2015,6 +2042,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
 struct ReadHandle {
     ino: u64,
     cache_path: PathBuf,
+    _cache_guard: fs::File,
     unlinked: bool,
 }
 
@@ -2024,6 +2052,7 @@ struct WriteHandle {
     path: String,
     record_remote_id: String,
     cache_path: PathBuf,
+    _cache_guard: fs::File,
     activity: Option<ActivityGuard>,
     uploaded: bool,
     created_new_record: bool,
@@ -3088,6 +3117,145 @@ mod tests {
     }
 
     #[test]
+    fn repeated_atomic_replacements_during_initial_upload_keep_latest_generation() {
+        let root = test_root("repeated-atomic-replace");
+        fs::create_dir_all(&root).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let backend = ConcurrentBackend::new();
+        sync_metadata(&db, &backend).unwrap();
+        let mut fuse =
+            TwoDriveFs::new_with_upload_concurrency(db, root.join("cache"), backend, 2).unwrap();
+
+        let (target_ino, target_fh, _) = fuse
+            .create_upload(ROOT_INO, OsStr::new("rapid.pdf"), libc::O_CREAT)
+            .unwrap();
+        let target_id = fuse.write_handles[&target_fh].record_remote_id.clone();
+        let target_cache = fuse.write_handles[&target_fh].cache_path.clone();
+        write_slice(&target_cache, 0, b"initial generation").unwrap();
+        fuse.inodes.set_size(target_ino, 18);
+        fuse.queue_upload_handle(target_fh).unwrap();
+        fuse.write_handles.remove(&target_fh);
+
+        let mut temp_ids = Vec::new();
+        for (name, content) in [
+            (".goutputstream-first", b"first saved generation".as_slice()),
+            (
+                ".goutputstream-second",
+                b"second saved generation".as_slice(),
+            ),
+        ] {
+            let (temp_ino, temp_fh, _) = fuse
+                .create_upload(ROOT_INO, OsStr::new(name), libc::O_CREAT | libc::O_EXCL)
+                .unwrap();
+            temp_ids.push(fuse.write_handles[&temp_fh].record_remote_id.clone());
+            let temp_cache = fuse.write_handles[&temp_fh].cache_path.clone();
+            write_slice(&temp_cache, 0, content).unwrap();
+            fuse.inodes.set_size(temp_ino, content.len() as u64);
+            fuse.rename_record(
+                ROOT_INO,
+                OsStr::new(name),
+                ROOT_INO,
+                OsStr::new("rapid.pdf"),
+            )
+            .unwrap();
+            assert_eq!(fuse.write_handles[&temp_fh].record_remote_id, target_id);
+            fuse.queue_upload_handle(temp_fh).unwrap();
+            fuse.write_handles.remove(&temp_fh);
+        }
+
+        for _ in 0..120 {
+            let record = fuse.db.get_by_remote_id(&target_id).unwrap().unwrap();
+            if record.state == FileState::Cached
+                && record.cloud_remote_id.is_some()
+                && fuse
+                    .backend
+                    .download(record.cloud_remote_id.as_deref().unwrap())
+                    .ok()
+                    .as_deref()
+                    == Some(b"second saved generation")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        let record = fuse.db.get_by_path("/rapid.pdf").unwrap().unwrap();
+        assert_eq!(record.metadata.remote_id, target_id);
+        assert_eq!(record.state, FileState::Cached);
+        assert_eq!(
+            fs::read(record.cache_path.as_ref().unwrap()).unwrap(),
+            b"second saved generation"
+        );
+        assert_eq!(
+            fuse.backend
+                .download(record.cloud_remote_id.as_deref().unwrap())
+                .unwrap(),
+            b"second saved generation"
+        );
+        for temp_id in temp_ids {
+            assert!(fuse.db.get_by_remote_id(&temp_id).unwrap().is_none());
+        }
+        drop(fuse);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn release_requested_during_upload_finishes_after_last_open_handle() {
+        let mut test = TestFs::new("release-after-upload");
+        let (ino, fh, _) = test
+            .fs
+            .create_upload(ROOT_INO, OsStr::new("release.txt"), libc::O_CREAT)
+            .unwrap();
+        let cache = test.fs.write_handles[&fh].cache_path.clone();
+        write_slice(&cache, 0, b"safe upload").unwrap();
+        test.fs.inodes.set_size(ino, 11);
+        let read_fh = test.fs.open_read_handle(ino, cache.clone()).unwrap();
+        assert_eq!(test.fs.db.release_path("/release.txt").unwrap(), 0);
+        test.fs.queue_upload_handle(fh).unwrap();
+        test.fs.write_handles.remove(&fh);
+        for _ in 0..120 {
+            if test
+                .fs
+                .db
+                .get_by_path("/release.txt")
+                .unwrap()
+                .unwrap()
+                .state
+                == FileState::Cached
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let uploaded = test.fs.db.get_by_path("/release.txt").unwrap().unwrap();
+        assert_eq!(uploaded.state, FileState::Cached);
+        assert_eq!(
+            test.fs
+                .backend
+                .download(uploaded.cloud_remote_id.as_deref().unwrap())
+                .unwrap(),
+            b"safe upload"
+        );
+        assert_eq!(
+            test.fs.read_open_handle(read_fh, 0, 11).unwrap(),
+            b"safe upload"
+        );
+        assert!(cache.exists());
+        test.fs.release_read_handle(read_fh).unwrap();
+        assert!(!cache.exists());
+        assert_eq!(
+            test.fs
+                .db
+                .get_by_path("/release.txt")
+                .unwrap()
+                .unwrap()
+                .state,
+            FileState::OnlineOnly
+        );
+    }
+
+    #[test]
     fn editor_style_temp_file_can_replace_an_existing_remote_file() {
         let mut test = TestFs::new("atomic-replace");
         let old_target = test
@@ -3100,7 +3268,8 @@ mod tests {
         let old_target_cache = test.fs.ensure_cached(&old_target).unwrap();
         let old_target_fh = test
             .fs
-            .open_read_handle(old_target_ino, old_target_cache.clone());
+            .open_read_handle(old_target_ino, old_target_cache.clone())
+            .unwrap();
         let (ino, fh, _) = test
             .fs
             .create_upload(
@@ -3184,7 +3353,7 @@ mod tests {
             .unwrap();
         let ino = test.fs.inodes.ino_for_path("/README-cloud.txt").unwrap();
         let cache_path = test.fs.ensure_cached(&record).unwrap();
-        let fh = test.fs.open_read_handle(ino, cache_path.clone());
+        let fh = test.fs.open_read_handle(ino, cache_path.clone()).unwrap();
 
         assert!(
             test.fs

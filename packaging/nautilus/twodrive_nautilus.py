@@ -52,8 +52,7 @@ def cloud_path(file_info):
 def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local):
     if directory_state in {"conflict", "error"} or has_error:
         return "error"
-    syncing_states = {"hydrating", "writing", "dirty", "uploading"}
-    if directory_state in syncing_states or has_syncing:
+    if has_syncing:
         return "uploading"
     if directory_state == "pinned":
         return "pinned"
@@ -324,7 +323,6 @@ def run_action(action, paths, file_infos):
             schedule_refreshes(file_infos)
             return
 
-        set_transient(paths, "hydrating")
         schedule_refreshes(file_infos)
 
         if action == "sync":
@@ -345,7 +343,7 @@ def run_action(action, paths, file_infos):
             if result.returncode != 0:
                 failures += 1
                 output = f"{path}: command failed\n{output}"
-            elif action == "release" and "released 0" in output:
+            elif action == "release" and "released 0" in output and "queued 0" in output:
                 released_zero += 1
             outputs.append(output)
 
@@ -355,7 +353,7 @@ def run_action(action, paths, file_infos):
         if failures:
             summary = f"{summary}; {failures} failed"
         if action == "release" and released_zero == len(paths):
-            summary += "\nNo local cache was removed. Items may already be online-only, pinned, or busy."
+            summary += "\nNo local cache was removed. Items may already be online-only or pinned."
         body = summary
         if outputs:
             body += "\n\n" + "\n".join(outputs[:12])
@@ -371,14 +369,27 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
     def get_file_items(self, files):
         if not files:
             return []
+        local_paths = []
+        for file_info in files:
+            location = file_info.get_location()
+            path = location.get_path() if location else None
+            if path and path not in local_paths:
+                local_paths.append(path)
+        items = []
+        if local_paths:
+            item = Nautilus.MenuItem(
+                name="TwoDriveCopyPath", label="Copy path",
+                tip="Copy the full local path (one per line for multiple selections)",
+            )
+            item.connect("activate", self.copy_paths, local_paths)
+            items.append(item)
         selected = selected_paths(files)
         if not selected:
-            return []
+            return items
         paths = [path for path, _file_info in selected]
         file_infos = [file_info for _path, file_info in selected]
         count = len(paths)
 
-        items = []
         actions = [
             ("TwoDriveRelease", "Release space", "release"),
             ("TwoDrivePin", "Always keep on this device", "pin"),
@@ -397,6 +408,19 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
             items.append(item)
         return items
 
+    def copy_paths(self, _item, paths):
+        try:
+            import gi
+            gi.require_version("Gdk", "4.0")
+            from gi.repository import Gdk
+            display = Gdk.Display.get_default()
+            if display is None:
+                raise RuntimeError("No graphical display is available")
+            display.get_clipboard().set("\n".join(paths))
+        except Exception as exc:
+            log(f"copy path failed: {exc}")
+            notify("Copy path failed", str(exc))
+
     def activate(self, _item, action, paths, file_infos):
         run_action(action, paths, file_infos)
 
@@ -409,12 +433,15 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
         emblem = {
             "online_only": "emblem-twodrive-cloud",
             "hydrating": "emblem-twodrive-syncing",
+            "writing": "emblem-twodrive-syncing",
+            "dirty": "emblem-twodrive-syncing",
             "uploading": "emblem-twodrive-syncing",
             "cached": "emblem-twodrive-synced",
             "synced": "emblem-twodrive-synced",
             "pinned": "emblem-twodrive-pinned",
             "conflict": "emblem-twodrive-error",
             "error": "emblem-twodrive-error",
+            "unknown": "emblem-twodrive-error",
         }.get(state)
         if emblem:
             file_info.add_emblem(emblem)

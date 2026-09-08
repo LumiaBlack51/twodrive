@@ -238,7 +238,19 @@ twodrive cache prune
 
 Nautilus also provides Release space and Always keep on this device actions. Deleting a file inside
 `~/TwoDrive/OneDrive` deletes both its local view and cloud item. Release space only removes eligible
-local cache; these actions intentionally have different semantics.
+local cache; these actions intentionally have different semantics. Release requests made while a file
+is syncing are persisted in SQLite. The local cache is removed after a successful upload and after
+open file handles close; failed/conflicting uploads retain their local contents. Pinned items stay
+local, and choosing Always keep on this device cancels an outstanding release request.
+
+Folder syncing emblems reflect syncing descendant files, rather than a stale state on the folder.
+OneDrive rejects file names containing `" * : < > ? \ |`; these uploads show an error while preserving
+local content. Rename an unsupported character (for example `:` to `：`) to retry a local-only file.
+
+Nautilus provides **Copy path** for all local files and folders, including items outside TwoDrive.
+It copies the absolute path including the selected item's own name; multiple paths are separated by
+newlines. Clipboard paths are plain text without quotes. Add shell quoting when using a path in a
+terminal command (especially if it contains spaces or shell metacharacters).
 
 ### 5. Paths and troubleshooting
 

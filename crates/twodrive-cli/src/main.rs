@@ -254,10 +254,10 @@ fn release(paths: &AppPaths, path: &str) -> anyhow::Result<()> {
     db.init()?;
     let count = db.release_path(path)?;
     println!("released {count} cached file(s) under {path}; cloud files were not deleted");
-    if count == 0 {
-        println!(
-            "nothing changed: the item may already be online-only, pinned, hydrating, uploading, dirty, or busy"
-        );
+    let pending = db.pending_release_count(path)?;
+    println!("queued {pending} file(s) for release after successful sync and closing open handles");
+    if count == 0 && pending == 0 {
+        println!("nothing changed: items are already online-only or pinned");
     }
     Ok(())
 }

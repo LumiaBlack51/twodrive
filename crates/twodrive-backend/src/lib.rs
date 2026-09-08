@@ -659,6 +659,7 @@ impl CloudBackend for GraphBackend {
     }
 
     fn upload(&self, path: &str, content: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+        validate_graph_file_path(path)?;
         let access_token = self.access_token()?;
         let url = format!(
             "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/content",
@@ -679,6 +680,7 @@ impl CloudBackend for GraphBackend {
         if_match: Option<&str>,
         on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
     ) -> anyhow::Result<MetadataEntry> {
+        validate_graph_file_path(path)?;
         let source_metadata = fs::metadata(source_path)?;
         let size = source_metadata.len();
         if !uses_upload_session(size) {
@@ -770,6 +772,7 @@ impl CloudBackend for GraphBackend {
         content: Vec<u8>,
         if_match: Option<&str>,
     ) -> anyhow::Result<MetadataEntry> {
+        validate_graph_file_path(path)?;
         let access_token = self.access_token()?;
         let url = format!(
             "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/content",
@@ -1355,6 +1358,18 @@ fn token_url(config: &Config) -> String {
     )
 }
 
+fn validate_graph_file_path(path: &str) -> anyhow::Result<()> {
+    if path.split('/').any(|name| {
+        name.chars()
+            .any(|ch| ch.is_control() || "\"*:<>?\\|".contains(ch))
+    }) {
+        anyhow::bail!(
+            "unsupported OneDrive file name in {path}; rename characters \" * : < > ? \\ | before syncing; local content is preserved"
+        );
+    }
+    Ok(())
+}
+
 fn encode_graph_path(path: &str) -> String {
     normalize_cloud_path(path)
         .trim_start_matches('/')
@@ -1435,6 +1450,13 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use tiny_http::{Header, StatusCode};
+
+    #[test]
+    fn unsupported_graph_names_fail_before_network_io() {
+        assert!(validate_graph_file_path("/survey/From Tiny: A Survey.pdf").is_err());
+        assert!(validate_graph_file_path("/survey/From Tiny： A Survey.pdf").is_ok());
+        assert!(validate_graph_file_path("/survey/literal%3a.pdf").is_ok());
+    }
 
     #[test]
     fn graph_move_resolves_the_parent_item_instead_of_sending_a_path() {
