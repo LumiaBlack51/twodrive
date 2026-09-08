@@ -1890,7 +1890,9 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                     return;
                 }
 
-                if should_defer_hydration(req, &record) {
+                if should_defer_hydration(req, &record)
+                    || (!has_existing_cache(&record) && is_gio_metadata_probe(req, flags))
+                {
                     reply.error(libc::ENODATA);
                     return;
                 }
@@ -2883,6 +2885,26 @@ fn is_conflict_error(err: &anyhow::Error) -> bool {
     text.contains("HTTP 412") || text.contains("Precondition Failed")
 }
 
+fn is_gio_metadata_probe(req: &Request<'_>, flags: i32) -> bool {
+    if flags & libc::O_NOATIME == 0 {
+        return false;
+    }
+    let executable = fs::read_link(format!("/proc/{}/exe", req.pid())).ok();
+    executable
+        .as_deref()
+        .and_then(Path::file_name)
+        .is_some_and(|name| is_gio_probe_open(flags, name))
+}
+
+fn is_gio_probe_open(flags: i32, executable: &OsStr) -> bool {
+    // GLib content-type sniffing uses O_NOATIME and falls back to its filename
+    // guess on ENODATA. Its real input streams/copies use ordinary O_RDONLY.
+    // Do not block arbitrary tools which legitimately read with O_NOATIME.
+    flags & libc::O_ACCMODE == libc::O_RDONLY
+        && flags & libc::O_NOATIME != 0
+        && matches!(executable.to_str(), Some("gio" | "nautilus"))
+}
+
 fn is_thumbnail_or_indexer_request(req: &Request<'_>) -> bool {
     let process = request_process_text(req).to_lowercase();
     if process.is_empty() {
@@ -3319,6 +3341,110 @@ mod tests {
         assert_eq!(fs::read(destination).unwrap(), bytes);
         assert!(!reader.join().unwrap().is_empty());
         eprintln!("10,000-entry listing + 16 MiB copy during delayed download: {foreground:?}");
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gio_probe_detection_does_not_block_normal_reads_or_other_tools() {
+        assert!(is_gio_probe_open(
+            libc::O_RDONLY | libc::O_NOATIME,
+            OsStr::new("nautilus")
+        ));
+        assert!(is_gio_probe_open(
+            libc::O_RDONLY | libc::O_NOATIME,
+            OsStr::new("gio")
+        ));
+        assert!(!is_gio_probe_open(libc::O_RDONLY, OsStr::new("gio")));
+        assert!(!is_gio_probe_open(
+            libc::O_RDONLY | libc::O_NOATIME,
+            OsStr::new("cp")
+        ));
+        assert!(!is_gio_probe_open(
+            libc::O_WRONLY | libc::O_NOATIME,
+            OsStr::new("nautilus")
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires /dev/fuse, fusermount3 and gio; uses an isolated temporary mount"]
+    fn gio_directory_metadata_does_not_download_unknown_large_files() {
+        let root = test_root("gio-metadata");
+        let mount = root.join("mount");
+        fs::create_dir_all(&mount).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let (started, downloads) = mpsc::channel();
+        let backend = SlowDownloadBackend {
+            inner: MockBackend::new(),
+            started,
+        };
+        let actual = backend
+            .inner
+            .upload("/actual.part.09", b"explicit copy content".to_vec())
+            .unwrap();
+        db.upsert_metadata(&actual).unwrap();
+        let entries: Vec<_> = (0..30)
+            .map(|i| {
+                MetadataEntry::new_file(
+                    format!("large-{i}"),
+                    format!("/archive.part.{i:02}"),
+                    4_000_000_000,
+                    0,
+                    "etag",
+                )
+            })
+            .collect();
+        db.upsert_metadata_batch(&entries).unwrap();
+        let filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+        let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+        let start = std::time::Instant::now();
+        let result = Command::new("gio")
+            .args(["list", "-a", "standard::*,access::*"])
+            .arg(&mount)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "GIO waited for file content"
+        );
+        assert_eq!(String::from_utf8_lossy(&result.stdout).lines().count(), 31);
+        assert!(
+            downloads.try_recv().is_err(),
+            "metadata query downloaded content"
+        );
+        assert!(
+            db.all_records()
+                .unwrap()
+                .iter()
+                .all(|r| r.cache_path.is_none())
+        );
+        eprintln!(
+            "GIO full metadata for 30 virtual 4 GB files: {:?}, zero downloads",
+            start.elapsed()
+        );
+        let destination = root.join("copied.part.09");
+        let copied = Command::new("gio")
+            .arg("copy")
+            .arg(mount.join("actual.part.09"))
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(
+            copied.status.success(),
+            "{}",
+            String::from_utf8_lossy(&copied.stderr)
+        );
+        assert_eq!(fs::read(destination).unwrap(), b"explicit copy content");
+        assert!(
+            downloads.try_recv().is_ok(),
+            "explicit copy did not download content"
+        );
         drop(session);
         fs::remove_dir_all(root).unwrap();
     }

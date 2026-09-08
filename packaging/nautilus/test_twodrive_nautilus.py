@@ -114,6 +114,29 @@ class MainThreadTests(unittest.TestCase):
             EXTENSION.TwoDriveExtension().update_file_info(file_info)
 
 
+class ReleaseEmblemTests(unittest.TestCase):
+    def test_upload_then_release_has_two_emblems_until_cloud_only(self):
+        for state in ("writing", "dirty", "uploading"):
+            display = EXTENSION.file_display_state(state, True)
+            self.assertEqual(EXTENSION.emblems_for_state(display),
+                             ["emblem-twodrive-cloud", "emblem-twodrive-syncing"])
+        self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.file_display_state("online_only", False)),
+                         ["emblem-twodrive-cloud"])
+        self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.file_display_state("uploading", False)),
+                         ["emblem-twodrive-syncing"])
+        self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.file_display_state("error", True)),
+                         ["emblem-twodrive-error"])
+
+    def test_callback_adds_both_emblems(self):
+        emblems = []
+        file_info = types.SimpleNamespace(add_emblem=emblems.append)
+        with patch.object(EXTENSION, "cloud_path", return_value="/dual-icon-test"), \
+             patch.object(EXTENSION, "register_file_info"), \
+             patch.dict(EXTENSION.STATUS_CACHE, {"/dual-icon-test": (0, {"state": "uploading_release_pending"})}):
+            EXTENSION.TwoDriveExtension().update_file_info(file_info)
+        self.assertEqual(emblems, ["emblem-twodrive-cloud", "emblem-twodrive-syncing"])
+
+
 class CopyPathTests(unittest.TestCase):
     def test_copy_path_outside_mount_preserves_exact_names(self):
         paths = ["/tmp/a folder/report.txt", '/tmp/a"b$`c']
@@ -139,7 +162,7 @@ class DirectoryStateTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
         self.conn.execute(
-            "create table files (path text unique, is_dir integer, state text, cache_path text)"
+            "create table files (path text unique, is_dir integer, state text, cache_path text, release_pending integer default 0)"
         )
 
     def tearDown(self):
@@ -147,9 +170,17 @@ class DirectoryStateTests(unittest.TestCase):
 
     def add_file(self, path, state="online_only", cache_path=None):
         self.conn.execute(
-            "insert into files values (?, 0, ?, ?)",
+            "insert into files (path, is_dir, state, cache_path) values (?, 0, ?, ?)",
             (path, state, cache_path),
         )
+
+    def test_pending_release_descendant_adds_cloud_to_syncing_folder(self):
+        self.add_file("/project/big.zip", "uploading", "/cache/big")
+        self.conn.execute("update files set release_pending=1 where path='/project/big.zip'")
+        self.assertEqual(EXTENSION.directory_state_for(self.conn, "/project", "online_only"),
+                         "uploading_release_pending")
+        self.assertEqual(EXTENSION.directory_state_for(self.conn, "/project2", "online_only"),
+                         "online_only")
 
     def test_any_local_descendant_marks_folder_cached(self):
         self.add_file("/project/cloud.txt")

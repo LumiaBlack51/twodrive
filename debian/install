@@ -9,3 +9,6 @@ packaging/nautilus/twodrive_nautilus.py usr/share/nautilus-python/extensions/
 packaging/icons/hicolor/scalable/emblems/*.svg usr/share/icons/hicolor/scalable/emblems/
 README.md usr/share/doc/twodrive/
 LICENSE usr/share/doc/twodrive/
+
+doc/responsiveness-recovery-2026-09-08.md usr/share/doc/twodrive/doc/
+doc/directory-browsing-2026-09-08.md usr/share/doc/twodrive/doc/

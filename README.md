@@ -6,6 +6,24 @@ Nautilus status emblems and actions, a tray status helper, and power-aware backg
 
 > [中文指南](#中文指南) | [English guide](#english-guide)
 
+## 0.2.4 directory browsing / 目录浏览修复
+
+浏览包含 `.part.02` 等未知扩展名大文件的目录时，Nautilus/GIO 的文件类型探测不再触发
+整个文件下载。名称、大小、目录结构等使用已有 SQLite 元数据；不会为了列目录预取内容。
+当前约 16,000 个条目的实测元数据数据库约 15 MB，不增加新的文件头或内容缓存。
+未知格式可能显示通用文件图标；主动打开、复制文件仍正常下载。
+
+上传过程中选择“释放空间”，会显示**云朵＋同步**两个标记。上传成功并安全释放缓存后，
+变为单独云朵。父目录也会汇总显示该状态；上传失败/冲突不会伪装成已完成。
+未上传完成的数据仍必须保留，直到云端确认成功，避免提前释放造成数据丢失。
+
+Nautilus/GIO MIME probes no longer hydrate cloud-only files. Directory browsing uses the existing
+SQLite metadata; it does not create a content or header prefetch cache. Unknown formats may use a
+generic icon until opened. Explicit reads and copies still download normally. Deferred releases show
+both cloud and syncing emblems, changing to cloud-only after upload and safe cache removal.
+
+See [root cause, verification and upgrade notes](doc/directory-browsing-2026-09-08.md).
+
 ## 0.2.3 reliability update / 稳定性更新
 
 启动时先从本地元数据挂载，再在后台恢复上传和同步；浏览目录不再等待云端下载。
@@ -39,11 +57,11 @@ mode 和目录时间戳语义。
 
 ### 1. 安装 Release 中的 Deb
 
-从 [Releases](../../releases/latest) 下载 `twodrive_0.2.2-2_amd64.deb`，然后执行：
+从 [Releases](../../releases/latest) 下载 `twodrive_0.2.4-1_amd64.deb`，然后执行：
 
 ```bash
 cd ~/Downloads
-sudo apt install ./twodrive_0.2.2-2_amd64.deb
+sudo apt install ./twodrive_0.2.4-1_amd64.deb
 ```
 
 该包适用于 amd64 的 Ubuntu/Zorin OS GNOME 环境，并会安装 CLI、daemon、托盘辅助程序、设置程序、
@@ -173,11 +191,11 @@ preserve full POSIX uid/gid/mode or directory timestamp semantics.
 
 ### 1. Install the Deb release
 
-Download `twodrive_0.2.2-2_amd64.deb` from [Releases](../../releases/latest), then run:
+Download `twodrive_0.2.4-1_amd64.deb` from [Releases](../../releases/latest), then run:
 
 ```bash
 cd ~/Downloads
-sudo apt install ./twodrive_0.2.2-2_amd64.deb
+sudo apt install ./twodrive_0.2.4-1_amd64.deb
 ```
 
 The package targets amd64 Ubuntu/Zorin OS GNOME systems and includes the CLI, daemon, tray helper,

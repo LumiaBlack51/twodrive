@@ -69,11 +69,11 @@ def cloud_path(file_info):
     return cloud_path_from_local_path(path)
 
 
-def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local):
+def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local, has_pending_release=False):
     if directory_state in {"conflict", "error"} or has_error:
         return "error"
     if has_syncing:
-        return "uploading"
+        return "uploading_release_pending" if has_pending_release else "uploading"
     if directory_state == "pinned":
         return "pinned"
     if has_local:
@@ -83,7 +83,7 @@ def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local
 
 def directory_state_for(conn, path, state):
     prefix = path.rstrip("/") + "/"
-    has_error, has_syncing, has_local = conn.execute(
+    has_error, has_syncing, has_local, has_pending_release = conn.execute(
         """
         SELECT
             EXISTS(
@@ -103,11 +103,40 @@ def directory_state_for(conn, path, state):
                       state IN ('cached', 'synced', 'pinned')
                       OR coalesce(cache_path, '') != ''
                   )
+            ),
+            EXISTS(
+                SELECT 1 FROM files
+                WHERE is_dir = 0 AND path >= ? AND path < ?
+                  AND release_pending = 1 AND state IN ('writing', 'dirty', 'uploading')
             )
         """,
-        (prefix, path.rstrip("/") + "0") * 3,
+        (prefix, path.rstrip("/") + "0") * 4,
     ).fetchone()
-    return aggregate_directory_flags(state, has_error, has_syncing, has_local)
+    return aggregate_directory_flags(state, has_error, has_syncing, has_local, has_pending_release)
+
+
+def file_display_state(state, release_pending):
+    if release_pending and state in {"writing", "dirty", "uploading"}:
+        return "uploading_release_pending"
+    return state
+
+
+def emblems_for_state(state):
+    if state == "uploading_release_pending":
+        return ["emblem-twodrive-cloud", "emblem-twodrive-syncing"]
+    emblem = {
+        "online_only": "emblem-twodrive-cloud",
+        "hydrating": "emblem-twodrive-syncing",
+        "writing": "emblem-twodrive-syncing",
+        "dirty": "emblem-twodrive-syncing",
+        "uploading": "emblem-twodrive-syncing",
+        "cached": "emblem-twodrive-synced",
+        "synced": "emblem-twodrive-synced",
+        "pinned": "emblem-twodrive-pinned",
+        "conflict": "emblem-twodrive-error",
+        "error": "emblem-twodrive-error",
+    }.get(state)
+    return [emblem] if emblem else []
 
 
 def run_local(*args):
@@ -196,12 +225,12 @@ def status_for(path):
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.2)
         row = conn.execute(
-            "select state, coalesce(cache_path, ''), is_dir, size from files where path = ?",
+            "select state, coalesce(cache_path, ''), is_dir, size, release_pending from files where path = ?",
             (path,),
         ).fetchone()
         if row:
             data = {
-                "state": row[0],
+                "state": file_display_state(row[0], row[4]),
                 "cache_path": row[1],
                 "is_dir": str(bool(row[2])).lower(),
                 "size": str(row[3]),
@@ -228,11 +257,12 @@ def db_states_for(paths):
             chunk = paths[index : index + 200]
             placeholders = ",".join("?" for _path in chunk)
             rows = conn.execute(
-                f"select path, state, is_dir from files where path in ({placeholders})",
+                f"select path, state, is_dir, release_pending from files where path in ({placeholders})",
                 chunk,
             ).fetchall()
-            for path, state, is_dir in rows:
-                states[path] = directory_state_for(conn, path, state) if is_dir else state
+            for path, state, is_dir, release_pending in rows:
+                states[path] = (directory_state_for(conn, path, state) if is_dir
+                                else file_display_state(state, release_pending))
         conn.close()
     except Exception as exc:
         log(f"state poll failed: {exc}")
@@ -473,18 +503,5 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
             state = (transient[1] if transient and time.monotonic() - transient[0] < TRANSIENT_TTL
                      else cached[1].get("state", "unknown") if cached else "unknown")
         register_file_info(path, file_info, state)
-        emblem = {
-            "online_only": "emblem-twodrive-cloud",
-            "hydrating": "emblem-twodrive-syncing",
-            "writing": "emblem-twodrive-syncing",
-            "dirty": "emblem-twodrive-syncing",
-            "uploading": "emblem-twodrive-syncing",
-            "cached": "emblem-twodrive-synced",
-            "synced": "emblem-twodrive-synced",
-            "pinned": "emblem-twodrive-pinned",
-            "conflict": "emblem-twodrive-error",
-            "error": "emblem-twodrive-error",
-            "unknown": None,
-        }.get(state)
-        if emblem:
+        for emblem in emblems_for_state(state):
             file_info.add_emblem(emblem)
