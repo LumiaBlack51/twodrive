@@ -496,15 +496,20 @@ impl GraphBackend {
         url: &str,
         start: u64,
         end: u64,
+        check: &mut dyn FnMut() -> anyhow::Result<()>,
     ) -> anyhow::Result<reqwest::blocking::Response> {
+        check()?;
         let access_token = self.access_token()?;
         let range = format!("bytes={start}-{end}");
-        retry_request(|| {
-            self.client
-                .get(url)
-                .bearer_auth(&access_token)
-                .header(RANGE, range.clone())
-        })
+        retry_request_checked(
+            || {
+                self.client
+                    .get(url)
+                    .bearer_auth(&access_token)
+                    .header(RANGE, range.clone())
+            },
+            check,
+        )
     }
 }
 
@@ -639,9 +644,11 @@ impl CloudBackend for GraphBackend {
         while bytes_done < size {
             let start = bytes_done;
             let end = (start + RANGE_CHUNK - 1).min(size - 1);
-            let mut response = self.get_range_with_retry(&url, start, end)?;
+            let mut response =
+                self.get_range_with_retry(&url, start, end, &mut || on_progress(bytes_done))?;
 
             loop {
+                on_progress(bytes_done)?;
                 let read = response.read(&mut buffer)?;
                 if read == 0 {
                     break;
@@ -1281,12 +1288,39 @@ fn first_expected_offset(ranges: &[String]) -> Option<u64> {
         .find_map(|start| start.trim().parse::<u64>().ok())
 }
 
-fn retry_request<F>(mut build: F) -> anyhow::Result<reqwest::blocking::Response>
+fn retry_request<F>(build: F) -> anyhow::Result<reqwest::blocking::Response>
+where
+    F: FnMut() -> RequestBuilder,
+{
+    retry_request_checked(build, &mut || Ok(()))
+}
+
+fn checked_delay(
+    delay: Duration,
+    check: &mut dyn FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < delay {
+        check()?;
+        sleep(
+            delay
+                .saturating_sub(start.elapsed())
+                .min(Duration::from_millis(100)),
+        );
+    }
+    check()
+}
+
+fn retry_request_checked<F>(
+    mut build: F,
+    check: &mut dyn FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<reqwest::blocking::Response>
 where
     F: FnMut() -> RequestBuilder,
 {
     let mut last_error = None;
     for attempt in 1..=3 {
+        check()?;
         match build().send() {
             Ok(response) if response.status().is_success() => return Ok(response),
             Ok(response)
@@ -1297,7 +1331,7 @@ where
                 let body = response.text().unwrap_or_default();
                 last_error = Some(anyhow::anyhow!("HTTP {status}: {body}"));
                 eprintln!("twodrive: Graph request attempt {attempt} failed; retrying");
-                sleep(delay);
+                checked_delay(delay, check)?;
                 continue;
             }
             Ok(response) => {
@@ -1308,7 +1342,7 @@ where
             Err(err) => last_error = Some(err.into()),
         }
 
-        sleep(Duration::from_millis(250 * attempt));
+        checked_delay(Duration::from_millis(250 * attempt), check)?;
     }
 
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Graph request failed")))
@@ -1564,6 +1598,31 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn cancellation_interrupts_retry_backoff() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/download", server.server_addr());
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let signal = Arc::clone(&cancel);
+        let worker = thread::spawn(move || {
+            let response = Response::from_string("retry later")
+                .with_status_code(503)
+                .with_header(tiny_http::Header::from_bytes("Retry-After", "30").unwrap());
+            server.recv().unwrap().respond(response).unwrap();
+            signal.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let start = std::time::Instant::now();
+        let result = retry_request_checked(|| Client::new().get(&url), &mut || {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                anyhow::bail!("cancelled");
+            }
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_secs(2));
+        worker.join().unwrap();
     }
 
     #[test]

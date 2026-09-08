@@ -36,6 +36,7 @@ install -m 0644 "$project_root/README.md" "$package_root/usr/share/doc/twodrive/
 install -d "$package_root/usr/share/doc/twodrive/doc"
 install -m 0644 "$project_root/doc/responsiveness-recovery-2026-09-08.md" \
     "$project_root/doc/directory-browsing-2026-09-08.md" \
+    "$project_root/doc/download-cancellation-2026-09-08.md" \
     "$package_root/usr/share/doc/twodrive/doc/"
 install -m 0644 "$project_root/LICENSE" "$package_root/usr/share/doc/twodrive/copyright"
 gzip -n -9 -c "$project_root/debian/changelog" \
@@ -43,4 +44,4 @@ gzip -n -9 -c "$project_root/debian/changelog" \
 
 install -d "$project_root/dist"
 dpkg-deb --build --root-owner-group "$package_root" \
-    "$project_root/dist/twodrive_0.2.4-1_amd64.deb"
+    "$project_root/dist/twodrive_0.2.5-1_amd64.deb"

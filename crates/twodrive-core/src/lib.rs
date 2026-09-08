@@ -576,6 +576,12 @@ impl Database {
             "release_pending",
             "ALTER TABLE files ADD COLUMN release_pending INTEGER NOT NULL DEFAULT 0",
         )?;
+        ensure_column(
+            &conn,
+            "files",
+            "download_generation",
+            "ALTER TABLE files ADD COLUMN download_generation INTEGER NOT NULL DEFAULT 0",
+        )?;
         let migrated = conn
             .query_row(
                 "SELECT value FROM app_state WHERE key = 'pin_policy_v1_migrated'",
@@ -863,6 +869,58 @@ impl Database {
         if changed == 0 {
             anyhow::bail!("cannot mark unknown item {remote_id} dirty");
         }
+        Ok(())
+    }
+
+    pub fn download_generation(&self, remote_id: &str) -> anyhow::Result<i64> {
+        Ok(self.connect()?.query_row(
+            "SELECT download_generation FROM files WHERE remote_id = ?1",
+            params![remote_id],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn begin_hydration(&self, remote_id: &str, generation: i64) -> anyhow::Result<bool> {
+        Ok(self.connect()?.execute(
+            "UPDATE files SET state = CASE WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned' ELSE 'hydrating' END, cache_path = NULL, cache_accessed_unix = NULL
+             WHERE remote_id = ?1 AND download_generation = ?2 AND release_pending = 0
+             AND state IN ('online_only', 'hydrating', 'pinned', 'cached', 'error') AND cloud_remote_id IS NOT NULL",
+            params![remote_id, generation])? == 1)
+    }
+
+    pub fn finish_hydration(
+        &self,
+        remote_id: &str,
+        generation: i64,
+        temporary: &Path,
+        cache: &Path,
+    ) -> anyhow::Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let eligible: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE remote_id = ?1 AND download_generation = ?2
+             AND release_pending = 0 AND state IN ('online_only', 'hydrating', 'pinned'))",
+            params![remote_id, generation],
+            |row| row.get(0),
+        )?;
+        if !eligible {
+            return Ok(false);
+        }
+        // Serialize publication with release and local writes, including the final-byte race.
+        fs::rename(temporary, cache)?;
+        tx.execute("UPDATE files SET state = CASE WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned' ELSE 'cached' END,
+            cache_path = ?2, cache_accessed_unix = ?3 WHERE remote_id = ?1",
+            params![remote_id, cache.to_string_lossy(), now_unix()])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn fail_hydration(&self, remote_id: &str, generation: i64) -> anyhow::Result<()> {
+        self.connect()?.execute(
+            "UPDATE files SET state = 'online_only' WHERE remote_id = ?1
+            AND download_generation = ?2 AND state = 'hydrating' AND cache_path IS NULL",
+            params![remote_id, generation],
+        )?;
         Ok(())
     }
 
@@ -1420,18 +1478,29 @@ impl Database {
             );
         };
 
-        let conn = self.connect()?;
-        conn.execute(
-            "UPDATE files SET release_pending = 1 WHERE is_dir = 0 AND pin_explicit = 0 AND pin_origin_remote_id IS NULL AND state != 'online_only' AND (path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/')",
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let cancelled: usize = tx.query_row(
+            "SELECT count(*) FROM files WHERE is_dir = 0 AND pin_explicit = 0 AND pin_origin_remote_id IS NULL
+             AND state = 'hydrating' AND cache_path IS NULL
+             AND (path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/')",
+            params![record.metadata.path], |row| row.get(0))?;
+        tx.execute(
+            "UPDATE files SET download_generation = download_generation + 1,
+             release_pending = CASE WHEN state = 'online_only' OR (state = 'hydrating' AND cache_path IS NULL) THEN 0 ELSE 1 END,
+             state = CASE WHEN state = 'hydrating' AND cache_path IS NULL THEN 'online_only' ELSE state END
+             WHERE is_dir = 0 AND pin_explicit = 0 AND pin_origin_remote_id IS NULL
+             AND (path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/')",
             params![record.metadata.path],
         )?;
+        tx.commit()?;
         drop(conn);
         let records = if record.metadata.is_dir {
             self.list_descendants(&record.metadata.path)?
         } else {
             vec![record]
         };
-        let mut released = 0;
+        let mut released = cancelled;
         for record in records {
             released += usize::from(self.release_record(&record)?);
         }
@@ -1974,6 +2043,43 @@ mod tests {
     fn add_file(db: &Database, id: &str, path: &str) {
         db.upsert_metadata(&MetadataEntry::new_file(id, path, 4, 1, "etag"))
             .unwrap();
+    }
+
+    #[test]
+    fn release_invalidates_downloads_and_wins_the_completion_race() {
+        let test = TestDatabase::new("download-cancellation");
+        add_dir(&test.db, "dir", "/folder");
+        add_file(&test.db, "file", "/folder/file");
+        add_file(&test.db, "sibling", "/folder-other");
+        let generation = test.db.download_generation("file").unwrap();
+        assert!(test.db.begin_hydration("file", generation).unwrap());
+        let tmp = test.root.join("download.tmp");
+        let cache = test.root.join("download");
+        fs::write(&tmp, b"done").unwrap();
+        assert_eq!(test.db.release_path("/folder").unwrap(), 1);
+        assert_eq!(test.db.download_generation("sibling").unwrap(), 0);
+        assert!(
+            !test
+                .db
+                .finish_hydration("file", generation, &tmp, &cache)
+                .unwrap()
+        );
+        assert!(!cache.exists());
+        let reopened = Database::new(test.db.db_path.clone());
+        reopened.init().unwrap();
+        assert!(!reopened.begin_hydration("file", generation).unwrap());
+        assert_eq!(
+            reopened.get_by_remote_id("file").unwrap().unwrap().state,
+            FileState::OnlineOnly
+        );
+        let next = reopened.download_generation("file").unwrap();
+        assert!(reopened.begin_hydration("file", next).unwrap());
+        assert!(
+            reopened
+                .finish_hydration("file", next, &tmp, &cache)
+                .unwrap()
+        );
+        assert_eq!(fs::read(cache).unwrap(), b"done");
     }
 
     #[test]

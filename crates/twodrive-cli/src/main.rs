@@ -253,7 +253,9 @@ fn release(paths: &AppPaths, path: &str) -> anyhow::Result<()> {
     let db = Database::new(paths.db_path.clone());
     db.init()?;
     let count = db.release_path(path)?;
-    println!("released {count} cached file(s) under {path}; cloud files were not deleted");
+    println!(
+        "released {count} cached file(s) or cancelled download(s) under {path}; cloud files were not deleted"
+    );
     let pending = db.pending_release_count(path)?;
     println!("queued {pending} file(s) for release after successful sync and closing open handles");
     if count == 0 && pending == 0 {

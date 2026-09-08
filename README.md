@@ -6,6 +6,19 @@ Nautilus status emblems and actions, a tray status helper, and power-aware backg
 
 > [中文指南](#中文指南) | [English guide](#english-guide)
 
+## 0.2.5 release cancels downloads / 释放空间会取消下载
+
+未固定文件正在下载时，选择“释放空间”会取消下载、删除未完成片段，并保持仅云端。
+对文件夹操作会取消其范围内的下载；旧句柄不会自动重启已取消的下载，主动重新打开文件可以重新下载。
+正常传输时每 100 毫秒检查取消；如果网络请求阻塞，则在当前请求返回或超时后退出，不继续重试。
+上传仍按原规则处理：保留未上传数据，上传成功后才释放。“始终保留”的固定保护不变，需先取消固定。
+
+Release space cancels downloads of unpinned files and removes partial data. Folder releases include
+descendants. Old handles cannot restart a cancelled transfer; an explicit new open can download again.
+Checks occur every 100 ms during transfer/backoff. An already-blocked request must return or time out
+before cancellation completes. Uploads retain their deferred-release protection.
+See [cancellation and verification details](doc/download-cancellation-2026-09-08.md).
+
 ## 0.2.4 directory browsing / 目录浏览修复
 
 浏览包含 `.part.02` 等未知扩展名大文件的目录时，Nautilus/GIO 的文件类型探测不再触发
@@ -57,11 +70,11 @@ mode 和目录时间戳语义。
 
 ### 1. 安装 Release 中的 Deb
 
-从 [Releases](../../releases/latest) 下载 `twodrive_0.2.4-1_amd64.deb`，然后执行：
+从 [Releases](../../releases/latest) 下载 `twodrive_0.2.5-1_amd64.deb`，然后执行：
 
 ```bash
 cd ~/Downloads
-sudo apt install ./twodrive_0.2.4-1_amd64.deb
+sudo apt install ./twodrive_0.2.5-1_amd64.deb
 ```
 
 该包适用于 amd64 的 Ubuntu/Zorin OS GNOME 环境，并会安装 CLI、daemon、托盘辅助程序、设置程序、
@@ -191,11 +204,11 @@ preserve full POSIX uid/gid/mode or directory timestamp semantics.
 
 ### 1. Install the Deb release
 
-Download `twodrive_0.2.4-1_amd64.deb` from [Releases](../../releases/latest), then run:
+Download `twodrive_0.2.5-1_amd64.deb` from [Releases](../../releases/latest), then run:
 
 ```bash
 cd ~/Downloads
-sudo apt install ./twodrive_0.2.4-1_amd64.deb
+sudo apt install ./twodrive_0.2.5-1_amd64.deb
 ```
 
 The package targets amd64 Ubuntu/Zorin OS GNOME systems and includes the CLI, daemon, tray helper,

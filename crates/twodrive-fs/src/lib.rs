@@ -540,6 +540,17 @@ pub fn hydrate_record<B: CloudBackend>(
     backend: &B,
     record: &FileRecord,
 ) -> anyhow::Result<PathBuf> {
+    let generation = db.download_generation(&record.metadata.remote_id)?;
+    hydrate_generation(db, cache_dir, backend, record, generation)
+}
+
+fn hydrate_generation<B: CloudBackend>(
+    db: &Database,
+    cache_dir: &Path,
+    backend: &B,
+    record: &FileRecord,
+    generation: i64,
+) -> anyhow::Result<PathBuf> {
     if record.metadata.is_dir {
         anyhow::bail!("cannot hydrate a directory");
     }
@@ -547,6 +558,7 @@ pub fn hydrate_record<B: CloudBackend>(
     let _guard = lock
         .lock()
         .map_err(|_| anyhow::anyhow!("hydration lock poisoned"))?;
+    check_download_generation(db, &record.metadata.remote_id, generation)?;
     let refreshed = db.get_by_remote_id(&record.metadata.remote_id)?;
     let record = refreshed.as_ref().unwrap_or(record);
 
@@ -564,8 +576,8 @@ pub fn hydrate_record<B: CloudBackend>(
         return Ok(cache_path.clone());
     }
 
-    if record.state != FileState::Pinned {
-        db.mark_state(&record.metadata.remote_id, FileState::Hydrating)?;
+    if !db.begin_hydration(&record.metadata.remote_id, generation)? {
+        return Err(io::Error::from_raw_os_error(libc::ECANCELED).into());
     }
     fs::create_dir_all(cache_dir)?;
 
@@ -587,20 +599,46 @@ pub fn hydrate_record<B: CloudBackend>(
         .cloud_remote_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content to hydrate"))?;
-    backend.download_sized_to(
+    let mut last_check = std::time::Instant::now();
+    let result = backend.download_sized_to(
         cloud_remote_id,
         record.metadata.size,
         &mut tmp_file,
         &mut |bytes_done| {
+            if last_check.elapsed() >= Duration::from_millis(100) {
+                check_download_generation(db, &record.metadata.remote_id, generation)?;
+                last_check = std::time::Instant::now();
+            }
             activity.set_progress(bytes_done, Some(record.metadata.size));
             Ok(())
         },
-    )?;
+    );
     drop(tmp_file);
-    fs::rename(&tmp_path, &cache_path)?;
-    db.mark_cached(&record.metadata.remote_id, &cache_path)?;
+    let result = check_download_generation(db, &record.metadata.remote_id, generation).and(result);
+    let result = result.and_then(|_| {
+        if db.finish_hydration(
+            &record.metadata.remote_id,
+            generation,
+            &tmp_path,
+            &cache_path,
+        )? {
+            Ok(cache_path)
+        } else {
+            Err(io::Error::from_raw_os_error(libc::ECANCELED).into())
+        }
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+        let _ = db.fail_hydration(&record.metadata.remote_id, generation);
+    }
+    result
+}
 
-    Ok(cache_path)
+fn check_download_generation(db: &Database, id: &str, generation: i64) -> anyhow::Result<()> {
+    if db.download_generation(id)? != generation {
+        return Err(io::Error::from_raw_os_error(libc::ECANCELED).into());
+    }
+    Ok(())
 }
 
 pub fn pin_path<B: CloudBackend>(
@@ -1054,6 +1092,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 cache_path,
                 unlinked: false,
                 deferred_record: None,
+                download_generation: 0,
             },
         );
         Ok(fh)
@@ -1906,6 +1945,13 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                         }
                     }
                 } else {
+                    let generation = match self.db.download_generation(&record.metadata.remote_id) {
+                        Ok(generation) => generation,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
                     let fh = self.next_fh;
                     self.next_fh += 1;
                     self.read_handles.insert(
@@ -1918,6 +1964,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                             _cache_guard: Arc::new(Mutex::new(None)),
                             unlinked: false,
                             deferred_record: Some(record),
+                            download_generation: generation,
                         },
                     );
                     reply.opened(fh, 0);
@@ -1948,6 +1995,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
             && let Some(record) = &handle.deferred_record
         {
             let record = record.clone();
+            let generation = handle.download_generation;
             let guard = Arc::clone(&handle._cache_guard);
             let db = self.db.clone();
             let cache_dir = self.cache_dir.clone();
@@ -1960,7 +2008,13 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                         .lock()
                         .map_err(|_| anyhow::anyhow!("read handle poisoned"))?;
                     if guard.is_none() {
-                        let path = hydrate_record(&db, &cache_dir, backend.as_ref(), &record)?;
+                        let path = hydrate_generation(
+                            &db,
+                            &cache_dir,
+                            backend.as_ref(),
+                            &record,
+                            generation,
+                        )?;
                         let file = fs::File::open(path)?;
                         file.lock_shared()?;
                         *guard = Some(file);
@@ -1975,7 +2029,11 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                     Ok(bytes) => reply.data(&bytes),
                     Err(err) => {
                         eprintln!("twodrive background read failed: {err:#}");
-                        reply.error(libc::EIO);
+                        let errno = err
+                            .downcast_ref::<io::Error>()
+                            .and_then(io::Error::raw_os_error)
+                            .unwrap_or(libc::EIO);
+                        reply.error(errno);
                     }
                 }
             });
@@ -2297,6 +2355,7 @@ struct ReadHandle {
     _cache_guard: Arc<Mutex<Option<fs::File>>>,
     unlinked: bool,
     deferred_record: Option<FileRecord>,
+    download_generation: i64,
 }
 
 #[derive(Debug)]
@@ -3341,6 +3400,150 @@ mod tests {
         assert_eq!(fs::read(destination).unwrap(), bytes);
         assert!(!reader.join().unwrap().is_empty());
         eprintln!("10,000-entry listing + 16 MiB copy during delayed download: {foreground:?}");
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[derive(Debug)]
+    struct StreamingBackend {
+        inner: MockBackend,
+        started: Sender<()>,
+        bytes_sent: AtomicUsize,
+    }
+
+    impl CloudBackend for StreamingBackend {
+        fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+            self.inner.list_all()
+        }
+        fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+            self.inner.download(id)
+        }
+        fn upload(&self, path: &str, bytes: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+            self.inner.upload(path, bytes)
+        }
+        fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.create_folder(path)
+        }
+        fn rename(&self, id: &str, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.rename(id, path)
+        }
+        fn delete(&self, id: &str) -> anyhow::Result<()> {
+            self.inner.delete(id)
+        }
+        fn download_sized_to(
+            &self,
+            _id: &str,
+            size: u64,
+            writer: &mut dyn Write,
+            progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
+        ) -> anyhow::Result<u64> {
+            self.started.send(()).unwrap();
+            let mut done = 0;
+            while done < size {
+                thread::sleep(Duration::from_millis(2));
+                let bytes = vec![0x51; (size - done).min(4096) as usize];
+                writer.write_all(&bytes)?;
+                done += bytes.len() as u64;
+                self.bytes_sent.fetch_add(bytes.len(), Ordering::Relaxed);
+                progress(done)?;
+            }
+            Ok(done)
+        }
+    }
+
+    #[test]
+    fn release_stops_streaming_download_cleans_partial_and_allows_new_open() {
+        let root = test_root("cancel-stream");
+        fs::create_dir_all(&root).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let entry = MetadataEntry::new_file("stream", "/stream.bin", 1_048_576, 0, "etag");
+        db.upsert_metadata(&entry).unwrap();
+        let record = db.get_by_remote_id("stream").unwrap().unwrap();
+        let old_generation = db.download_generation("stream").unwrap();
+        let (started, ready) = mpsc::channel();
+        let backend = StreamingBackend {
+            inner: MockBackend::new(),
+            started,
+            bytes_sent: AtomicUsize::new(0),
+        };
+        let cache = root.join("cache");
+        thread::scope(|scope| {
+            let work = scope.spawn(|| hydrate_record(&db, &cache, &backend, &record));
+            ready.recv_timeout(Duration::from_secs(2)).unwrap();
+            let independent_db = Database::new(db.path().to_path_buf());
+            assert_eq!(independent_db.release_path("/stream.bin").unwrap(), 1);
+            let err = work.join().unwrap().unwrap_err();
+            assert_eq!(
+                err.downcast_ref::<io::Error>().unwrap().raw_os_error(),
+                Some(libc::ECANCELED)
+            );
+        });
+        let sent = backend.bytes_sent.load(Ordering::Relaxed);
+        assert!(sent < entry.size as usize);
+        assert_eq!(fs::read_dir(&cache).unwrap().count(), 0);
+        assert!(hydrate_generation(&db, &cache, &backend, &record, old_generation).is_err());
+        assert_eq!(backend.bytes_sent.load(Ordering::Relaxed), sent);
+        let path = hydrate_record(&db, &cache, &backend, &record).unwrap();
+        assert_eq!(fs::read(path).unwrap(), vec![0x51; entry.size as usize]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires FUSE and TWODRIVE_TEST_CLI pointing to the newly built CLI"]
+    fn mounted_release_cancels_download_and_old_handles() {
+        let cli = std::env::var("TWODRIVE_TEST_CLI")
+            .expect("set TWODRIVE_TEST_CLI to the built twodrive binary");
+        let root = test_root("mounted-cancel");
+        let mount = root.join("mount");
+        fs::create_dir_all(&mount).unwrap();
+        fs::create_dir_all(root.join("data/twodrive")).unwrap();
+        let db = Database::new(root.join("data/twodrive/twodrive.sqlite3"));
+        db.init().unwrap();
+        db.upsert_metadata(&MetadataEntry::new_file(
+            "stream",
+            "/stream.bin",
+            1_048_576,
+            0,
+            "etag",
+        ))
+        .unwrap();
+        let (started, ready) = mpsc::channel();
+        let backend = StreamingBackend {
+            inner: MockBackend::new(),
+            started,
+            bytes_sent: AtomicUsize::new(0),
+        };
+        let fs = TwoDriveFs::new(db, root.join("data/twodrive/cache"), backend).unwrap();
+        let session = fuser::spawn_mount2(fs, &mount, &[]).unwrap();
+        let path = mount.join("stream.bin");
+        let mut older = fs::File::open(&path).unwrap();
+        let reading_path = path.clone();
+        let reading = thread::spawn(move || fs::read(reading_path));
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let result = Command::new(cli)
+            .args(["release", "/stream.bin"])
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("TWODRIVE_MOUNT_DIR", &mount)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // Linux buffered FUSE reads may normalize ECANCELED to EIO in the page cache.
+        assert!(matches!(
+            reading.join().unwrap().unwrap_err().raw_os_error(),
+            Some(libc::ECANCELED) | Some(libc::EIO)
+        ));
+        assert!(matches!(
+            older.read(&mut [0; 64]).unwrap_err().raw_os_error(),
+            Some(libc::ECANCELED) | Some(libc::EIO)
+        ));
+        drop(older);
+        assert_eq!(fs::read(&path).unwrap(), vec![0x51; 1_048_576]);
         drop(session);
         fs::remove_dir_all(root).unwrap();
     }

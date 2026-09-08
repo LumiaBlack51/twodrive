@@ -1,3 +1,12 @@
+twodrive (0.2.5-1) unstable; urgency=medium
+
+  * Cancel active downloads on Release space and discard partial download files.
+  * Persist download generations to invalidate queued reads and stale handles.
+  * Serialize download completion against release and preserve upload protection.
+  * Check cancellation during download progress and retry backoff.
+
+ -- TwoDrive Developers <noreply@localhost>  Tue, 08 Sep 2026 15:00:00 +0800
+
 twodrive (0.2.4-1) unstable; urgency=medium
 
   * Avoid downloading cloud-only content during Nautilus/GIO MIME sniffing.
