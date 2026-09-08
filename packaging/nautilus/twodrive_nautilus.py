@@ -16,6 +16,7 @@ TRACKED_TTL = 600.0
 MAX_TRACKED_FILES = 500
 REFRESH_INTERVAL_MS = 1500
 REFRESH_TIMER_STARTED = False
+POLL_IN_PROGRESS = False
 STATE_LOCK = threading.Lock()
 LOG_PATH = os.path.expanduser("~/.local/state/twodrive/nautilus.log")
 
@@ -29,8 +30,27 @@ def mount_dir():
 
 
 def cloud_path_from_local_path(path):
-    root = os.path.realpath(mount_dir())
-    resolved = os.path.realpath(path)
+    root = os.path.abspath(mount_dir())
+    resolved = os.path.abspath(path)
+    # Resolve desktop shortcuts only outside our mount. realpath(full_path) issues
+    # synchronous FUSE lookups for every component on Nautilus's UI thread.
+    for _ in range(40):
+        if resolved == root or resolved.startswith(root + os.sep):
+            break
+        parts = resolved.strip(os.sep).split(os.sep)
+        prefix = os.sep
+        for index, part in enumerate(parts):
+            prefix = os.path.join(prefix, part)
+            try:
+                target = os.readlink(prefix)
+            except OSError:
+                continue
+            resolved = os.path.abspath(os.path.join(
+                os.path.dirname(prefix), target, *parts[index + 1:]
+            ))
+            break
+        else:
+            break
     try:
         if os.path.commonpath((resolved, root)) != root:
             return None
@@ -220,6 +240,25 @@ def db_states_for(paths):
 
 
 def poll_tracked_files():
+    global POLL_IN_PROGRESS
+    with STATE_LOCK:
+        if POLL_IN_PROGRESS:
+            return True
+        POLL_IN_PROGRESS = True
+    threading.Thread(target=poll_tracked_files_worker, daemon=True).start()
+    return True
+
+
+def poll_tracked_files_worker():
+    global POLL_IN_PROGRESS
+    try:
+        refresh_tracked_states()
+    finally:
+        with STATE_LOCK:
+            POLL_IN_PROGRESS = False
+
+
+def refresh_tracked_states():
     now = time.monotonic()
     with STATE_LOCK:
         stale = [
@@ -255,12 +294,12 @@ def poll_tracked_files():
 
             if state != entry.get("state"):
                 entry["state"] = state
-                STATUS_CACHE.pop(path, None)
                 refresh_targets.append(file_info)
                 log(f"state changed path={path} state={state}")
+            STATUS_CACHE[path] = (now, {"state": state})
 
     for file_info in refresh_targets:
-        refresh_file(file_info)
+        GLib.idle_add(refresh_file, file_info)
     return True
 
 
@@ -428,7 +467,11 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
         path = cloud_path(file_info)
         if not path:
             return
-        state = status_for(path).get("state", "unknown")
+        with STATE_LOCK:
+            transient = TRANSIENT_STATES.get(path)
+            cached = STATUS_CACHE.get(path)
+            state = (transient[1] if transient and time.monotonic() - transient[0] < TRANSIENT_TTL
+                     else cached[1].get("state", "unknown") if cached else "unknown")
         register_file_info(path, file_info, state)
         emblem = {
             "online_only": "emblem-twodrive-cloud",
@@ -441,7 +484,7 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
             "pinned": "emblem-twodrive-pinned",
             "conflict": "emblem-twodrive-error",
             "error": "emblem-twodrive-error",
-            "unknown": "emblem-twodrive-error",
+            "unknown": None,
         }.get(state)
         if emblem:
             file_info.add_emblem(emblem)

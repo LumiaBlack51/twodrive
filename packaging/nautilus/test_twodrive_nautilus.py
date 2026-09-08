@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 
 def load_extension():
@@ -66,6 +67,13 @@ EXTENSION = load_extension()
 
 
 class CloudPathTests(unittest.TestCase):
+    def test_direct_mount_path_never_probes_fuse(self):
+        with patch.object(EXTENSION, "mount_dir", return_value="/mount/OneDrive"), \
+             patch.object(os, "readlink", side_effect=AssertionError("FUSE probe")), \
+             patch.object(os.path, "realpath", side_effect=AssertionError("FUSE probe")):
+            self.assertEqual(EXTENSION.cloud_path_from_local_path("/mount/OneDrive/Pictures/large.jpg"),
+                             "/Pictures/large.jpg")
+
     def test_resolves_shortcut_into_mount(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "OneDrive"
@@ -95,6 +103,15 @@ class CloudPathTests(unittest.TestCase):
                 )
             finally:
                 EXTENSION.mount_dir = original_mount_dir
+
+
+class MainThreadTests(unittest.TestCase):
+    def test_file_info_callback_does_not_query_database(self):
+        file_info = types.SimpleNamespace(add_emblem=lambda _emblem: None)
+        with patch.object(EXTENSION, "cloud_path", return_value="/ui-test"), \
+             patch.object(EXTENSION, "register_file_info"), \
+             patch.object(EXTENSION, "status_for", side_effect=AssertionError("UI database query")):
+            EXTENSION.TwoDriveExtension().update_file_info(file_info)
 
 
 class CopyPathTests(unittest.TestCase):

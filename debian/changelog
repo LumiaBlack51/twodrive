@@ -1,3 +1,12 @@
+twodrive (0.2.3-1) unstable; urgency=medium
+
+  * Mount immediately from local metadata and replay interrupted work in background.
+  * Keep directory listings and Nautilus responsive during transfers.
+  * Preserve resumable upload sessions during network outages and retry backup jobs.
+  * Keep known-folder backups upload-only without retaining duplicate local data.
+
+ -- TwoDrive Developers <noreply@localhost>  Tue, 08 Sep 2026 15:00:00 +0800
+
 twodrive (0.2.2-2) unstable; urgency=medium
 
   * Make the user service locate both packaged and user-local daemon binaries.

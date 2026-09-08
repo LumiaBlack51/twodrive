@@ -703,13 +703,12 @@ impl CloudBackend for GraphBackend {
             remote_id,
             if_match,
         )?;
-        let resumed = persisted.and_then(|session| {
-            query_upload_offset(&self.client, &session.upload_url)
-                .ok()
-                .flatten()
+        let resumed = match persisted {
+            Some(session) => query_upload_offset(&self.client, &session.upload_url)?
                 .filter(|offset| *offset < size)
-                .map(|offset| (session.upload_url, offset))
-        });
+                .map(|offset| (session.upload_url, offset)),
+            None => None,
+        };
         let (upload_url, initial_offset) = if let Some(resumed) = resumed {
             resumed
         } else {
@@ -909,6 +908,9 @@ impl UploadSessionStore {
             file.sync_all()?;
             drop(file);
             fs::rename(&tmp_path, path)?;
+            if let Some(parent) = path.parent() {
+                fs::File::open(parent)?.sync_all()?;
+            }
             Ok(())
         })();
         if result.is_err() {
@@ -1253,14 +1255,22 @@ fn upload_session_file(
 }
 
 fn query_upload_offset(client: &Client, upload_url: &str) -> anyhow::Result<Option<u64>> {
-    let response = client.get(upload_url).send()?;
+    let response = client
+        .get(upload_url)
+        .send()
+        .map_err(reqwest::Error::without_url)?;
+    // Only an expired/missing session permits starting over. Offline and server errors
+    // must preserve the durable session and its already uploaded fragments.
+    if matches!(response.status().as_u16(), 404 | 410) {
+        return Ok(None);
+    }
     if !response.status().is_success() {
         anyhow::bail!(
             "Graph upload status request failed with HTTP {}",
             response.status()
         );
     }
-    let status: GraphUploadStatus = response.json()?;
+    let status: GraphUploadStatus = response.json().map_err(reqwest::Error::without_url)?;
     Ok(first_expected_offset(&status.next_expected_ranges))
 }
 
@@ -1554,6 +1564,33 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn upload_session_status_distinguishes_expiry_from_temporary_failure() {
+        for (status, body, expected) in [
+            (
+                200,
+                r#"{"nextExpectedRanges":["327680-"]}"#,
+                Some(Some(327680)),
+            ),
+            (404, "expired", Some(None)),
+            (410, "expired", Some(None)),
+            (503, "temporarily unavailable", None),
+            (429, "throttled", None),
+        ] {
+            let server = Server::http("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/session", server.server_addr());
+            let worker = thread::spawn(move || {
+                server
+                    .recv()
+                    .unwrap()
+                    .respond(Response::from_string(body).with_status_code(status))
+                    .unwrap();
+            });
+            assert_eq!(query_upload_offset(&Client::new(), &url).ok(), expected);
+            worker.join().unwrap();
+        }
     }
 
     #[test]

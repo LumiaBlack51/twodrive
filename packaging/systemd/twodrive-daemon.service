@@ -10,9 +10,9 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env twodrive-daemon
 Restart=on-failure
 RestartSec=5s
-Nice=10
-IOSchedulingClass=idle
-IOSchedulingPriority=7
+Nice=0
+IOSchedulingClass=best-effort
+IOSchedulingPriority=4
 Environment=RUST_LOG=info
 
 [Install]

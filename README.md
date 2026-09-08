@@ -6,6 +6,17 @@ Nautilus status emblems and actions, a tray status helper, and power-aware backg
 
 > [中文指南](#中文指南) | [English guide](#english-guide)
 
+## 0.2.3 reliability update / 稳定性更新
+
+启动时先从本地元数据挂载，再在后台恢复上传和同步；浏览目录不再等待云端下载。
+Nautilus 的状态查询在后台执行。上传遇到临时断网会保留原上传会话并自动重试。
+Downloads/Pictures 备份保持只上传、不额外缓存，本地删除不删除云端备份。
+
+The mount becomes available before network recovery. Directory snapshots and background reads
+keep browsing responsive during transfers; transient network failures preserve resumable sessions.
+Known-folder backups retry without duplicating local data or propagating local deletions.
+See [verification and recovery details](doc/responsiveness-recovery-2026-09-08.md).
+
 ## 中文指南
 
 ### 功能与安全边界

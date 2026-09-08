@@ -351,7 +351,9 @@ fn recover_pending_delete_id<B: CloudBackend>(
     else {
         return Ok(false);
     };
-    backend.delete(&delete.remote_id)?;
+    if !delete.remote_id.starts_with("local-upload-") {
+        backend.delete(&delete.remote_id)?;
+    }
     if let Some(cache_path) = &delete.cache_path {
         match fs::remove_file(cache_path) {
             Ok(()) => {}
@@ -419,17 +421,8 @@ pub fn mount_mock(paths: AppPaths) -> anyhow::Result<()> {
         .power
         .ac_upload_concurrency
         .max(1) as usize;
-    let deleted = recover_pending_deletes(&db, &backend)?;
     let count = sync_metadata(&db, &backend)?;
-    let metadata_recovered = recover_pending_metadata_operations(&db, &backend)?;
-    let recovered = recover_dirty_uploads_concurrent(&db, &backend, upload_concurrency)?;
-    let hydrated = hydrate_pending_pins(&db, &paths.cache_dir, &backend)?;
     println!("twodrive: loaded {count} mock metadata entries");
-    if deleted > 0 || metadata_recovered > 0 || recovered > 0 || hydrated > 0 {
-        println!(
-            "twodrive: recovered {deleted} delete(s), {metadata_recovered} metadata operation(s), {recovered} upload(s), hydrated {hydrated} pinned file(s)"
-        );
-    }
     println!("twodrive: database {}", db.path().display());
     println!("twodrive: cache {}", paths.cache_dir.display());
     println!("twodrive: mounting {}", paths.mount_dir.display());
@@ -454,24 +447,6 @@ pub fn mount_graph(paths: AppPaths) -> anyhow::Result<()> {
         .power
         .ac_upload_concurrency
         .max(1) as usize;
-    let deleted = recover_pending_deletes(&db, &backend)?;
-    let count = sync_delta_metadata(&db, &backend)?;
-    let metadata_recovered = recover_pending_metadata_operations(&db, &backend)?;
-    let recovered = recover_dirty_uploads_concurrent(&db, &backend, upload_concurrency)?;
-    let hydrated = hydrate_pending_pins(&db, &paths.cache_dir, &backend)?;
-    println!("twodrive: synced {count} OneDrive metadata entries");
-    if recovered > 0 {
-        println!("twodrive: recovered {recovered} interrupted upload(s)");
-    }
-    if deleted > 0 {
-        println!("twodrive: recovered {deleted} interrupted delete(s)");
-    }
-    if metadata_recovered > 0 {
-        println!("twodrive: recovered {metadata_recovered} interrupted metadata operation(s)");
-    }
-    if hydrated > 0 {
-        println!("twodrive: hydrated {hydrated} inherited pinned file(s)");
-    }
     println!("twodrive: database {}", db.path().display());
     println!("twodrive: cache {}", paths.cache_dir.display());
     println!("twodrive: mounting {}", paths.mount_dir.display());
@@ -492,9 +467,70 @@ pub fn mount_backend<B: CloudBackend>(
     backend: B,
     upload_concurrency: usize,
 ) -> anyhow::Result<()> {
+    // No live handles exist yet; reconcile the durable local cache before serving requests.
+    recover_interrupted_writes(&db)?;
     let fs = TwoDriveFs::new_with_upload_concurrency(db, cache_dir, backend, upload_concurrency)?;
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let recovery_db = fs.db.clone();
+    let recovery_backend = Arc::clone(&fs.backend);
+    let sender = fs.upload_pool.sender.clone();
+    let recovery = thread::spawn(move || {
+        loop {
+            // Replay via the normal workers so recovery and new saves share item locks.
+            if let Err(err) = enqueue_recovery(&recovery_db, &sender) {
+                eprintln!("twodrive: recovery scan failed: {err:#}");
+            }
+            if let Err(err) = sync_delta_metadata(&recovery_db, recovery_backend.as_ref()) {
+                eprintln!("twodrive: metadata refresh deferred: {err:#}");
+            }
+            match stop_rx.recv_timeout(Duration::from_secs(60)) {
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                _ => break,
+            }
+        }
+    });
     let options = [MountOption::FSName("twodrive".to_string())];
-    fuser::mount2(fs, &mount_dir, &options)?;
+    let result = fuser::mount2(fs, &mount_dir, &options);
+    let _ = stop_tx.send(());
+    let _ = recovery.join();
+    result?;
+    Ok(())
+}
+
+fn recover_interrupted_writes(db: &Database) -> anyhow::Result<()> {
+    // Only at startup: there are no live writers yet. Keep every byte left in cache.
+    for record in db.all_records()? {
+        if record.state == FileState::Writing
+            && let Some(path) = record.cache_path
+            && let Ok(metadata) = fs::metadata(path)
+        {
+            db.mark_dirty_with_size(&record.metadata.remote_id, metadata.len())?;
+        }
+    }
+    Ok(())
+}
+
+fn enqueue_recovery(db: &Database, sender: &UploadQueue) -> anyhow::Result<()> {
+    for delete in db.pending_deletes()? {
+        sender.send(UploadCommand::Delete(delete.remote_id))?;
+    }
+    let mut queued = HashSet::new();
+    for operation in db.pending_metadata_operations()? {
+        queued.insert(operation.local_id.clone());
+        sender.send(UploadCommand::Upload(operation.local_id))?;
+    }
+    for record in db.all_records()? {
+        if (matches!(
+            record.state,
+            FileState::Dirty | FileState::Uploading | FileState::Conflict
+        ) || (!record.metadata.is_dir
+            && record.effective_pinned()
+            && !has_existing_cache(&record)))
+            && queued.insert(record.metadata.remote_id.clone())
+        {
+            sender.send(UploadCommand::Upload(record.metadata.remote_id))?;
+        }
+    }
     Ok(())
 }
 
@@ -507,6 +543,12 @@ pub fn hydrate_record<B: CloudBackend>(
     if record.metadata.is_dir {
         anyhow::bail!("cannot hydrate a directory");
     }
+    let lock = item_sync_lock(&format!("hydrate:{}", record.metadata.remote_id));
+    let _guard = lock
+        .lock()
+        .map_err(|_| anyhow::anyhow!("hydration lock poisoned"))?;
+    let refreshed = db.get_by_remote_id(&record.metadata.remote_id)?;
+    let record = refreshed.as_ref().unwrap_or(record);
 
     if matches!(
         record.state,
@@ -612,14 +654,88 @@ pub fn unpin_path(db: &Database, path: &str) -> anyhow::Result<usize> {
     Ok(db.list_descendants(&record.metadata.path)?.len())
 }
 
+#[derive(Clone)]
 enum UploadCommand {
     Upload(String),
     Delete(String),
     Shutdown,
 }
 
-struct UploadPool<B: CloudBackend> {
+#[derive(Clone)]
+struct UploadQueue {
     sender: Sender<UploadCommand>,
+    pending: Arc<Mutex<HashMap<String, bool>>>,
+}
+
+impl UploadQueue {
+    fn send(&self, command: UploadCommand) -> anyhow::Result<()> {
+        let key = match &command {
+            UploadCommand::Upload(id) => Some(format!("upload:{id}")),
+            UploadCommand::Delete(id) => Some(format!("delete:{id}")),
+            UploadCommand::Shutdown => None,
+        };
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload queue poisoned"))?;
+        if let Some(key) = &key {
+            if let Some(rerun) = pending.get_mut(key) {
+                *rerun = true;
+                return Ok(());
+            }
+            pending.insert(key.clone(), false);
+        }
+        if self.sender.send(command).is_err() {
+            if let Some(key) = key {
+                pending.remove(&key);
+            }
+            anyhow::bail!("upload queue closed");
+        }
+        Ok(())
+    }
+}
+
+struct UploadRun {
+    queue: UploadQueue,
+    command: UploadCommand,
+    key: String,
+}
+
+impl UploadRun {
+    fn start(queue: &UploadQueue, command: &UploadCommand) -> Option<Self> {
+        let key = match command {
+            UploadCommand::Upload(id) => format!("upload:{id}"),
+            UploadCommand::Delete(id) => format!("delete:{id}"),
+            UploadCommand::Shutdown => return None,
+        };
+        if let Ok(mut pending) = queue.pending.lock() {
+            pending.insert(key.clone(), false);
+        }
+        Some(Self {
+            queue: queue.clone(),
+            command: command.clone(),
+            key,
+        })
+    }
+}
+
+impl Drop for UploadRun {
+    fn drop(&mut self) {
+        let rerun = self
+            .queue
+            .pending
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(&self.key))
+            .unwrap_or(false);
+        if rerun {
+            let _ = self.queue.send(self.command.clone());
+        }
+    }
+}
+
+struct UploadPool<B: CloudBackend> {
+    sender: UploadQueue,
     workers: Vec<JoinHandle<()>>,
     _backend: std::marker::PhantomData<B>,
 }
@@ -628,14 +744,19 @@ impl<B: CloudBackend> UploadPool<B> {
     fn new(db: Database, cache_dir: PathBuf, backend: Arc<B>, concurrency: usize) -> Self {
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
+        let sender = UploadQueue {
+            sender,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        };
         let mut workers = Vec::new();
         for _ in 0..concurrency.max(1) {
             let db = db.clone();
             let cache_dir = cache_dir.clone();
             let backend = Arc::clone(&backend);
             let receiver = Arc::clone(&receiver);
+            let queue = sender.clone();
             workers.push(thread::spawn(move || {
-                run_upload_worker(db, cache_dir, backend, receiver)
+                run_upload_worker(db, cache_dir, backend, receiver, queue)
             }));
         }
         Self {
@@ -674,6 +795,7 @@ fn run_upload_worker<B: CloudBackend>(
     cache_dir: PathBuf,
     backend: Arc<B>,
     receiver: Arc<Mutex<Receiver<UploadCommand>>>,
+    queue: UploadQueue,
 ) {
     loop {
         let command = match receiver.lock() {
@@ -683,6 +805,7 @@ fn run_upload_worker<B: CloudBackend>(
         let Ok(command) = command else {
             return;
         };
+        let _running = UploadRun::start(&queue, &command);
         let remote_id = match command {
             UploadCommand::Upload(remote_id) => remote_id,
             UploadCommand::Delete(cloud_remote_id) => {
@@ -760,16 +883,68 @@ fn item_sync_lock(local_id: &str) -> Arc<Mutex<()>> {
     lock
 }
 
+type ReadJob = Box<dyn FnOnce() + Send>;
+
+struct ReadPool {
+    sender: Option<Sender<ReadJob>>,
+    workers: Vec<JoinHandle<()>>,
+}
+
+impl ReadPool {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel::<ReadJob>();
+        let receiver = Arc::new(Mutex::new(receiver));
+        let workers = (0..4)
+            .map(|_| {
+                let receiver = Arc::clone(&receiver);
+                thread::spawn(move || {
+                    loop {
+                        let job = match receiver.lock() {
+                            Ok(receiver) => receiver.recv(),
+                            Err(_) => return,
+                        };
+                        match job {
+                            Ok(job) => job(),
+                            Err(_) => return,
+                        }
+                    }
+                })
+            })
+            .collect();
+        Self {
+            sender: Some(sender),
+            workers,
+        }
+    }
+
+    fn spawn(&self, job: impl FnOnce() + Send + 'static) {
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(Box::new(job));
+        }
+    }
+}
+
+impl Drop for ReadPool {
+    fn drop(&mut self) {
+        self.sender.take();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
 pub struct TwoDriveFs<B: CloudBackend> {
     db: Database,
     cache_dir: PathBuf,
     backend: Arc<B>,
     upload_pool: UploadPool<B>,
+    read_pool: ReadPool,
     hydrating: Mutex<HashSet<String>>,
     inodes: InodeTable,
     read_handles: HashMap<u64, ReadHandle>,
     write_handles: HashMap<u64, WriteHandle>,
     next_fh: u64,
+    directory_handles: HashMap<u64, Vec<(u64, FileType, String)>>,
 }
 
 impl<B: CloudBackend> TwoDriveFs<B> {
@@ -798,11 +973,13 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             cache_dir,
             backend,
             upload_pool,
+            read_pool: ReadPool::new(),
             hydrating: Mutex::new(HashSet::new()),
             inodes: InodeTable::new(&records),
             read_handles: HashMap::new(),
             write_handles: HashMap::new(),
             next_fh: 1,
+            directory_handles: HashMap::new(),
         })
     }
 
@@ -826,9 +1003,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     fn refresh_child_records(&mut self, parent_path: &str) {
         match self.db.list_children(parent_path) {
             Ok(records) => {
-                for record in records {
-                    self.inodes.insert_or_update(record);
-                }
+                self.inodes.refresh_children(parent_path, records);
             }
             Err(err) => {
                 eprintln!("twodrive refresh children error for {parent_path}: {err:#}");
@@ -874,10 +1049,11 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         self.read_handles.insert(
             fh,
             ReadHandle {
-                _cache_guard: cache_guard,
+                _cache_guard: Arc::new(Mutex::new(Some(cache_guard))),
                 ino,
                 cache_path,
                 unlinked: false,
+                deferred_record: None,
             },
         );
         Ok(fh)
@@ -898,6 +1074,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .read_handles
             .get(&fh)
             .ok_or_else(|| anyhow::anyhow!("read handle does not exist"))?;
+        if handle.deferred_record.is_some() {
+            return Ok(());
+        }
         let file = fs::File::open(&handle.cache_path)?;
         if datasync {
             file.sync_data()?;
@@ -1634,21 +1813,12 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         }
     }
 
-    fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
-        let Some(path) = self.inodes.path_for_ino(ino) else {
+    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
+        let Some(path) = self.inodes.path_for_ino(ino).map(str::to_string) else {
             reply.error(libc::ENOENT);
             return;
         };
-        let path = path.to_string();
         self.refresh_child_records(&path);
-
         let mut entries = vec![
             (ino, FileType::Directory, ".".to_string()),
             (
@@ -1657,22 +1827,51 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                 "..".to_string(),
             ),
         ];
+        entries.extend(
+            self.inodes
+                .children_for_ino(ino)
+                .into_iter()
+                .map(|(ino, record)| (ino, file_type(&record.metadata), record.metadata.name)),
+        );
+        let fh = self.next_fh;
+        self.next_fh += 1;
+        self.directory_handles.insert(fh, entries);
+        reply.opened(fh, 0);
+    }
 
-        for (child_ino, child) in self.inodes.children_for_ino(ino) {
-            entries.push((
-                child_ino,
-                file_type(&child.metadata),
-                child.metadata.name.clone(),
-            ));
+    fn readdir(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
+        if offset < 0 {
+            reply.error(libc::EINVAL);
+            return;
         }
-
-        for (index, (entry_ino, kind, name)) in
-            entries.into_iter().enumerate().skip(offset as usize)
-        {
-            if reply.add(entry_ino, (index + 1) as i64, kind, name) {
+        let Some(entries) = self.directory_handles.get(&fh) else {
+            reply.error(libc::EBADF);
+            return;
+        };
+        for (index, (ino, kind, name)) in entries.iter().enumerate().skip(offset as usize) {
+            if reply.add(*ino, (index + 1) as i64, *kind, name) {
                 break;
             }
         }
+        reply.ok();
+    }
+
+    fn releasedir(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        _flags: i32,
+        reply: ReplyEmpty,
+    ) {
+        self.directory_handles.remove(&fh);
         reply.ok();
     }
 
@@ -1696,17 +1895,30 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                     return;
                 }
 
-                match self
-                    .ensure_cached(&record)
-                    .and_then(|path| self.open_read_handle(ino, path))
-                {
-                    Ok(fh) => {
-                        reply.opened(fh, 0);
+                if has_existing_cache(&record) {
+                    match self.open_read_handle(ino, record.cache_path.unwrap()) {
+                        Ok(fh) => reply.opened(fh, 0),
+                        Err(err) => {
+                            eprintln!("twodrive open cache error: {err:#}");
+                            reply.error(libc::EIO);
+                        }
                     }
-                    Err(err) => {
-                        eprintln!("twodrive open hydrate error: {err:#}");
-                        reply.error(libc::EIO);
-                    }
+                } else {
+                    let fh = self.next_fh;
+                    self.next_fh += 1;
+                    self.read_handles.insert(
+                        fh,
+                        ReadHandle {
+                            ino,
+                            cache_path: self
+                                .cache_dir
+                                .join(sanitize_cache_name(&record.metadata.remote_id)),
+                            _cache_guard: Arc::new(Mutex::new(None)),
+                            unlinked: false,
+                            deferred_record: Some(record),
+                        },
+                    );
+                    reply.opened(fh, 0);
                 }
             }
             Some(_) => reply.error(libc::EISDIR),
@@ -1727,6 +1939,44 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
     ) {
         if offset < 0 {
             reply.error(libc::EINVAL);
+            return;
+        }
+
+        if let Some(handle) = self.read_handles.get(&_fh)
+            && let Some(record) = &handle.deferred_record
+        {
+            let record = record.clone();
+            let guard = Arc::clone(&handle._cache_guard);
+            let db = self.db.clone();
+            let cache_dir = self.cache_dir.clone();
+            let backend = Arc::clone(&self.backend);
+            // Reply objects are owned by the worker; the FUSE dispatcher stays available
+            // to serve directory listings and unrelated reads/writes during downloads.
+            self.read_pool.spawn(move || {
+                let result = (|| -> anyhow::Result<Vec<u8>> {
+                    let mut guard = guard
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("read handle poisoned"))?;
+                    if guard.is_none() {
+                        let path = hydrate_record(&db, &cache_dir, backend.as_ref(), &record)?;
+                        let file = fs::File::open(path)?;
+                        file.lock_shared()?;
+                        *guard = Some(file);
+                    }
+                    use std::os::unix::fs::FileExt;
+                    let mut bytes = vec![0; size as usize];
+                    let count = guard.as_ref().unwrap().read_at(&mut bytes, offset as u64)?;
+                    bytes.truncate(count);
+                    Ok(bytes)
+                })();
+                match result {
+                    Ok(bytes) => reply.data(&bytes),
+                    Err(err) => {
+                        eprintln!("twodrive background read failed: {err:#}");
+                        reply.error(libc::EIO);
+                    }
+                }
+            });
             return;
         }
 
@@ -2042,8 +2292,9 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
 struct ReadHandle {
     ino: u64,
     cache_path: PathBuf,
-    _cache_guard: fs::File,
+    _cache_guard: Arc<Mutex<Option<fs::File>>>,
     unlinked: bool,
+    deferred_record: Option<FileRecord>,
 }
 
 #[derive(Debug)]
@@ -2166,6 +2417,7 @@ impl Drop for ActivityGuard {
 
 #[derive(Debug, Clone)]
 struct InodeTable {
+    next_ino: u64,
     path_by_ino: HashMap<u64, String>,
     ino_by_path: HashMap<String, u64>,
     record_by_ino: HashMap<u64, FileRecord>,
@@ -2212,11 +2464,41 @@ impl InodeTable {
         }
 
         Self {
+            next_ino: records.len() as u64 + ROOT_INO + 1,
             path_by_ino,
             ino_by_path,
             record_by_ino,
             children_by_parent_ino,
         }
+    }
+
+    fn refresh_children(&mut self, parent_path: &str, records: Vec<FileRecord>) {
+        let Some(parent_ino) = self.ino_for_path(parent_path) else {
+            return;
+        };
+        let mut children = Vec::with_capacity(records.len());
+        for record in records {
+            let ino = self.ino_for_path(&record.metadata.path).unwrap_or_else(|| {
+                let ino = self.next_ino;
+                self.next_ino += 1;
+                ino
+            });
+            self.path_by_ino.insert(ino, record.metadata.path.clone());
+            self.ino_by_path.insert(record.metadata.path.clone(), ino);
+            self.record_by_ino.insert(ino, record.clone());
+            children.push((ino, record));
+        }
+        let present: HashSet<u64> = children.iter().map(|(ino, _)| *ino).collect();
+        if let Some(previous) = self.children_by_parent_ino.get(&parent_ino) {
+            for (ino, record) in previous {
+                if !present.contains(ino)
+                    && self.ino_by_path.get(&record.metadata.path) == Some(ino)
+                {
+                    self.ino_by_path.remove(&record.metadata.path);
+                }
+            }
+        }
+        self.children_by_parent_ino.insert(parent_ino, children);
     }
 
     fn path_for_ino(&self, ino: u64) -> Option<&str> {
@@ -2243,13 +2525,8 @@ impl InodeTable {
             return ino;
         }
 
-        let ino = self
-            .path_by_ino
-            .keys()
-            .copied()
-            .max()
-            .unwrap_or(ROOT_INO)
-            .saturating_add(1);
+        let ino = self.next_ino;
+        self.next_ino += 1;
         self.path_by_ino.insert(ino, record.metadata.path.clone());
         self.ino_by_path.insert(record.metadata.path.clone(), ino);
         self.record_by_ino.insert(ino, record.clone());
@@ -2258,54 +2535,37 @@ impl InodeTable {
             .entry(parent_ino)
             .or_default()
             .push((ino, record));
-        self.sort_children(parent_ino);
         ino
     }
 
     fn replace_ino_record(&mut self, ino: u64, record: FileRecord) {
         let previous_path = self.path_by_ino.insert(ino, record.metadata.path.clone());
         if let Some(previous_path) = previous_path {
+            let previous_parent = parent_ino_for_path(&self.ino_by_path, &previous_path);
+            if let Some(children) = self.children_by_parent_ino.get_mut(&previous_parent) {
+                children.retain(|(child_ino, _)| *child_ino != ino);
+            }
             self.ino_by_path.remove(&previous_path);
         }
         self.ino_by_path.insert(record.metadata.path.clone(), ino);
         self.record_by_ino.insert(ino, record.clone());
 
-        for children in self.children_by_parent_ino.values_mut() {
-            children.retain(|(child_ino, _)| *child_ino != ino);
-        }
         let parent_ino = parent_ino_for_path(&self.ino_by_path, &record.metadata.path);
         self.children_by_parent_ino
             .entry(parent_ino)
             .or_default()
             .push((ino, record));
-        self.sort_children(parent_ino);
     }
 
     fn set_size(&mut self, ino: u64, size: u64) {
         if let Some(record) = self.record_by_ino.get_mut(&ino) {
             record.metadata.size = record.metadata.size.max(size);
         }
-        for children in self.children_by_parent_ino.values_mut() {
-            for (child_ino, child_record) in children {
-                if *child_ino == ino {
-                    child_record.metadata.size = child_record.metadata.size.max(size);
-                    return;
-                }
-            }
-        }
     }
 
     fn replace_size(&mut self, ino: u64, size: u64) {
         if let Some(record) = self.record_by_ino.get_mut(&ino) {
             record.metadata.size = size;
-        }
-        for children in self.children_by_parent_ino.values_mut() {
-            for (child_ino, child_record) in children {
-                if *child_ino == ino {
-                    child_record.metadata.size = size;
-                    return;
-                }
-            }
         }
     }
 
@@ -2321,16 +2581,21 @@ impl InodeTable {
     }
 
     fn children_for_ino(&self, ino: u64) -> Vec<(u64, FileRecord)> {
-        self.children_by_parent_ino
+        let mut children: Vec<_> = self
+            .children_by_parent_ino
             .get(&ino)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    fn sort_children(&mut self, parent_ino: u64) {
-        if let Some(children) = self.children_by_parent_ino.get_mut(&parent_ino) {
-            sort_child_records(children);
-        }
+            .into_iter()
+            .flatten()
+            .filter_map(|(ino, _)| {
+                self.record_by_ino
+                    .get(ino)
+                    .cloned()
+                    .map(|record| (*ino, record))
+            })
+            .collect();
+        // Sort once when building a directory snapshot, never on every file creation.
+        sort_child_records(&mut children);
+        children
     }
 
     fn parent_ino(&self, path: &str) -> Option<u64> {
@@ -2975,6 +3240,183 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[derive(Debug)]
+    struct SlowDownloadBackend {
+        inner: MockBackend,
+        started: Sender<()>,
+    }
+
+    impl CloudBackend for SlowDownloadBackend {
+        fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+            self.inner.list_all()
+        }
+        fn download(&self, remote_id: &str) -> anyhow::Result<Vec<u8>> {
+            let _ = self.started.send(());
+            thread::sleep(Duration::from_secs(3));
+            self.inner.download(remote_id)
+        }
+        fn upload(&self, path: &str, content: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+            self.inner.upload(path, content)
+        }
+        fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.create_folder(path)
+        }
+        fn rename(&self, remote_id: &str, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.inner.rename(remote_id, path)
+        }
+        fn delete(&self, remote_id: &str) -> anyhow::Result<()> {
+            self.inner.delete(remote_id)
+        }
+    }
+
+    #[test]
+    #[ignore = "requires /dev/fuse and fusermount3; uses an isolated temporary mount"]
+    fn mounted_large_listing_and_copy_remain_responsive_during_download() {
+        let root = test_root("mounted-responsiveness");
+        let mount = root.join("mount");
+        fs::create_dir_all(&mount).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let (started, waiting) = mpsc::channel();
+        let backend = SlowDownloadBackend {
+            inner: MockBackend::new(),
+            started,
+        };
+        sync_metadata(&db, &backend).unwrap();
+        let mut entries = vec![MetadataEntry::new_dir("listing", "/listing", 0, "etag")];
+        entries.extend((0..10_000).map(|index| {
+            MetadataEntry::new_file(
+                format!("list-{index}"),
+                format!("/listing/file-{index:05}"),
+                0,
+                0,
+                "etag",
+            )
+        }));
+        db.upsert_metadata_batch(&entries).unwrap();
+        let filesystem = TwoDriveFs::new(db, root.join("cache"), backend).unwrap();
+        let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+        let cloud_file = mount.join("README-cloud.txt");
+        let reader = thread::spawn(move || fs::read(cloud_file).unwrap());
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        let start = std::time::Instant::now();
+        let names: Vec<_> = fs::read_dir(mount.join("listing"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 10_000);
+        assert_eq!(names.iter().collect::<HashSet<_>>().len(), 10_000);
+        let destination = mount.join("large-copy.bin");
+        let bytes = vec![0x51; 16 * 1024 * 1024];
+        fs::write(&destination, &bytes).unwrap();
+        let foreground = start.elapsed();
+        assert!(
+            foreground < Duration::from_secs(2),
+            "foreground blocked: {foreground:?}"
+        );
+        assert_eq!(fs::read(destination).unwrap(), bytes);
+        assert!(!reader.join().unwrap().is_empty());
+        eprintln!("10,000-entry listing + 16 MiB copy during delayed download: {foreground:?}");
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_open_write_is_recovered_with_actual_cache_size() {
+        let mut test = TestFs::new("restart-open-write");
+        let (_, fh, _) = test
+            .fs
+            .create_upload(ROOT_INO, OsStr::new("interrupted.bin"), 0)
+            .unwrap();
+        let handle = test.fs.write_handles.get(&fh).unwrap();
+        let id = handle.record_remote_id.clone();
+        fs::write(&handle.cache_path, b"durable bytes before shutdown").unwrap();
+        test.fs.write_handles.clear(); // Simulated lost process, without release/queue.
+        recover_interrupted_writes(&test.fs.db).unwrap();
+        let record = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+        assert_eq!(record.state, FileState::Dirty);
+        assert_eq!(record.metadata.size, 29);
+        assert_eq!(
+            recover_dirty_uploads(&test.fs.db, test.fs.backend.as_ref()).unwrap(),
+            1
+        );
+        assert_eq!(
+            test.fs.db.get_by_remote_id(&id).unwrap().unwrap().state,
+            FileState::Cached
+        );
+    }
+
+    #[test]
+    fn recovery_queue_coalesces_repeated_scans_and_retains_work() {
+        let (sender, receiver) = mpsc::channel();
+        let queue = UploadQueue {
+            sender,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        };
+        for _ in 0..100 {
+            queue.send(UploadCommand::Upload("same".into())).unwrap();
+            queue.send(UploadCommand::Delete("same".into())).unwrap();
+        }
+        assert_eq!(receiver.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn running_upload_coalesces_retries_without_occupying_other_workers() {
+        let (sender, receiver) = mpsc::channel();
+        let queue = UploadQueue {
+            sender,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        };
+        queue.send(UploadCommand::Upload("large".into())).unwrap();
+        let command = receiver.recv().unwrap();
+        let running = UploadRun::start(&queue, &command).unwrap();
+        for _ in 0..100 {
+            queue.send(UploadCommand::Upload("large".into())).unwrap();
+        }
+        assert!(receiver.try_recv().is_err());
+        queue.send(UploadCommand::Upload("small".into())).unwrap();
+        assert!(matches!(receiver.try_recv().unwrap(), UploadCommand::Upload(id) if id == "small"));
+        drop(running);
+        assert!(matches!(receiver.try_recv().unwrap(), UploadCommand::Upload(id) if id == "large"));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn large_directory_refresh_preserves_inodes_and_removes_stale_names() {
+        let test = TestFs::new("directory-refresh");
+        let template = test
+            .fs
+            .db
+            .all_records()
+            .unwrap()
+            .into_iter()
+            .find(|r| !r.metadata.is_dir)
+            .unwrap();
+        let records: Vec<_> = (0..10_000)
+            .map(|index| {
+                let mut record = template.clone();
+                record.metadata = MetadataEntry::new_file(
+                    format!("id-{index}"),
+                    format!("/file-{index:05}"),
+                    index,
+                    0,
+                    "etag",
+                );
+                record
+            })
+            .collect();
+        let mut table = InodeTable::new(&[]);
+        table.refresh_children("/", records.clone());
+        let stable = table.ino_for_path("/file-00001").unwrap();
+        table.refresh_children("/", records[1..].to_vec());
+        assert_eq!(table.ino_for_path("/file-00001"), Some(stable));
+        assert_eq!(table.ino_for_path("/file-00000"), None);
+        table.set_size(stable, 12345);
+        let children = table.children_for_ino(ROOT_INO);
+        assert_eq!(children.len(), 9999);
+        assert_eq!(children[0].1.metadata.size, 12345);
     }
 
     #[test]

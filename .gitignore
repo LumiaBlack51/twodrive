@@ -27,3 +27,7 @@ TwoDrive/
 /c
 /doc/prompt*.md
 /doc/checklist*.md
+
+# Python extension test bytecode
+__pycache__/
+*.pyc

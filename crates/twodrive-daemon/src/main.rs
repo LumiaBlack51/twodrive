@@ -76,21 +76,22 @@ fn run_known_folder_sync(paths: AppPaths, config: Config) -> anyhow::Result<()> 
     let backend = GraphBackend::from_paths(&paths)?;
     let mut state = KnownFolderState::load(&paths.data_dir)?;
 
-    if !state.pending.is_empty() {
-        state.prune_missing_pending();
-        state.save(&paths.data_dir)?;
-
-        let jobs = state
-            .pending
-            .iter()
-            .map(|(local_path, pending)| KnownFolderUploadJob {
-                local_path: PathBuf::from(local_path),
-                remote_path: pending.remote_path.clone(),
-                snapshot: pending.snapshot.clone(),
-            })
-            .collect::<Vec<_>>();
-        process_known_folder_uploads(&paths, &backend, &db, &config, jobs, &mut state)?;
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = tx.send(event);
+    })?;
+    for root in &roots {
+        if root.local.exists() {
+            watcher.watch(&root.local, RecursiveMode::Recursive)?;
+            eprintln!(
+                "twodrive: watching known folder {} -> {}",
+                root.local.display(),
+                root.remote
+            );
+        }
     }
+
+    retry_known_folder_uploads(&paths, &backend, &db, &config, &mut state)?;
 
     if !state.baseline_initialized {
         for root in &roots {
@@ -111,24 +112,18 @@ fn run_known_folder_sync(paths: AppPaths, config: Config) -> anyhow::Result<()> 
         state.save(&paths.data_dir)?;
     }
 
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |event| {
-        let _ = tx.send(event);
-    })?;
-    for root in &roots {
-        if root.local.exists() {
-            watcher.watch(&root.local, RecursiveMode::Recursive)?;
-            eprintln!(
-                "twodrive: watching known folder {} -> {}",
-                root.local.display(),
-                root.remote
-            );
-        }
-    }
-
     let mut pending = HashSet::new();
+    let mut last_scan = Instant::now();
+    let mut last_retry = Instant::now();
+    let wake_interval = rescan_interval
+        .unwrap_or(Duration::from_secs(60))
+        .min(Duration::from_secs(60));
     loop {
-        match recv_watch_wake(&rx, rescan_interval) {
+        if last_retry.elapsed() >= Duration::from_secs(60) {
+            retry_known_folder_uploads(&paths, &backend, &db, &config, &mut state)?;
+            last_retry = Instant::now();
+        }
+        match recv_watch_wake(&rx, Some(wake_interval)) {
             WatchWake::Event(Ok(event)) => {
                 if !queue_addition_event(&event, &roots, &config, &mut pending) {
                     continue;
@@ -144,6 +139,10 @@ fn run_known_folder_sync(paths: AppPaths, config: Config) -> anyhow::Result<()> 
                 eprintln!("twodrive: known folder watcher event error: {err}");
             }
             WatchWake::Rescan => {
+                if rescan_interval.is_none_or(|interval| last_scan.elapsed() < interval) {
+                    continue;
+                }
+                last_scan = Instant::now();
                 for root in &roots {
                     sync_known_folder_root(&paths, &backend, &db, &config, root, &mut state)?;
                 }
@@ -269,7 +268,7 @@ fn sync_known_folder_paths<B: CloudBackend>(
             state.remove_path(path);
             continue;
         }
-        collect_local_path(backend, db, config, root, path, state, &mut jobs)?;
+        collect_local_path(config, root, path, state, &mut jobs)?;
     }
     process_known_folder_uploads(paths, backend, db, config, jobs, state)
 }
@@ -290,7 +289,7 @@ fn sync_known_folder_root<B: CloudBackend>(
         return Ok(());
     }
     let mut jobs = Vec::new();
-    collect_local_path(backend, db, config, root, &root.local, state, &mut jobs)?;
+    collect_local_path(config, root, &root.local, state, &mut jobs)?;
     process_known_folder_uploads(paths, backend, db, config, jobs, state)
 }
 
@@ -323,9 +322,7 @@ fn baseline_known_folder_path(
     Ok(())
 }
 
-fn collect_local_path<B: CloudBackend>(
-    backend: &B,
-    db: &Database,
+fn collect_local_path(
     config: &Config,
     root: &KnownFolderRoot,
     path: &Path,
@@ -346,7 +343,7 @@ fn collect_local_path<B: CloudBackend>(
     if metadata.is_dir() {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
-            collect_local_path(backend, db, config, root, &entry.path(), state, jobs)?;
+            collect_local_path(config, root, &entry.path(), state, jobs)?;
         }
         return Ok(());
     }
@@ -361,15 +358,36 @@ fn collect_local_path<B: CloudBackend>(
     }
 
     let remote_path = remote_path_for(root, path)?;
-    if let Some(parent) = parent_cloud_path(&remote_path) {
-        ensure_remote_dir(backend, db, &parent)?;
-    }
     jobs.push(KnownFolderUploadJob {
         local_path: path.to_path_buf(),
         remote_path,
         snapshot,
     });
     Ok(())
+}
+
+fn retry_known_folder_uploads<B: CloudBackend>(
+    paths: &AppPaths,
+    backend: &B,
+    db: &Database,
+    config: &Config,
+    state: &mut KnownFolderState,
+) -> anyhow::Result<()> {
+    state.prune_missing_pending();
+    let jobs = state
+        .pending
+        .iter()
+        .filter_map(|(local, pending)| {
+            let metadata = fs::metadata(local).ok()?;
+            Some(KnownFolderUploadJob {
+                local_path: PathBuf::from(local),
+                remote_path: pending.remote_path.clone(),
+                snapshot: FileSnapshot::from_metadata(&metadata),
+            })
+        })
+        .collect();
+    state.save(&paths.data_dir)?;
+    process_known_folder_uploads(paths, backend, db, config, jobs, state)
 }
 
 fn process_known_folder_uploads<B: CloudBackend>(
@@ -464,13 +482,16 @@ fn upload_known_folder_file<B: CloudBackend>(
     if FileSnapshot::from_metadata(&before) != *snapshot {
         anyhow::bail!("local file changed before upload started");
     }
+    if let Some(parent) = parent_cloud_path(remote_path) {
+        ensure_remote_dir(backend, db, &parent)?;
+    }
     let existing = db.get_by_path(remote_path)?;
     let uploaded = backend.upload_file_with_version(
         remote_path,
         local_path,
         existing
             .as_ref()
-            .map(|record| record.metadata.remote_id.as_str()),
+            .and_then(|record| record.cloud_remote_id.as_deref()),
         existing
             .as_ref()
             .map(|record| record.metadata.etag.as_str()),
@@ -624,6 +645,7 @@ impl KnownFolderState {
         file.sync_all()?;
         drop(file);
         fs::rename(tmp_path, path)?;
+        fs::File::open(data_dir)?.sync_all()?;
         Ok(())
     }
 
@@ -884,6 +906,61 @@ mod tests {
             token_path: root.join("config/tokens.json"),
         };
         (root, paths)
+    }
+
+    #[test]
+    fn restart_retries_changed_backup_without_caching_or_propagating_deletion() {
+        let (root, paths) = test_paths("retry-changed-backup");
+        paths.ensure().unwrap();
+        let db = Database::new(paths.db_path.clone());
+        db.init().unwrap();
+        let backend = twodrive_backend::MockBackend::new();
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let file = source.join("photo.bin");
+        fs::write(&file, b"old").unwrap();
+        let mut state = KnownFolderState::default();
+        state.pending.insert(
+            file.to_string_lossy().into_owned(),
+            PendingKnownFolderUpload {
+                remote_path: "/Pictures/photo.bin".into(),
+                snapshot: FileSnapshot::from_metadata(&fs::metadata(&file).unwrap()),
+            },
+        );
+        state.save(&paths.data_dir).unwrap();
+        fs::write(&file, b"new content after interruption").unwrap();
+        let mut state = KnownFolderState::load(&paths.data_dir).unwrap();
+        retry_known_folder_uploads(&paths, &backend, &db, &Config::default(), &mut state).unwrap();
+        assert!(state.pending.is_empty());
+        let record = db.get_by_path("/Pictures/photo.bin").unwrap().unwrap();
+        assert_eq!(
+            backend
+                .download(record.cloud_remote_id.as_deref().unwrap())
+                .unwrap(),
+            b"new content after interruption"
+        );
+        assert!(record.cache_path.is_none());
+        assert_eq!(fs::read_dir(&paths.cache_dir).unwrap().count(), 0);
+        fs::remove_file(&file).unwrap();
+        sync_known_folder_root(
+            &paths,
+            &backend,
+            &db,
+            &Config::default(),
+            &KnownFolderRoot {
+                local: source,
+                remote: "/Pictures".into(),
+            },
+            &mut state,
+        )
+        .unwrap();
+        assert!(
+            backend
+                .get_metadata_by_path("/Pictures/photo.bin")
+                .unwrap()
+                .is_some()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
