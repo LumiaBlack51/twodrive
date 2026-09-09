@@ -704,7 +704,12 @@ impl Database {
                     name = excluded.name,
                     is_dir = excluded.is_dir,
                     size = excluded.size,
-                    modified_unix = excluded.modified_unix,
+                    modified_unix = CASE
+                        WHEN files.is_dir = 0 AND files.etag <> ''
+                             AND files.etag = excluded.etag AND files.size = excluded.size
+                        THEN files.modified_unix
+                        ELSE excluded.modified_unix
+                    END,
                     etag = excluded.etag,
                     cloud_remote_id = excluded.cloud_remote_id
                 "#,
@@ -819,7 +824,12 @@ impl Database {
                 name = excluded.name,
                 is_dir = excluded.is_dir,
                 size = excluded.size,
-                modified_unix = excluded.modified_unix,
+                modified_unix = CASE
+                        WHEN files.is_dir = 0 AND files.etag <> ''
+                             AND files.etag = excluded.etag AND files.size = excluded.size
+                        THEN files.modified_unix
+                        ELSE excluded.modified_unix
+                    END,
                 etag = excluded.etag,
                 cloud_remote_id = excluded.cloud_remote_id
             "#,
@@ -1336,7 +1346,7 @@ impl Database {
             .optional()?;
         let still_current = current_path.as_deref() == Some(&normalize_cloud_path(expected_path));
         tx.execute(
-            "UPDATE files SET cloud_remote_id = ?1, etag = ?2, modified_unix = ?3, state = CASE WHEN ?4 = 1 AND state = 'dirty' THEN 'cached' ELSE state END WHERE remote_id = ?5",
+            "UPDATE files SET cloud_remote_id = ?1, etag = ?2, modified_unix = CASE WHEN is_dir = 1 THEN ?3 ELSE modified_unix END, state = CASE WHEN ?4 = 1 AND state = 'dirty' THEN 'cached' ELSE state END WHERE remote_id = ?5",
             params![
                 entry.remote_id,
                 entry.etag,
@@ -1586,6 +1596,9 @@ impl Database {
         uploaded: &MetadataEntry,
         cache_path: &Path,
     ) -> anyhow::Result<FileRecord> {
+        // Upload acknowledgement changes the cloud version, not the local
+        // content's mtime. Readers such as Poppler reject saves if that mtime
+        // changes after open. Matching delta echoes must preserve it as well.
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = self
@@ -1626,7 +1639,7 @@ impl Database {
                 uploaded.remote_id,
                 uploaded.etag,
                 is_current_generation as i64,
-                uploaded.modified_unix,
+                current.metadata.modified_unix,
                 i64::try_from(uploaded.size).unwrap_or(i64::MAX),
                 cache_path.to_string_lossy(),
                 now_unix(),
@@ -2532,6 +2545,40 @@ mod tests {
         assert_eq!(committed.metadata.remote_id, local_id);
         assert_eq!(committed.cloud_remote_id.as_deref(), Some("cloud-stable"));
         assert_eq!(committed.state, FileState::Cached);
+        assert_eq!(committed.metadata.modified_unix, 1);
+        test.db.upsert_metadata(&uploaded).unwrap();
+        assert_eq!(
+            test.db
+                .get_by_remote_id(local_id)
+                .unwrap()
+                .unwrap()
+                .metadata
+                .modified_unix,
+            1
+        );
+        test.db.upsert_metadata_batch([&uploaded]).unwrap();
+        assert_eq!(
+            test.db
+                .get_by_remote_id(local_id)
+                .unwrap()
+                .unwrap()
+                .metadata
+                .modified_unix,
+            1
+        );
+        let mut remote_edit = uploaded.clone();
+        remote_edit.etag = "etag-real-edit".to_string();
+        remote_edit.modified_unix = 3;
+        test.db.upsert_metadata_batch([&remote_edit]).unwrap();
+        assert_eq!(
+            test.db
+                .get_by_remote_id(local_id)
+                .unwrap()
+                .unwrap()
+                .metadata
+                .modified_unix,
+            3
+        );
         assert!(test.db.get_by_remote_id("cloud-stable").unwrap().is_none());
     }
 

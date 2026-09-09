@@ -1034,8 +1034,23 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             return Some(root_attr());
         }
 
-        self.record_for_ino(ino)
-            .map(|record| attr_for_record(ino, &record))
+        if let Some(record) = self.record_for_ino(ino) {
+            return Some(attr_for_record(ino, &record));
+        }
+
+        // Atomic replacement removes the old directory entry, not an open
+        // descriptor. Poppler calls fstat on that descriptor on later saves.
+        for handle in self.read_handles.values() {
+            if handle.ino == ino && handle.unlinked {
+                let mut attr = handle.open_attr;
+                attr.nlink = 0;
+                return Some(attr);
+            }
+        }
+        self.write_handles
+            .values()
+            .find(|handle| handle.ino == ino && handle.unlinked)
+            .and_then(|handle| unlinked_file_attr(ino, &handle._cache_guard))
     }
 
     fn refresh_child_records(&mut self, parent_path: &str) {
@@ -1080,6 +1095,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     fn open_read_handle(&mut self, ino: u64, cache_path: PathBuf) -> anyhow::Result<u64> {
+        let open_attr = self
+            .attr_for_ino(ino)
+            .ok_or_else(|| anyhow::anyhow!("read inode does not exist"))?;
         let cache_guard = fs::File::open(&cache_path)?;
         cache_guard.lock_shared()?;
         let fh = self.next_fh;
@@ -1087,6 +1105,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         self.read_handles.insert(
             fh,
             ReadHandle {
+                open_attr,
                 _cache_guard: Arc::new(Mutex::new(Some(cache_guard))),
                 ino,
                 cache_path,
@@ -1534,7 +1553,13 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         let size = fs::metadata(&handle.cache_path)?.len();
         self.db
             .mark_dirty_with_size(&handle.record_remote_id, size)?;
-        self.inodes.set_size(handle.ino, size);
+        // Publish the completed local generation before an editor can reopen
+        // it. A later directory refresh must not reveal a different mtime.
+        let record = self
+            .db
+            .get_by_remote_id(&handle.record_remote_id)?
+            .ok_or_else(|| anyhow::anyhow!("closed upload record disappeared"))?;
+        self.inodes.replace_ino_record(handle.ino, record);
         self.upload_pool.enqueue(handle.record_remote_id.clone())?;
         handle.uploaded = true;
         handle.activity.take();
@@ -1957,6 +1982,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                     self.read_handles.insert(
                         fh,
                         ReadHandle {
+                            open_attr: attr_for_record(ino, &record),
                             ino,
                             cache_path: self
                                 .cache_dir
@@ -1994,7 +2020,14 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         if let Some(handle) = self.read_handles.get(&_fh)
             && let Some(record) = &handle.deferred_record
         {
-            let record = record.clone();
+            // A descriptor can be passed to an indexer after another process opens it.
+            // Check the reader too, before the deferred handle starts a download.
+            let record = self.refresh_record(record);
+            if should_defer_hydration(req, &record) {
+                reply.error(libc::ENODATA);
+                return;
+            }
+            let reader = request_process_identity(req);
             let generation = handle.download_generation;
             let guard = Arc::clone(&handle._cache_guard);
             let db = self.db.clone();
@@ -2008,6 +2041,12 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                         .lock()
                         .map_err(|_| anyhow::anyhow!("read handle poisoned"))?;
                     if guard.is_none() {
+                        if !has_existing_cache(&record) {
+                            eprintln!(
+                                "twodrive: on-demand read path={:?} reader={} offset={} size={}",
+                                record.metadata.path, reader, offset, size
+                            );
+                        }
                         let path = hydrate_generation(
                             &db,
                             &cache_dir,
@@ -2059,6 +2098,15 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                     return;
                 }
 
+                if !has_existing_cache(&record) {
+                    eprintln!(
+                        "twodrive: on-demand read path={:?} reader={} offset={} size={}",
+                        record.metadata.path,
+                        request_process_identity(req),
+                        offset,
+                        size
+                    );
+                }
                 match self.ensure_cached(&record) {
                     Ok(cache_path) => match read_slice(&cache_path, offset as u64, size) {
                         Ok(data) => reply.data(&data),
@@ -2350,6 +2398,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
 
 #[derive(Debug)]
 struct ReadHandle {
+    open_attr: FileAttr,
     ino: u64,
     cache_path: PathBuf,
     _cache_guard: Arc<Mutex<Option<fs::File>>>,
@@ -2714,6 +2763,22 @@ fn attr_for_record(ino: u64, record: &FileRecord) -> FileAttr {
     }
 }
 
+fn unlinked_file_attr(ino: u64, file: &fs::File) -> Option<FileAttr> {
+    let metadata = file.metadata().ok()?;
+    let mut attr = root_attr();
+    attr.ino = ino;
+    attr.size = metadata.len();
+    attr.blocks = attr.size.div_ceil(512);
+    attr.kind = FileType::RegularFile;
+    attr.perm = 0o644;
+    attr.nlink = 0;
+    attr.atime = metadata.accessed().unwrap_or(UNIX_EPOCH);
+    attr.mtime = metadata.modified().unwrap_or(UNIX_EPOCH);
+    attr.ctime = attr.mtime;
+    attr.crtime = metadata.created().unwrap_or(UNIX_EPOCH);
+    Some(attr)
+}
+
 fn root_attr() -> FileAttr {
     let time = SystemTime::now();
     FileAttr {
@@ -2996,11 +3061,21 @@ fn is_thumbnail_or_indexer_request(req: &Request<'_>) -> bool {
 fn request_process_text(req: &Request<'_>) -> String {
     let pid = req.pid();
     let proc_dir = PathBuf::from(format!("/proc/{pid}"));
+    let executable = fs::read_link(proc_dir.join("exe")).unwrap_or_default();
     let comm = fs::read_to_string(proc_dir.join("comm")).unwrap_or_default();
     let cmdline = fs::read(proc_dir.join("cmdline"))
         .map(|bytes| String::from_utf8_lossy(&bytes).replace('\0', " "))
         .unwrap_or_default();
-    format!("{comm} {cmdline}")
+    format!("{} {comm} {cmdline}", executable.display())
+}
+
+// Do not log command-line arguments: they may contain credentials or document content.
+fn request_process_identity(req: &Request<'_>) -> String {
+    let pid = req.pid();
+    let proc_dir = PathBuf::from(format!("/proc/{pid}"));
+    let executable = fs::read_link(proc_dir.join("exe")).unwrap_or_default();
+    let comm = fs::read_to_string(proc_dir.join("comm")).unwrap_or_default();
+    format!("pid={pid} exe={executable:?} comm={:?}", comm.trim())
 }
 
 fn sanitize_cache_name(remote_id: &str) -> String {
@@ -3570,6 +3645,66 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires /dev/fuse, fusermount3 and python3; uses an isolated temporary mount"]
+    fn deferred_reader_rechecks_indexer_before_downloading() {
+        let root = test_root("deferred-reader");
+        let mount = root.join("mount");
+        fs::create_dir_all(&mount).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let (started, downloads) = mpsc::channel();
+        let backend = SlowDownloadBackend {
+            inner: MockBackend::new(),
+            started,
+        };
+        let entry = backend
+            .inner
+            .upload("/actual.txt", b"explicit read".to_vec())
+            .unwrap();
+        db.upsert_metadata(&entry).unwrap();
+        let filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+        let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+        let script = root.join("reader.py");
+        fs::write(
+            &script,
+            r#"
+import ctypes, errno, os, sys
+fd = os.open(sys.argv[1], os.O_RDONLY)
+libc = ctypes.CDLL(None)
+assert libc.prctl(15, b'tracker-extract', 0, 0, 0) == 0
+try:
+    os.read(fd, 13)
+except OSError as error:
+    # Buffered FUSE reads may translate ENODATA to EIO.
+    assert error.errno in (errno.ENODATA, errno.EIO), error
+else:
+    raise AssertionError('background reader downloaded the file')
+assert libc.prctl(15, b'python3', 0, 0, 0) == 0
+assert os.read(fd, 13) == b'explicit read'
+os.close(fd)
+"#,
+        )
+        .unwrap();
+        let result = Command::new("python3")
+            .arg(&script)
+            .arg(mount.join("actual.txt"))
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            downloads.try_iter().count(),
+            1,
+            "only the explicit read should download"
+        );
+        drop(session);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     #[ignore = "requires /dev/fuse, fusermount3 and gio; uses an isolated temporary mount"]
     fn gio_directory_metadata_does_not_download_unknown_large_files() {
         let root = test_root("gio-metadata");
@@ -3861,6 +3996,13 @@ mod tests {
         fuse.inodes.set_size(ino, 16);
         fuse.queue_upload_handle(first_fh).unwrap();
         fuse.write_handles.remove(&first_fh);
+        for _ in 0..100 {
+            if fuse.backend.active_uploads.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(fuse.backend.active_uploads.load(Ordering::SeqCst) > 0);
 
         let record = fuse.db.get_by_path("/rapid.pdf").unwrap().unwrap();
         let (_, second_fh, _) = fuse.create_overwrite_upload(record, true).unwrap();
@@ -3907,6 +4049,13 @@ mod tests {
         fuse.inodes.set_size(target_ino, 18);
         fuse.queue_upload_handle(target_fh).unwrap();
         fuse.write_handles.remove(&target_fh);
+        for _ in 0..100 {
+            if fuse.backend.active_uploads.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(fuse.backend.active_uploads.load(Ordering::SeqCst) > 0);
 
         let mut temp_ids = Vec::new();
         for (name, content) in [
@@ -4027,6 +4176,31 @@ mod tests {
     }
 
     #[test]
+    fn closed_write_publishes_mtime_before_reopen_and_directory_refresh() {
+        let mut test = TestFs::new("closed-write-mtime");
+        let record = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        let (ino, fh, _) = test.fs.create_overwrite_upload(record, true).unwrap();
+        write_slice(&test.fs.write_handles[&fh].cache_path, 0, b"edited").unwrap();
+        test.fs.queue_upload_handle(fh).unwrap();
+        let published = test.fs.attr_for_ino(ino).unwrap();
+        let current = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(published.size, 6);
+        assert_eq!(published.mtime, unix_time(current.metadata.modified_unix));
+        test.fs.refresh_child_records("/");
+        assert_eq!(test.fs.attr_for_ino(ino).unwrap().mtime, published.mtime);
+    }
+
+    #[test]
     fn editor_style_temp_file_can_replace_an_existing_remote_file() {
         let mut test = TestFs::new("atomic-replace");
         let old_target = test
@@ -4041,6 +4215,7 @@ mod tests {
             .fs
             .open_read_handle(old_target_ino, old_target_cache.clone())
             .unwrap();
+        let before_replace = test.fs.attr_for_ino(old_target_ino).unwrap();
         let (ino, fh, _) = test
             .fs
             .create_upload(
@@ -4068,8 +4243,18 @@ mod tests {
             test.fs.read_open_handle(old_target_fh, 0, 7).unwrap(),
             b"Welcome"
         );
+        let old_attr = test.fs.attr_for_ino(old_target_ino).unwrap();
+        assert_eq!(old_attr.ino, old_target_ino);
+        assert_eq!(
+            old_attr.size,
+            fs::metadata(&old_target_cache).unwrap().len()
+        );
+        assert_eq!(old_attr.kind, FileType::RegularFile);
+        assert_eq!(old_attr.nlink, 0);
+        assert_eq!(old_attr.mtime, before_replace.mtime);
         assert!(old_target_cache.exists());
         test.fs.release_read_handle(old_target_fh).unwrap();
+        assert!(test.fs.attr_for_ino(old_target_ino).is_none());
         assert!(!old_target_cache.exists());
 
         for _ in 0..40 {

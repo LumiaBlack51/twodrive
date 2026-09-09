@@ -39,6 +39,8 @@ def load_extension():
     DummyNautilus.MenuItem = MenuItem
     DummyNautilus.MenuProvider = MenuProvider
     DummyNautilus.InfoProvider = InfoProvider
+    DummyNautilus.OperationResult = types.SimpleNamespace(COMPLETE=0, IN_PROGRESS=1)
+    DummyNautilus.info_provider_update_complete_invoke = lambda *_args: None
 
     class DummyGLib:
         @staticmethod
@@ -52,6 +54,8 @@ def load_extension():
     repository.GLib = DummyGLib
     repository.GObject = DummyGObject
     repository.Nautilus = DummyNautilus
+    gi.require_version = lambda *_args: None
+    repository.Gio = types.SimpleNamespace()
     gi.repository = repository
     sys.modules["gi"] = gi
     sys.modules["gi.repository"] = repository
@@ -106,6 +110,57 @@ class CloudPathTests(unittest.TestCase):
 
 
 class MainThreadTests(unittest.TestCase):
+    def test_poll_uses_native_async_reader_without_python_threads(self):
+        callbacks = []
+        with patch.dict(EXTENSION.TRACKED_FILES, {"/poll": {}}, clear=True), \
+             patch.object(EXTENSION, "POLL_IN_PROGRESS", False), \
+             patch.object(EXTENSION, "read_states_async", side_effect=lambda paths, cb: callbacks.append(cb)), \
+             patch.object(EXTENSION.threading, "Thread", side_effect=AssertionError("embedded Python worker")), \
+             patch.object(EXTENSION, "refresh_tracked_states") as refresh:
+            self.assertTrue(EXTENSION.poll_tracked_files())
+            self.assertTrue(EXTENSION.POLL_IN_PROGRESS)
+            callbacks[0]({"/poll": "cached"})
+            refresh.assert_called_once_with({"/poll": "cached"})
+            self.assertFalse(EXTENSION.POLL_IN_PROGRESS)
+
+    def test_failed_poll_preserves_existing_emblem_state(self):
+        tracked = {"/retained": {"file_info": None, "state": "cached", "seen": EXTENSION.time.monotonic()}}
+        with patch.dict(EXTENSION.TRACKED_FILES, tracked, clear=True), \
+             patch.dict(EXTENSION.TRANSIENT_STATES, {}, clear=True), \
+             patch.dict(EXTENSION.STATUS_CACHE, {}, clear=True), \
+             patch.object(EXTENSION, "refresh_file") as refresh:
+            EXTENSION.refresh_tracked_states({})
+            self.assertEqual(EXTENSION.STATUS_CACHE["/retained"][1]["state"], "cached")
+            refresh.assert_not_called()
+
+    def test_first_visit_completes_only_after_emblems_are_ready(self):
+        events, callbacks = [], []
+        file_info = types.SimpleNamespace(add_emblem=lambda name: events.append(name))
+        extension = EXTENSION.TwoDriveExtension()
+        with patch.object(EXTENSION, "cloud_path", return_value="/first-visit"), \
+             patch.object(EXTENSION, "read_states_async", side_effect=lambda paths, cb: callbacks.append(cb)), \
+             patch.object(EXTENSION, "status_for", side_effect=AssertionError("UI database query")), \
+             patch.object(EXTENSION, "register_file_info"), \
+             patch.object(EXTENSION.Nautilus, "info_provider_update_complete_invoke", side_effect=lambda *args: events.append("complete")):
+            result = extension.update_file_info_full(extension, 1, None, file_info)
+            self.assertEqual(result, EXTENSION.Nautilus.OperationResult.IN_PROGRESS)
+            self.assertEqual(events, [])
+            callbacks[0]({"/first-visit": "online_only"})
+            self.assertEqual(events, ["emblem-twodrive-cloud", "complete"])
+            self.assertEqual(extension.pending_updates, [])
+
+    def test_cancelled_request_does_not_update_file_info(self):
+        callbacks = []
+        extension = EXTENSION.TwoDriveExtension()
+        with patch.object(EXTENSION, "cloud_path", return_value="/cancelled"), \
+             patch.object(EXTENSION, "read_states_async", side_effect=lambda paths, cb: callbacks.append(cb)), \
+             patch.object(EXTENSION.Nautilus, "info_provider_update_complete_invoke") as complete:
+            extension.update_file_info_full(extension, 1, None, None)
+            extension.cancel_update(extension, 1)
+            callbacks[0]({"/cancelled": "cached"})
+            complete.assert_not_called()
+            self.assertEqual(extension.pending_updates, [])
+
     def test_file_info_callback_does_not_query_database(self):
         file_info = types.SimpleNamespace(add_emblem=lambda _emblem: None)
         with patch.object(EXTENSION, "cloud_path", return_value="/ui-test"), \

@@ -4,8 +4,12 @@ import sqlite3
 import subprocess
 import threading
 import time
+import json
+import sys
 
-from gi.repository import GLib, GObject, Nautilus
+import gi
+gi.require_version("Nautilus", "4.0")
+from gi.repository import Gio, GLib, GObject, Nautilus
 
 STATUS_CACHE = {}
 STATUS_CACHE_TTL = 2.0
@@ -269,26 +273,70 @@ def db_states_for(paths):
     return states
 
 
+def read_states_async(paths, callback):
+    # nautilus-python 4.0 can retain the GIL while its native main loop is idle.
+    # Use a child process and Gio callbacks, not Python worker threads, so the
+    # first lookup completes even when the user does not click or refresh.
+    try:
+        process = Gio.Subprocess.new(
+            ["/usr/bin/python3", os.path.abspath(__file__), "--read-states"],
+            Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE
+            | Gio.SubprocessFlags.STDERR_PIPE,
+        )
+    except Exception as exc:
+        log(f"state reader start failed: {exc}")
+        GLib.idle_add(callback, {})
+        return
+
+    def timeout():
+        nonlocal timer
+        timer = 0
+        process.force_exit()
+        return False
+
+    timer = GLib.timeout_add_seconds(5, timeout)
+
+    def finished(source, result):
+        nonlocal timer
+        if timer:
+            GLib.source_remove(timer)
+            timer = 0
+        states = {}
+        try:
+            _ok, output, error = source.communicate_utf8_finish(result)
+            if not source.get_successful():
+                raise RuntimeError(error.strip() or "state reader exited unsuccessfully")
+            states = json.loads(output)
+        except Exception as exc:
+            log(f"state reader failed: {exc}")
+        callback(states)
+
+    process.communicate_utf8_async(json.dumps(paths), None, finished)
+
+
 def poll_tracked_files():
     global POLL_IN_PROGRESS
     with STATE_LOCK:
         if POLL_IN_PROGRESS:
             return True
         POLL_IN_PROGRESS = True
-    threading.Thread(target=poll_tracked_files_worker, daemon=True).start()
+        paths = list(TRACKED_FILES)
+
+    def finished(states):
+        global POLL_IN_PROGRESS
+        try:
+            refresh_tracked_states(states)
+        finally:
+            POLL_IN_PROGRESS = False
+
+    if paths:
+        read_states_async(paths, finished)
+    else:
+        POLL_IN_PROGRESS = False
     return True
 
 
-def poll_tracked_files_worker():
-    global POLL_IN_PROGRESS
-    try:
-        refresh_tracked_states()
-    finally:
-        with STATE_LOCK:
-            POLL_IN_PROGRESS = False
-
-
-def refresh_tracked_states():
+def refresh_tracked_states(db_states):
     now = time.monotonic()
     with STATE_LOCK:
         stale = [
@@ -305,7 +353,6 @@ def refresh_tracked_states():
             for path, entry in TRACKED_FILES.items()
         ]
 
-    db_states = db_states_for([path for path, _file_info, _state in tracked])
     refresh_targets = []
     now = time.monotonic()
     with STATE_LOCK:
@@ -320,7 +367,8 @@ def refresh_tracked_states():
             else:
                 if transient:
                     TRANSIENT_STATES.pop(path, None)
-                state = db_states.get(path, "unknown")
+                # A temporary database/read failure must not erase a known badge.
+                state = db_states.get(path, entry.get("state", "unknown"))
 
             if state != entry.get("state"):
                 entry["state"] = state
@@ -329,7 +377,7 @@ def refresh_tracked_states():
             STATUS_CACHE[path] = (now, {"state": state})
 
     for file_info in refresh_targets:
-        GLib.idle_add(refresh_file, file_info)
+        refresh_file(file_info)
     return True
 
 
@@ -435,6 +483,47 @@ def run_action(action, paths, file_infos):
 
 
 class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoProvider):
+    def __init__(self):
+        super().__init__()
+        self.pending_updates = []
+
+    def update_file_info_full(self, provider, handle, closure, file_info):
+        path = cloud_path(file_info)
+        if not path:
+            return Nautilus.OperationResult.COMPLETE
+        # Keep the request open until its emblems are ready. Completing with an
+        # empty cache and invalidating later can leave the initial view bare.
+        pending = {"handle": handle, "cancelled": False}
+        self.pending_updates.append(pending)
+
+        def finish(states):
+            if pending["cancelled"]:
+                return False
+            self.pending_updates.remove(pending)
+            now = time.monotonic()
+            with STATE_LOCK:
+                transient = TRANSIENT_STATES.get(path)
+                cached = STATUS_CACHE.get(path)
+                state = (transient[1] if transient and now - transient[0] < TRANSIENT_TTL
+                         else states.get(path, cached[1].get("state", "unknown") if cached else "unknown"))
+                STATUS_CACHE[path] = (now, {"state": state})
+            register_file_info(path, file_info, state)
+            for emblem in emblems_for_state(state):
+                file_info.add_emblem(emblem)
+            Nautilus.info_provider_update_complete_invoke(
+                closure, provider, handle, Nautilus.OperationResult.COMPLETE
+            )
+            return False
+
+        read_states_async([path], finish)
+        return Nautilus.OperationResult.IN_PROGRESS
+
+    def cancel_update(self, provider, handle):
+        for pending in self.pending_updates[:]:
+            if pending["handle"] == handle:
+                pending["cancelled"] = True
+                self.pending_updates.remove(pending)
+
     def get_file_items(self, files):
         if not files:
             return []
@@ -505,3 +594,7 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
         register_file_info(path, file_info, state)
         for emblem in emblems_for_state(state):
             file_info.add_emblem(emblem)
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--read-states"]:
+    print(json.dumps(db_states_for(json.load(sys.stdin))))
