@@ -219,6 +219,24 @@ fn recover_dirty_record<B: CloudBackend>(
         };
     }
 
+    // A backup-style save moves the old local record before its cloud move
+    // finishes. Uploading by path now would reuse that old cloud identity;
+    // deleting the backup would subsequently delete the newly saved file.
+    if record.cloud_remote_id.is_none()
+        && let Some(remote) = backend.get_metadata_by_path(&record.metadata.path)?
+    {
+        let owned_by_another_record = db
+            .get_by_cloud_remote_id(&remote.remote_id)?
+            .is_some_and(|owner| owner.metadata.remote_id != record.metadata.remote_id);
+        let awaiting_delete = db
+            .pending_deletes()?
+            .iter()
+            .any(|delete| delete.remote_id == remote.remote_id);
+        if owned_by_another_record || awaiting_delete {
+            return Ok(false);
+        }
+    }
+
     db.mark_state(&record.metadata.remote_id, FileState::Uploading)?;
     match backend.upload_file_with_version(
         &record.metadata.path,
@@ -3974,6 +3992,106 @@ os.close(fd)
         assert!(record.cloud_remote_id.is_some());
         assert!(db.pending_metadata_operations().unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_save_waits_for_cloud_move_or_delete_before_reusing_path() {
+        for delete_backup in [false, true] {
+            let mut test = TestFs::new(if delete_backup {
+                "backup-delete"
+            } else {
+                "backup-move"
+            });
+            let path = "/README-cloud.txt";
+            let backup = "/README-cloud.txt~";
+            let old = test.fs.db.get_by_path(path).unwrap().unwrap();
+            let original = test
+                .fs
+                .backend
+                .download(old.cloud_remote_id.as_deref().unwrap())
+                .unwrap();
+            test.fs
+                .db
+                .move_subtree_and_queue(&old.metadata.remote_id, backup)
+                .unwrap();
+            let moved = test.fs.db.get_by_path(backup).unwrap().unwrap();
+            let ino = test.fs.inodes.ino_for_path(path).unwrap();
+            test.fs.inodes.replace_ino_record(ino, moved.clone());
+            let (_, fh, _) = test
+                .fs
+                .create_upload(ROOT_INO, OsStr::new("README-cloud.txt"), libc::O_CREAT)
+                .unwrap();
+            let handle = &test.fs.write_handles[&fh];
+            fs::write(&handle.cache_path, b"new saved content").unwrap();
+            test.fs
+                .db
+                .mark_dirty_with_size(&handle.record_remote_id, 17)
+                .unwrap();
+            let pending = test.fs.db.get_by_path(path).unwrap().unwrap();
+            if delete_backup {
+                test.fs.db.queue_pending_delete(&moved).unwrap();
+            }
+
+            assert!(
+                !recover_dirty_record(
+                    &test.fs.db,
+                    test.fs.backend.as_ref(),
+                    pending.clone(),
+                    &mut |_, _| Ok(())
+                )
+                .unwrap()
+            );
+            assert_eq!(
+                test.fs
+                    .backend
+                    .download(old.cloud_remote_id.as_deref().unwrap())
+                    .unwrap(),
+                original
+            );
+            assert!(
+                test.fs
+                    .db
+                    .get_by_path(path)
+                    .unwrap()
+                    .unwrap()
+                    .cloud_remote_id
+                    .is_none()
+            );
+
+            if delete_backup {
+                recover_pending_deletes(&test.fs.db, test.fs.backend.as_ref()).unwrap();
+            } else {
+                recover_pending_metadata_operations(&test.fs.db, test.fs.backend.as_ref()).unwrap();
+            }
+            assert!(
+                recover_dirty_record(
+                    &test.fs.db,
+                    test.fs.backend.as_ref(),
+                    pending,
+                    &mut |_, _| Ok(())
+                )
+                .unwrap()
+            );
+            if !delete_backup {
+                test.fs.db.queue_pending_delete(&moved).unwrap();
+                recover_pending_deletes(&test.fs.db, test.fs.backend.as_ref()).unwrap();
+            }
+            sync_delta_metadata(&test.fs.db, test.fs.backend.as_ref()).unwrap();
+            let saved = test.fs.db.get_by_path(path).unwrap().unwrap();
+            assert_eq!(saved.state, FileState::Cached);
+            assert_eq!(
+                test.fs
+                    .backend
+                    .download(saved.cloud_remote_id.as_deref().unwrap())
+                    .unwrap(),
+                b"new saved content"
+            );
+            let (_, reopened, _) = test.fs.create_overwrite_upload(saved, false).unwrap();
+            assert_eq!(
+                fs::read(&test.fs.write_handles[&reopened].cache_path).unwrap(),
+                b"new saved content"
+            );
+        }
     }
 
     #[test]

@@ -691,7 +691,16 @@ impl CloudBackend for GraphBackend {
         let source_metadata = fs::metadata(source_path)?;
         let size = source_metadata.len();
         if !uses_upload_session(size) {
-            let uploaded = self.upload_with_etag(path, fs::read(source_path)?, if_match)?;
+            let access_token = self.access_token()?;
+            let url = simple_upload_url(path, remote_id);
+            let content = fs::read(source_path)?;
+            let item: GraphDriveItem = retry_request(|| {
+                upload_request(&self.client, &url, &access_token, if_match, &content)
+            })?
+            .json()?;
+            let uploaded = item.into_metadata_at_path(path).ok_or_else(|| {
+                anyhow::anyhow!("Graph upload response did not include file metadata")
+            })?;
             on_progress(size, size)?;
             return Ok(uploaded);
         }
@@ -1118,6 +1127,19 @@ fn upload_request(
         builder.header(IF_MATCH, etag.to_string())
     } else {
         builder
+    }
+}
+
+fn simple_upload_url(path: &str, remote_id: Option<&str>) -> String {
+    match remote_id {
+        Some(id) => format!(
+            "https://graph.microsoft.com/v1.0/me/drive/items/{}/content",
+            encode_graph_path(id)
+        ),
+        None => format!(
+            "https://graph.microsoft.com/v1.0/me/drive/root:/{}:/content",
+            encode_graph_path(path)
+        ),
     }
 }
 
@@ -1578,6 +1600,18 @@ mod tests {
             "https://graph.microsoft.com/v1.0/me/drive/items/parent-id:/JFLAP%20notes%20%231.jar:/createUploadSession"
         );
         assert!(upload_session_create_url(None, None, "large.bin").is_err());
+    }
+
+    #[test]
+    fn simple_upload_keeps_cloud_identity_after_local_rename() {
+        assert_eq!(
+            simple_upload_url("/renamed note.md", Some("original-id")),
+            "https://graph.microsoft.com/v1.0/me/drive/items/original-id/content"
+        );
+        assert_eq!(
+            simple_upload_url("/new note.md", None),
+            "https://graph.microsoft.com/v1.0/me/drive/root:/new%20note.md:/content"
+        );
     }
 
     #[test]
