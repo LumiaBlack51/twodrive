@@ -237,7 +237,9 @@ fn recover_dirty_record<B: CloudBackend>(
         }
     }
 
-    db.mark_state(&record.metadata.remote_id, FileState::Uploading)?;
+    if !db.begin_upload(&record)? {
+        return Ok(false);
+    }
     match backend.upload_file_with_version(
         &record.metadata.path,
         &cache_path,
@@ -4145,6 +4147,52 @@ os.close(fd)
         );
         drop(fuse);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_empty_upload_cannot_replace_completed_download() {
+        let test = TestFs::new("stale-download-placeholder");
+        let db = &test.fs.db;
+        let old_cache = test.root.join("empty.cache");
+        let new_cache = test.root.join("download.cache");
+        fs::write(&old_cache, b"").unwrap();
+        fs::write(&new_cache, b"%PDF-complete download").unwrap();
+        for (id, path, cache, size) in [
+            ("local-upload-placeholder", "/download.pdf", &old_cache, 0),
+            ("local-upload-part", "/download.part", &new_cache, 22),
+        ] {
+            db.upsert_metadata(&MetadataEntry::new_file(id, path, size, 1, ""))
+                .unwrap();
+            db.mark_cached(id, cache).unwrap();
+            db.mark_dirty_with_size(id, size).unwrap();
+        }
+        // The worker read the empty destination before its network preflight.
+        let stale = db.get_by_path("/download.pdf").unwrap().unwrap();
+        db.replace_file_locally(
+            "local-upload-part",
+            "local-upload-placeholder",
+            "/download.pdf",
+        )
+        .unwrap();
+        assert!(
+            !recover_dirty_record(db, test.fs.backend.as_ref(), stale, &mut |_, _| Ok(())).unwrap()
+        );
+        let current = db.get_by_path("/download.pdf").unwrap().unwrap();
+        assert_eq!(current.cache_path.as_ref(), Some(&new_cache));
+        assert_eq!(current.metadata.size, 22);
+        assert_eq!(current.state, FileState::Dirty);
+        assert!(
+            recover_dirty_record(db, test.fs.backend.as_ref(), current, &mut |_, _| Ok(()))
+                .unwrap()
+        );
+        let saved = db.get_by_path("/download.pdf").unwrap().unwrap();
+        assert_eq!(
+            test.fs
+                .backend
+                .download(saved.cloud_remote_id.as_deref().unwrap())
+                .unwrap(),
+            b"%PDF-complete download"
+        );
     }
 
     #[test]

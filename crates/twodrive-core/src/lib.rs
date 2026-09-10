@@ -865,6 +865,34 @@ impl Database {
         Ok(())
     }
 
+    /// Claim only the snapshot inspected by the worker. Network preflight can
+    /// overlap a rename/replacement or a reopen on the FUSE thread.
+    pub fn begin_upload(&self, record: &FileRecord) -> anyhow::Result<bool> {
+        if !matches!(record.state, FileState::Dirty | FileState::Uploading) {
+            return Ok(false);
+        }
+        let changed = self.connect()?.execute(
+            "UPDATE files SET state = 'uploading'
+             WHERE remote_id = ?1 AND path = ?2 AND cache_path IS ?3
+               AND state = ?4 AND size = ?5 AND modified_unix = ?6
+               AND etag = ?7 AND cloud_remote_id IS ?8",
+            params![
+                record.metadata.remote_id,
+                record.metadata.path,
+                record
+                    .cache_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy()),
+                record.state.as_str(),
+                i64::try_from(record.metadata.size).unwrap_or(i64::MAX),
+                record.metadata.modified_unix,
+                record.metadata.etag,
+                record.cloud_remote_id,
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
     pub fn mark_dirty_with_size(&self, remote_id: &str, size: u64) -> anyhow::Result<()> {
         let conn = self.connect()?;
         let changed = conn.execute(
@@ -1609,7 +1637,8 @@ impl Database {
             )?
             .ok_or_else(|| anyhow::anyhow!("uploaded local item disappeared: {local_id}"))?;
         let is_current_generation = current.metadata.path == normalize_cloud_path(requested_path)
-            && current.state == FileState::Uploading;
+            && current.state == FileState::Uploading
+            && current.cache_path.as_deref() == Some(cache_path);
         let cloud_identity_matches = current
             .cloud_remote_id
             .as_deref()
@@ -2733,6 +2762,66 @@ mod tests {
         assert_eq!(committed.cache_path.as_deref(), Some(new_cache.as_path()));
         assert_eq!(committed.metadata.etag, "etag-latest");
         assert_eq!(committed.state, FileState::Cached);
+    }
+
+    #[test]
+    fn upload_claim_and_acknowledgement_reject_replaced_cache() {
+        let test = TestDatabase::new("upload-claim-replaced-cache");
+        let old_cache = test.root.join("empty.cache");
+        let new_cache = test.root.join("complete.cache");
+        for (id, path, cache, bytes) in [
+            (
+                "local-upload-target",
+                "/target.pdf",
+                &old_cache,
+                b"".as_slice(),
+            ),
+            (
+                "local-upload-source",
+                "/target.part",
+                &new_cache,
+                b"PDF contents".as_slice(),
+            ),
+        ] {
+            fs::write(cache, bytes).unwrap();
+            test.db
+                .upsert_metadata(&MetadataEntry::new_file(
+                    id,
+                    path,
+                    bytes.len() as u64,
+                    1,
+                    "",
+                ))
+                .unwrap();
+            test.db.mark_cached(id, cache).unwrap();
+            test.db
+                .mark_dirty_with_size(id, bytes.len() as u64)
+                .unwrap();
+        }
+        let stale = test.db.get_by_path("/target.pdf").unwrap().unwrap();
+        test.db
+            .mark_state("local-upload-target", FileState::Writing)
+            .unwrap();
+        assert!(!test.db.begin_upload(&stale).unwrap());
+        test.db
+            .mark_state("local-upload-target", FileState::Dirty)
+            .unwrap();
+        assert!(test.db.begin_upload(&stale).unwrap());
+        let replaced = test
+            .db
+            .replace_file_locally("local-upload-source", "local-upload-target", "/target.pdf")
+            .unwrap();
+        assert!(!test.db.begin_upload(&stale).unwrap());
+        assert!(test.db.begin_upload(&replaced).unwrap());
+        let old_ack = MetadataEntry::new_file("cloud-target", "/target.pdf", 0, 2, "old-etag");
+        let current = test
+            .db
+            .commit_uploaded("local-upload-target", "/target.pdf", &old_ack, &old_cache)
+            .unwrap();
+        assert_eq!(current.cache_path.as_ref(), Some(&new_cache));
+        assert_eq!(current.metadata.size, 12);
+        assert_eq!(current.state, FileState::Uploading);
+        assert!(!test.db.begin_upload(&stale).unwrap());
     }
 
     #[test]
