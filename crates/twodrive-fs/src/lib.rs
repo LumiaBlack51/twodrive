@@ -3558,12 +3558,28 @@ mod tests {
 
     #[test]
     fn release_stops_streaming_download_cleans_partial_and_allows_new_open() {
-        let root = test_root("cancel-stream");
+        check_release_stops_streaming_download(false);
+    }
+
+    #[test]
+    fn release_stops_pinned_streaming_download() {
+        check_release_stops_streaming_download(true);
+    }
+
+    fn check_release_stops_streaming_download(pinned: bool) {
+        let root = test_root(if pinned {
+            "cancel-pinned-stream"
+        } else {
+            "cancel-stream"
+        });
         fs::create_dir_all(&root).unwrap();
         let db = Database::new(root.join("test.sqlite3"));
         db.init().unwrap();
         let entry = MetadataEntry::new_file("stream", "/stream.bin", 1_048_576, 0, "etag");
         db.upsert_metadata(&entry).unwrap();
+        if pinned {
+            db.set_explicit_pin("stream", true).unwrap();
+        }
         let record = db.get_by_remote_id("stream").unwrap().unwrap();
         let old_generation = db.download_generation("stream").unwrap();
         let (started, ready) = mpsc::channel();

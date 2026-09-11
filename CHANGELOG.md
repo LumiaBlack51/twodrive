@@ -4,6 +4,10 @@
 
 User-facing highlights moved from the former README. Releases hold published assets and verification notes; [debian/changelog](debian/changelog) retains package history. These entries describe changes at release time, not fresh test results or a guarantee of current behavior.
 
+## 0.2.7 — Release pinned content
+
+Release space now cancels explicit and inherited pins for the selected file or folder subtree before safely releasing cache. Released children stay online-only beneath pinned parents. Automatic pruning still protects pins; uploads and open handles still defer release until safe.
+
 ## 0.2.6 — Save and move reliability
 
 Fixes stale placeholder upload acknowledgements overwriting completed downloads, PDF save timestamps, and backup-save synchronization races. Child uploads/metadata operations wait for parent moves; queued descendant paths follow local moves, and stale remote metadata no longer pulls pending descendants back. Negative Graph directory sizes no longer abort metadata decoding.

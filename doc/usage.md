@@ -12,9 +12,9 @@ Create, edit, rename, move, and delete through the mount. Changes are committed 
 
 | Nautilus action | Behavior |
 | --- | --- |
-| **Always keep on this device** | Sets an explicit pin policy and downloads existing eligible files, recursively for folders. Pinned content is protected from release. |
+| **Always keep on this device** | Sets an explicit pin policy and downloads existing eligible files, recursively for folders. Pinned content is protected from automatic cache cleanup. |
 | **Cancel always keep on this device** | Removes this item's explicit policy but leaves cache in place. An inherited parent policy can still apply. |
-| **Release space** | Removes eligible unpinned cache, not the OneDrive item. The placeholder stays visible. |
+| **Release space** | Cancels explicit and inherited pins for the selection (including folder descendants), then safely removes local cache. The OneDrive item and placeholder stay visible. |
 | **Sync now** | Refreshes metadata, retries pending local operations/uploads, and hydrates pending pins. Not a strictly metadata-only command. |
 | **View status** | Shows the selected item's local state. |
 | **Copy path** | Copies absolute local paths, one per line for multiple selections. Also works outside TwoDrive; paths are not shell-quoted. |
@@ -30,9 +30,9 @@ twodrive release /Documents/report.pdf
 
 Pinning a folder applies to existing descendants. Locally created descendants can inherit that policy; **newly discovered cloud files remain online-only**, even beneath an already pinned folder. Folder emblems summarize descendants, not guaranteed offline availability of every child. Confirm downloads before going offline; `twodrive status-path /Documents/report.pdf` reports effective pin state.
 
-**During download:** releasing an unpinned file cancels the download and removes partial data. A folder release includes descendants. Old handles cannot restart the transfer; an explicit new open can download again. A blocked network request must return or time out before cancellation finishes.
+**During download:** releasing a file cancels the download and removes partial data. A folder release includes descendants. Old handles cannot restart the transfer; an explicit new open can download again. A blocked network request must return or time out before cancellation finishes.
 
-**During writing/upload:** the release request is persisted and shown as cloud + syncing. Cache is removed after successful upload and closure of open handles. Failed/conflicting uploads retain data. Pinned content remains protected; Always Keep cancels a pending release.
+**During writing/upload:** the release request is persisted and shown as cloud + syncing. Cache is removed after successful upload and closure of open handles. Failed/conflicting uploads retain data. Automatic pruning still protects pinned content; Always Keep cancels a pending release.
 
 > [!WARNING]
 > **Delete and Release space are different.** Deleting inside the mount deletes the cloud item too. To reclaim disk space without deleting OneDrive content, use Release space—not Delete, `rm`, or manual cache removal.
