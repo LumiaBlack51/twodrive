@@ -133,33 +133,46 @@ class MainThreadTests(unittest.TestCase):
             self.assertEqual(EXTENSION.STATUS_CACHE["/retained"][1]["state"], "cached")
             refresh.assert_not_called()
 
-    def test_first_visit_completes_only_after_emblems_are_ready(self):
-        events, callbacks = [], []
-        file_info = types.SimpleNamespace(add_emblem=lambda name: events.append(name))
-        extension = EXTENSION.TwoDriveExtension()
-        with patch.object(EXTENSION, "cloud_path", return_value="/first-visit"), \
-             patch.object(EXTENSION, "read_states_async", side_effect=lambda paths, cb: callbacks.append(cb)), \
-             patch.object(EXTENSION, "status_for", side_effect=AssertionError("UI database query")), \
-             patch.object(EXTENSION, "register_file_info"), \
-             patch.object(EXTENSION.Nautilus, "info_provider_update_complete_invoke", side_effect=lambda *args: events.append("complete")):
-            result = extension.update_file_info_full(extension, 1, None, file_info)
-            self.assertEqual(result, EXTENSION.Nautilus.OperationResult.IN_PROGRESS)
-            self.assertEqual(events, [])
-            callbacks[0]({"/first-visit": "online_only"})
-            self.assertEqual(events, ["emblem-twodrive-cloud", "complete"])
-            self.assertEqual(extension.pending_updates, [])
+    def test_provider_does_not_expose_broken_async_handle_entry_point(self):
+        self.assertFalse(hasattr(EXTENSION.TwoDriveExtension(), "update_file_info_full"))
 
-    def test_cancelled_request_does_not_update_file_info(self):
-        callbacks = []
+    def test_first_visit_batches_read_and_refreshes_cloud_and_cached_icons(self):
+        callbacks, idle, events = [], [], []
         extension = EXTENSION.TwoDriveExtension()
-        with patch.object(EXTENSION, "cloud_path", return_value="/cancelled"), \
-             patch.object(EXTENSION, "read_states_async", side_effect=lambda paths, cb: callbacks.append(cb)), \
-             patch.object(EXTENSION.Nautilus, "info_provider_update_complete_invoke") as complete:
-            extension.update_file_info_full(extension, 1, None, None)
-            extension.cancel_update(extension, 1)
-            callbacks[0]({"/cancelled": "cached"})
-            complete.assert_not_called()
-            self.assertEqual(extension.pending_updates, [])
+        def make_file(path):
+            file_info = types.SimpleNamespace(path=path)
+            file_info.add_emblem = lambda name: events.append((path, name))
+            file_info.invalidate_extension_info = lambda: extension.update_file_info(file_info)
+            return file_info
+        files = [make_file("/cloud"), make_file("/local")]
+        with patch.dict(EXTENSION.TRACKED_FILES, {}, clear=True), \
+             patch.dict(EXTENSION.STATUS_CACHE, {}, clear=True), \
+             patch.dict(EXTENSION.TRANSIENT_STATES, {}, clear=True), \
+             patch.object(EXTENSION, "POLL_QUEUED", False), \
+             patch.object(EXTENSION, "POLL_IN_PROGRESS", False), \
+             patch.object(EXTENSION, "start_refresh_timer"), \
+             patch.object(EXTENSION, "log"), \
+             patch.object(EXTENSION, "cloud_path", side_effect=lambda f: f.path), \
+             patch.object(EXTENSION.GLib, "idle_add", side_effect=idle.append), \
+             patch.object(EXTENSION, "read_states_async", side_effect=lambda paths, cb: callbacks.append((paths, cb))), \
+             patch.object(EXTENSION.Nautilus, "info_provider_update_complete_invoke", side_effect=AssertionError("NULL handle completion")):
+            for f in files:
+                self.assertEqual(extension.update_file_info(f), EXTENSION.Nautilus.OperationResult.COMPLETE)
+            self.assertEqual(events, [])
+            self.assertEqual(len(idle), 1)
+            self.assertFalse(idle.pop()())
+            self.assertEqual(callbacks[0][0], ["/cloud", "/local"])
+            callbacks[0][1]({"/cloud": "online_only", "/local": "cached"})
+            self.assertEqual(events, [("/cloud", "emblem-twodrive-cloud"),
+                                      ("/local", "emblem-twodrive-synced")])
+            self.assertEqual(idle, [])
+            # An ordinary Nautilus refresh reapplies an unchanged known badge.
+            events.clear()
+            extension.update_file_info(files[1])
+            self.assertEqual(events, [("/local", "emblem-twodrive-synced")])
+            # State changes invalidate the provider, which consumes the new cache.
+            EXTENSION.refresh_tracked_states({"/cloud": "cached", "/local": "cached"})
+            self.assertEqual(events[-1], ("/cloud", "emblem-twodrive-synced"))
 
     def test_file_info_callback_does_not_query_database(self):
         file_info = types.SimpleNamespace(add_emblem=lambda _emblem: None)

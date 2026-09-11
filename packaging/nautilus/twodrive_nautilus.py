@@ -21,6 +21,7 @@ MAX_TRACKED_FILES = 500
 REFRESH_INTERVAL_MS = 1500
 REFRESH_TIMER_STARTED = False
 POLL_IN_PROGRESS = False
+POLL_QUEUED = False
 STATE_LOCK = threading.Lock()
 LOG_PATH = os.path.expanduser("~/.local/state/twodrive/nautilus.log")
 
@@ -314,6 +315,24 @@ def read_states_async(paths, callback):
     process.communicate_utf8_async(json.dumps(paths), None, finished)
 
 
+def queue_state_poll():
+    global POLL_QUEUED
+    with STATE_LOCK:
+        if POLL_QUEUED:
+            return
+        POLL_QUEUED = True
+
+    def run():
+        global POLL_QUEUED
+        with STATE_LOCK:
+            POLL_QUEUED = False
+        poll_tracked_files()
+        return False
+
+    # Coalesce all file callbacks in this main-loop turn into one read.
+    GLib.idle_add(run)
+
+
 def poll_tracked_files():
     global POLL_IN_PROGRESS
     with STATE_LOCK:
@@ -483,46 +502,11 @@ def run_action(action, paths, file_infos):
 
 
 class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoProvider):
-    def __init__(self):
-        super().__init__()
-        self.pending_updates = []
-
-    def update_file_info_full(self, provider, handle, closure, file_info):
-        path = cloud_path(file_info)
-        if not path:
-            return Nautilus.OperationResult.COMPLETE
-        # Keep the request open until its emblems are ready. Completing with an
-        # empty cache and invalidating later can leave the initial view bare.
-        pending = {"handle": handle, "cancelled": False}
-        self.pending_updates.append(pending)
-
-        def finish(states):
-            if pending["cancelled"]:
-                return False
-            self.pending_updates.remove(pending)
-            now = time.monotonic()
-            with STATE_LOCK:
-                transient = TRANSIENT_STATES.get(path)
-                cached = STATUS_CACHE.get(path)
-                state = (transient[1] if transient and now - transient[0] < TRANSIENT_TTL
-                         else states.get(path, cached[1].get("state", "unknown") if cached else "unknown"))
-                STATUS_CACHE[path] = (now, {"state": state})
-            register_file_info(path, file_info, state)
-            for emblem in emblems_for_state(state):
-                file_info.add_emblem(emblem)
-            Nautilus.info_provider_update_complete_invoke(
-                closure, provider, handle, Nautilus.OperationResult.COMPLETE
-            )
-            return False
-
-        read_states_async([path], finish)
-        return Nautilus.OperationResult.IN_PROGRESS
-
-    def cancel_update(self, provider, handle):
-        for pending in self.pending_updates[:]:
-            if pending["handle"] == handle:
-                pending["cancelled"] = True
-                self.pending_updates.remove(pending)
+    # Use the synchronous provider entry point. nautilus-python 4.0 passes
+    # *handle to update_file_info_full but never assigns a unique operation
+    # handle back to Nautilus. IN_PROGRESS can therefore leave a NULL handle
+    # and late completions can be rejected or applied to another request.
+    # Database work still runs asynchronously; only cache application is sync.
 
     def get_file_items(self, files):
         if not files:
@@ -594,6 +578,9 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
         register_file_info(path, file_info, state)
         for emblem in emblems_for_state(state):
             file_info.add_emblem(emblem)
+        if not cached or time.monotonic() - cached[0] >= STATUS_CACHE_TTL:
+            queue_state_poll()
+        return Nautilus.OperationResult.COMPLETE
 
 
 if __name__ == "__main__" and sys.argv[1:] == ["--read-states"]:
