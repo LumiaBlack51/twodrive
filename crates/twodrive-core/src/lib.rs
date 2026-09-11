@@ -1556,6 +1556,19 @@ impl Database {
 
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // An explicit release overrides Always Keep for exactly this subtree.
+        // Change policy in the same transaction as download cancellation so a
+        // concurrent pin/download cannot observe an unpinned but active transfer.
+        tx.execute(
+            "UPDATE files SET pin_explicit = 0, pin_origin_remote_id = NULL,
+             pin_inheritance_blocked = 1,
+             state = CASE WHEN state = 'pinned' THEN
+                 CASE WHEN is_dir = 1 THEN 'online_only'
+                      WHEN cache_path IS NOT NULL THEN 'cached' ELSE 'hydrating' END
+                 ELSE state END
+             WHERE path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/'",
+            params![record.metadata.path],
+        )?;
         let cancelled: usize = tx.query_row(
             "SELECT count(*) FROM files WHERE is_dir = 0 AND pin_explicit = 0 AND pin_origin_remote_id IS NULL
              AND state = 'hydrating' AND cache_path IS NULL
@@ -2239,6 +2252,7 @@ mod tests {
         test.db.mark_cached("cloud", &cache).unwrap();
         let reader = fs::File::open(&cache).unwrap();
         reader.lock_shared().unwrap();
+        test.db.set_explicit_pin("cloud", true).unwrap();
         assert_eq!(test.db.release_path("/file").unwrap(), 0);
         assert_eq!(test.db.pending_release_count("/file").unwrap(), 1);
         test.db.set_explicit_pin("cloud", true).unwrap();
@@ -2248,6 +2262,100 @@ mod tests {
         assert!(cache.exists());
         test.db.set_explicit_pin("cloud", false).unwrap();
         assert_eq!(test.db.release_path("/file").unwrap(), 1);
+    }
+
+    #[test]
+    fn explicit_release_overrides_pin_but_prune_preserves_it() {
+        let test = TestDatabase::new("release-pinned");
+        add_dir(&test.db, "parent", "/folder");
+        add_file(&test.db, "file", "/folder/file");
+        add_file(&test.db, "sibling", "/folder/sibling");
+        let cache = test.root.join("content");
+        fs::write(&cache, b"safe").unwrap();
+        test.db.mark_cached("file", &cache).unwrap();
+        test.db.set_explicit_pin("parent", true).unwrap();
+        test.db.set_explicit_pin("file", true).unwrap();
+        assert_eq!(test.db.prune_cache(-1).unwrap(), 0);
+        assert!(cache.exists());
+        assert_eq!(test.db.release_path("/folder/file").unwrap(), 1);
+        test.db.recompute_pin_inheritance().unwrap();
+        let released = test.db.get_by_path("/folder/file").unwrap().unwrap();
+        assert!(!released.effective_pinned());
+        assert!(released.pin_inheritance_blocked);
+        assert_eq!(released.state, FileState::OnlineOnly);
+        assert!(!cache.exists());
+        assert!(
+            test.db
+                .get_by_path("/folder")
+                .unwrap()
+                .unwrap()
+                .effective_pinned()
+        );
+        assert!(
+            test.db
+                .get_by_path("/folder/sibling")
+                .unwrap()
+                .unwrap()
+                .effective_pinned()
+        );
+        test.db.set_explicit_pin("file", true).unwrap();
+        assert!(
+            test.db
+                .get_by_path("/folder/file")
+                .unwrap()
+                .unwrap()
+                .effective_pinned()
+        );
+    }
+
+    #[test]
+    fn folder_release_cancels_nested_pins_and_downloads_but_keeps_dirty_data() {
+        let test = TestDatabase::new("release-pinned-folder");
+        add_dir(&test.db, "parent", "/folder");
+        add_dir(&test.db, "nested", "/folder/nested");
+        add_file(&test.db, "file", "/folder/nested/file");
+        add_file(&test.db, "dirty", "/folder/dirty");
+        add_file(&test.db, "outside", "/folder-other");
+        test.db.set_explicit_pin("parent", true).unwrap();
+        test.db.set_explicit_pin("nested", true).unwrap();
+        test.db.set_explicit_pin("outside", true).unwrap();
+        let generation = test.db.download_generation("file").unwrap();
+        assert!(test.db.begin_hydration("file", generation).unwrap());
+        let cache = test.root.join("dirty");
+        fs::write(&cache, b"save").unwrap();
+        test.db.mark_cached("dirty", &cache).unwrap();
+        test.db.mark_state("dirty", FileState::Dirty).unwrap();
+        assert_eq!(test.db.release_path("/folder").unwrap(), 1);
+        test.db.recompute_pin_inheritance().unwrap();
+        for path in [
+            "/folder",
+            "/folder/nested",
+            "/folder/nested/file",
+            "/folder/dirty",
+        ] {
+            assert!(
+                !test
+                    .db
+                    .get_by_path(path)
+                    .unwrap()
+                    .unwrap()
+                    .effective_pinned()
+            );
+        }
+        assert!(!test.db.begin_hydration("file", generation).unwrap());
+        assert_eq!(test.db.pending_release_count("/folder").unwrap(), 1);
+        assert_eq!(test.db.finish_pending_releases().unwrap(), 0);
+        assert_eq!(fs::read(&cache).unwrap(), b"save");
+        assert!(
+            test.db
+                .get_by_path("/folder-other")
+                .unwrap()
+                .unwrap()
+                .effective_pinned()
+        );
+        test.db.mark_cached("dirty", &cache).unwrap();
+        assert_eq!(test.db.finish_pending_releases().unwrap(), 1);
+        assert!(!cache.exists());
     }
 
     #[test]

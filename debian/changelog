@@ -1,3 +1,11 @@
+twodrive (0.2.7-1) unstable; urgency=medium
+
+  * Make explicit Release space cancel pins on selected files and subtrees.
+  * Preserve upload/open-handle safety and pin protection during automatic pruning.
+  * Keep released children online-only beneath pinned parents.
+
+ -- TwoDrive Developers <noreply@localhost>  Fri, 11 Sep 2026 18:00:00 +0800
+
 twodrive (0.2.6-1) unstable; urgency=medium
 
   * Serialize child synchronization behind pending parent metadata operations.

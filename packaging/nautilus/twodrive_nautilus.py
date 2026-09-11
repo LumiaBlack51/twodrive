@@ -470,7 +470,7 @@ def run_action(action, paths, file_infos):
         if failures:
             summary = f"{summary}; {failures} failed"
         if action == "release" and released_zero == len(paths):
-            summary += "\nNo local cache was removed. Items may already be online-only or pinned."
+            summary += "\nNo local cache was removed. Items may already be online-only."
         body = summary
         if outputs:
             body += "\n\n" + "\n".join(outputs[:12])

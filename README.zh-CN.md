@@ -38,7 +38,7 @@ TwoDrive 是一个面向 **GNOME/Linux、使用 Rust 编写的实验性 OneDrive
 | <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="28" height="28" alt="Cloud"> **仅云端** | 挂载目录中可见，但本地没有缓存内容；读取时需要下载。 |
 | <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-syncing.svg" width="28" height="28" alt="Syncing"> **处理中** | 正在下载、写入、等待上传或上传中；不一定代表此刻正在传输。 |
 | <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-synced.svg" width="28" height="28" alt="Synced"> **本地可用** | 内容已缓存，满足条件时可以释放；不等同于“始终保留”。 |
-| <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-pinned.svg" width="28" height="28" alt="Pinned"> **始终保留** | 固定内容受缓存释放保护；离线使用前仍需确认下载已完成。 |
+| <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-pinned.svg" width="28" height="28" alt="Pinned"> **始终保留** | 自动缓存清理保护固定内容；主动“释放空间”会取消固定。离线使用前仍需确认下载已完成。 |
 | <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-error.svg" width="28" height="28" alt="Error"> **需要处理** | 存在错误或冲突，需要检查，不能视为已完成云端同步。 |
 
 <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="22" height="22" alt="Cloud"> + <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-syncing.svg" width="22" height="22" alt="Syncing"> **等待释放：** 在写入或上传尚未完成时申请了释放空间。必须等上传成功且文件句柄关闭，才会移除本地数据。
