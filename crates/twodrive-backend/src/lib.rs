@@ -956,7 +956,9 @@ struct GraphUploadStatus {
 struct GraphDriveItem {
     id: String,
     name: Option<String>,
-    size: Option<u64>,
+    // OneDrive can report negative aggregate sizes for folders during moves.
+    // Keep the wire number signed-capable; directory metadata ignores it.
+    size: Option<serde_json::Number>,
     #[serde(rename = "lastModifiedDateTime")]
     last_modified: Option<String>,
     #[serde(rename = "eTag")]
@@ -1001,7 +1003,7 @@ impl GraphDriveItem {
             Some(MetadataEntry::new_file(
                 self.id,
                 path,
-                self.size.unwrap_or(0),
+                self.size.map(|size| size.as_u64()).unwrap_or(Some(0))?,
                 modified_unix,
                 etag,
             ))
@@ -1026,7 +1028,7 @@ impl GraphDriveItem {
             Some(MetadataEntry::new_file(
                 self.id,
                 path,
-                self.size.unwrap_or(0),
+                self.size.map(|size| size.as_u64()).unwrap_or(Some(0))?,
                 modified_unix,
                 etag,
             ))
@@ -1516,6 +1518,39 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use tiny_http::{Header, StatusCode};
+
+    #[test]
+    fn delta_accepts_negative_folder_sizes_without_corrupting_file_sizes() {
+        let page: GraphDeltaResponse = serde_json::from_value(serde_json::json!({
+            "value": [
+                {"id":"folder", "name":"moving", "folder":{}, "size":-11644867},
+                {"id":"paper", "name":"paper.pdf", "size":744541},
+                {"id":"deleted", "deleted":{}, "size":-3116084}
+            ],
+            "@odata.deltaLink":"next-delta"
+        }))
+        .unwrap();
+        let mut items = page.value.into_iter();
+        let folder = items.next().unwrap().into_metadata().unwrap();
+        assert!(folder.is_dir);
+        assert_eq!(folder.size, 0);
+        assert_eq!(items.next().unwrap().into_metadata().unwrap().size, 744541);
+        assert!(items.next().unwrap().deleted.is_some());
+        for at_path in [false, true] {
+            let item: GraphDriveItem = serde_json::from_value(serde_json::json!({
+                "id":"invalid", "name":"invalid.pdf", "size":-1
+            }))
+            .unwrap();
+            assert!(
+                if at_path {
+                    item.into_metadata_at_path("/invalid.pdf")
+                } else {
+                    item.into_metadata()
+                }
+                .is_none()
+            );
+        }
+    }
 
     #[test]
     fn unsupported_graph_names_fail_before_network_io() {

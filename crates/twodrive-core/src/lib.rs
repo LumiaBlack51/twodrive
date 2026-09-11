@@ -644,8 +644,14 @@ impl Database {
                 .optional()?
                 .unwrap_or_else(|| entry.remote_id.clone());
             let pending_metadata = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM pending_metadata_operations WHERE local_id = ?1)",
-                params![local_id],
+                "SELECT EXISTS(SELECT 1 FROM pending_metadata_operations op
+                 JOIN files ancestor ON ancestor.remote_id = op.local_id
+                 WHERE op.local_id = ?1
+                    OR ?2 = ancestor.path
+                    OR substr(?2, 1, length(ancestor.path) + 1) = ancestor.path || '/'
+                    OR EXISTS(SELECT 1 FROM files current WHERE current.remote_id = ?1
+                        AND substr(current.path, 1, length(ancestor.path) + 1) = ancestor.path || '/'))",
+                params![local_id, entry.path],
                 |row| row.get::<_, bool>(0),
             )?;
             if pending_metadata {
@@ -779,7 +785,14 @@ impl Database {
             .as_ref()
             .map(|record| record.metadata.remote_id.clone())
             .unwrap_or_else(|| entry.remote_id.clone());
-        if self.pending_metadata_operation(&local_id)?.is_some() {
+        if self.has_pending_metadata_at_or_above(&entry.path)?
+            || self.has_pending_metadata_at_or_above(
+                existing
+                    .as_ref()
+                    .map(|record| record.metadata.path.as_str())
+                    .unwrap_or(&entry.path),
+            )?
+        {
             return Ok(());
         }
         if self.get_by_path(&entry.path)?.is_some_and(|record| {
@@ -875,7 +888,11 @@ impl Database {
             "UPDATE files SET state = 'uploading'
              WHERE remote_id = ?1 AND path = ?2 AND cache_path IS ?3
                AND state = ?4 AND size = ?5 AND modified_unix = ?6
-               AND etag = ?7 AND cloud_remote_id IS ?8",
+               AND etag = ?7 AND cloud_remote_id IS ?8
+               AND NOT EXISTS (SELECT 1 FROM pending_metadata_operations op
+                   JOIN files parent ON parent.remote_id = op.local_id
+                   WHERE ?2 = parent.path
+                      OR substr(?2, 1, length(parent.path) + 1) = parent.path || '/')",
             params![
                 record.metadata.remote_id,
                 record.metadata.path,
@@ -1187,6 +1204,18 @@ impl Database {
             .ok_or_else(|| anyhow::anyhow!("created local directory disappeared"))
     }
 
+    /// Pending operations on this item or its ancestors must settle before
+    /// uploading content at this path. Compare literal path prefixes, not LIKE.
+    pub fn has_pending_metadata_at_or_above(&self, path: &str) -> anyhow::Result<bool> {
+        Ok(self.connect()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending_metadata_operations op
+             JOIN files f ON f.remote_id = op.local_id
+             WHERE ?1 = f.path OR substr(?1, 1, length(f.path) + 1) = f.path || '/')",
+            params![normalize_cloud_path(path)],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn move_subtree_and_queue(&self, local_id: &str, new_path: &str) -> anyhow::Result<()> {
         let record = self
             .get_by_remote_id(local_id)?
@@ -1217,6 +1246,15 @@ impl Database {
                 ],
             )?;
         }
+        // Descendant creates and moves are durable jobs too: replay them at
+        // their new paths after the parent has settled.
+        tx.execute(
+            "UPDATE pending_metadata_operations SET path =
+                (SELECT path FROM files WHERE remote_id = local_id)
+             WHERE local_id IN (SELECT remote_id FROM files
+                WHERE substr(path, 1, length(?1) + 1) = ?1 || '/')",
+            params![new_path],
+        )?;
         if record.cloud_remote_id.is_some() {
             tx.execute(
                 r#"
@@ -2822,6 +2860,73 @@ mod tests {
         assert_eq!(current.metadata.size, 12);
         assert_eq!(current.state, FileState::Uploading);
         assert!(!test.db.begin_upload(&stale).unwrap());
+    }
+
+    #[test]
+    fn parent_move_retargets_jobs_and_protects_children_from_delta() {
+        for batch in [false, true] {
+            let test = TestDatabase::new(if batch {
+                "parent-move-batch"
+            } else {
+                "parent-move-single"
+            });
+            let parent = MetadataEntry::new_dir("folder", "/Old", 1, "dir-etag");
+            let child = MetadataEntry::new_file("child", "/Old/paper.pdf", 12, 1, "etag");
+            test.db.upsert_metadata(&parent).unwrap();
+            test.db.upsert_metadata(&child).unwrap();
+            test.db
+                .create_local_directory("local-upload-sub", "/Old/sub")
+                .unwrap();
+            test.db
+                .move_subtree_and_queue("child", "/Old/renamed.pdf")
+                .unwrap();
+            test.db.move_subtree_and_queue("folder", "/New").unwrap();
+            assert_eq!(
+                test.db
+                    .pending_metadata_operation("local-upload-sub")
+                    .unwrap()
+                    .unwrap()
+                    .path,
+                "/New/sub"
+            );
+            assert_eq!(
+                test.db
+                    .pending_metadata_operation("child")
+                    .unwrap()
+                    .unwrap()
+                    .path,
+                "/New/renamed.pdf"
+            );
+            // Also protect a child with no operation of its own.
+            test.db
+                .complete_metadata_operation("child", "/New/renamed.pdf", &child)
+                .unwrap();
+            if batch {
+                test.db.upsert_metadata_batch([&child]).unwrap();
+            } else {
+                test.db.upsert_metadata(&child).unwrap();
+            }
+            assert_eq!(
+                test.db
+                    .get_by_remote_id("child")
+                    .unwrap()
+                    .unwrap()
+                    .metadata
+                    .path,
+                "/New/renamed.pdf"
+            );
+            assert!(
+                test.db
+                    .has_pending_metadata_at_or_above("/New/renamed.pdf")
+                    .unwrap()
+            );
+            assert!(
+                !test
+                    .db
+                    .has_pending_metadata_at_or_above("/Newish/paper.pdf")
+                    .unwrap()
+            );
+        }
     }
 
     #[test]

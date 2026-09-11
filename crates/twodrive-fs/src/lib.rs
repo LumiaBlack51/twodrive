@@ -203,6 +203,9 @@ fn recover_dirty_record<B: CloudBackend>(
     record: FileRecord,
     on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
+    if db.has_pending_metadata_at_or_above(&record.metadata.path)? {
+        return Ok(false);
+    }
     let Some(cache_path) = record.cache_path.clone().filter(|path| path.exists()) else {
         return Ok(false);
     };
@@ -412,6 +415,13 @@ fn recover_pending_metadata_record<B: CloudBackend>(
     let Some(record) = db.get_by_remote_id(&operation.local_id)? else {
         return Ok(false);
     };
+    // A queued snapshot may predate a local parent rename. Never replay its
+    // old path, or let a child create a destination before the parent moves.
+    if record.metadata.path != operation.path
+        || db.has_pending_metadata_at_or_above(&record.metadata.parent_path)?
+    {
+        return Ok(false);
+    }
     let entry = match operation.kind {
         PendingMetadataKind::CreateFolder => match backend.create_folder(&operation.path) {
             Ok(entry) => entry,
@@ -3971,6 +3981,69 @@ os.close(fd)
             FileState::Dirty | FileState::Uploading | FileState::Cached
         ));
         assert_eq!(fs::metadata(local.cache_path.unwrap()).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn child_sync_waits_for_parent_move_and_rejects_stale_jobs() {
+        let root = test_root("child-sync-parent-move");
+        fs::create_dir_all(&root).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        let backend = MockBackend::new();
+        let parent = backend.create_folder("/Old").unwrap();
+        db.upsert_metadata(&parent).unwrap();
+        db.create_local_directory("local-upload-sub", "/Old/sub")
+            .unwrap();
+        let stale = db
+            .pending_metadata_operation("local-upload-sub")
+            .unwrap()
+            .unwrap();
+        let cache = root.join("paper.cache");
+        fs::write(&cache, b"paper contents").unwrap();
+        db.upsert_metadata(&MetadataEntry::new_file(
+            "local-upload-paper",
+            "/Old/paper.pdf",
+            14,
+            1,
+            "",
+        ))
+        .unwrap();
+        db.mark_cached("local-upload-paper", &cache).unwrap();
+        db.mark_dirty_with_size("local-upload-paper", 14).unwrap();
+        db.move_subtree_and_queue(&parent.remote_id, "/New")
+            .unwrap();
+        let record = db.get_by_remote_id("local-upload-paper").unwrap().unwrap();
+        assert!(!db.begin_upload(&record).unwrap());
+        assert!(!recover_dirty_record(&db, &backend, record.clone(), &mut |_, _| Ok(())).unwrap());
+        assert!(!recover_pending_metadata_record(&db, &backend, &stale).unwrap());
+        let child = db
+            .pending_metadata_operation("local-upload-sub")
+            .unwrap()
+            .unwrap();
+        assert!(!recover_pending_metadata_record(&db, &backend, &child).unwrap());
+        assert!(
+            backend
+                .get_metadata_by_path("/New/paper.pdf")
+                .unwrap()
+                .is_none()
+        );
+        let parent_job = db
+            .pending_metadata_operation(&parent.remote_id)
+            .unwrap()
+            .unwrap();
+        assert!(recover_pending_metadata_record(&db, &backend, &parent_job).unwrap());
+        assert!(recover_pending_metadata_record(&db, &backend, &child).unwrap());
+        assert!(recover_dirty_record(&db, &backend, record, &mut |_, _| Ok(())).unwrap());
+        let uploaded = backend
+            .get_metadata_by_path("/New/paper.pdf")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            backend.download(&uploaded.remote_id).unwrap(),
+            b"paper contents"
+        );
+        assert!(backend.get_metadata_by_path("/Old/sub").unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
