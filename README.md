@@ -6,6 +6,18 @@ Nautilus status emblems and actions, a tray status helper, and power-aware backg
 
 > [中文指南](#中文指南) | [English guide](#english-guide)
 
+## 0.2.6 save and move reliability / 保存与移动可靠性
+
+修复下载完成后空占位文件覆盖内容、PDF 保存时间戳变化及备份式保存的同步竞争。
+父目录移动完成后再同步子文件，并同步更新子目录待办路径；云端负数目录大小不再阻断元数据刷新。
+已有云端同名冲突需要单独处理，本版本不会自动合并或删除冲突目录。
+
+Fixes stale placeholder uploads, PDF save timestamps, and backup-save synchronization races.
+Child uploads and metadata jobs wait for parent moves; queued descendant paths follow local moves.
+Negative Graph directory sizes no longer abort metadata decoding. Existing duplicate cloud folders
+require separate reconciliation. See [move investigation](doc/folder-move-sync-2026-09-11.md)
+and [download completion fix](doc/download-placeholder-race-2026-09-10.md).
+
 ## 0.2.5 release cancels downloads / 释放空间会取消下载
 
 未固定文件正在下载时，选择“释放空间”会取消下载、删除未完成片段，并保持仅云端。
@@ -70,11 +82,11 @@ mode 和目录时间戳语义。
 
 ### 1. 安装 Release 中的 Deb
 
-从 [Releases](../../releases/latest) 下载 `twodrive_0.2.5-1_amd64.deb`，然后执行：
+从 [Releases](../../releases/latest) 下载 `twodrive_0.2.6-1_amd64.deb`，然后执行：
 
 ```bash
 cd ~/Downloads
-sudo apt install ./twodrive_0.2.5-1_amd64.deb
+sudo apt install ./twodrive_0.2.6-1_amd64.deb
 ```
 
 该包适用于 amd64 的 Ubuntu/Zorin OS GNOME 环境，并会安装 CLI、daemon、托盘辅助程序、设置程序、
@@ -204,11 +216,11 @@ preserve full POSIX uid/gid/mode or directory timestamp semantics.
 
 ### 1. Install the Deb release
 
-Download `twodrive_0.2.5-1_amd64.deb` from [Releases](../../releases/latest), then run:
+Download `twodrive_0.2.6-1_amd64.deb` from [Releases](../../releases/latest), then run:
 
 ```bash
 cd ~/Downloads
-sudo apt install ./twodrive_0.2.5-1_amd64.deb
+sudo apt install ./twodrive_0.2.6-1_amd64.deb
 ```
 
 The package targets amd64 Ubuntu/Zorin OS GNOME systems and includes the CLI, daemon, tray helper,

@@ -1,3 +1,13 @@
+twodrive (0.2.6-1) unstable; urgency=medium
+
+  * Serialize child synchronization behind pending parent metadata operations.
+  * Retarget descendant jobs and protect moved subtrees from stale delta updates.
+  * Accept negative Graph directory sizes without aborting metadata pages.
+  * Preserve completed downloads against stale placeholder upload acknowledgements.
+  * Fix PDF save timestamps and backup-save cloud move/delete races.
+
+ -- TwoDrive Developers <noreply@localhost>  Fri, 11 Sep 2026 15:20:00 +0800
+
 twodrive (0.2.5-1) unstable; urgency=medium
 
   * Cancel active downloads on Release space and discard partial download files.
