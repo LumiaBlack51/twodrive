@@ -47,4 +47,4 @@ gzip -n -9 -c "$project_root/debian/changelog" \
 
 install -d "$project_root/dist"
 dpkg-deb --build --root-owner-group "$package_root" \
-    "$project_root/dist/twodrive_0.2.7-1_amd64.deb"
+    "$project_root/dist/twodrive_0.2.7-2_amd64.deb"

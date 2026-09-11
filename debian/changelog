@@ -1,3 +1,11 @@
+twodrive (0.2.7-2) unstable; urgency=medium
+
+  * Fix intermittent Nautilus status emblems caused by invalid async handles.
+  * Apply cached emblems synchronously and batch background state reads.
+  * Add regressions for first visits, refreshes, and cloud/local state changes.
+
+ -- TwoDrive Developers <noreply@localhost>  Fri, 11 Sep 2026 23:23:37 +0800
+
 twodrive (0.2.7-1) unstable; urgency=medium
 
   * Make explicit Release space cancel pins on selected files and subtrees.
