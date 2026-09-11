@@ -1,379 +1,71 @@
-# TwoDrive
+<p align="center">
+  <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="72" height="72" alt="TwoDrive cloud status emblem">
+</p>
+<h1 align="center">TwoDrive</h1>
+<p align="center"><strong>OneDrive Files On-Demand, in GNOME Files.</strong></p>
+<p align="center">
+  English · <a href="README.zh-CN.md">简体中文</a>
+</p>
+<p align="center">
+  <a href="doc/getting-started.md"><strong>Get started</strong></a> ·
+  <a href="https://github.com/LumiaBlack51/twodrive/releases/latest">Download</a> ·
+  <a href="doc/README.md">Documentation</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-TwoDrive is an experimental Linux OneDrive Files-On-Demand client for GNOME, written in Rust.
-It provides a read/write FUSE mount, on-demand downloads, local caching, Microsoft Graph sync,
-Nautilus status emblems and actions, a tray status helper, and power-aware background operation.
+TwoDrive is an **experimental Rust OneDrive client for GNOME/Linux**. Browse your cloud files in Nautilus without downloading the whole drive. Open what you need, keep selected files locally, and release cached content when you need the space. A read/write FUSE mount connects your applications to a local cache and background Microsoft Graph synchronization.
 
-> [中文指南](#中文指南) | [English guide](#english-guide)
+<p align="center">
+  <img src="doc/assets/tray-menu.png" width="520" alt="Real TwoDrive tray menu at idle, with the local token-file path redacted">
+  <br>
+  <sub>The real tray menu at idle. The local path has been redacted.</sub>
+</p>
 
-## 0.2.6 save and move reliability / 保存与移动可靠性
+## Your files, with a local-first workflow
 
-修复下载完成后空占位文件覆盖内容、PDF 保存时间戳变化及备份式保存的同步竞争。
-父目录移动完成后再同步子文件，并同步更新子目录待办路径；云端负数目录大小不再阻断元数据刷新。
-已有云端同名冲突需要单独处理，本版本不会自动合并或删除冲突目录。
+| In GNOME Files | Behind the scenes |
+| --- | --- |
+| **Browse first, download on demand.** Cloud placeholders expose names, sizes, and folders; reading a file fetches its content. | **Save locally, sync in the background.** Create, edit, rename, move, and delete through the mount. Pending changes are recorded locally for retry. |
+| **Choose what stays.** Use **Always keep on this device** and **Release space** from the right-click menu. | **Keep transfers visible.** Nautilus emblems show file state; the tray lists active uploads/downloads and byte progress. |
+| **Use familiar desktop entry points.** Open the mount from the tray and inspect paths and cache usage in the read-only Settings window. | **Recover interrupted work.** Durable queues and resumable large-file uploads separate a successful local save from cloud completion. |
 
-Fixes stale placeholder uploads, PDF save timestamps, and backup-save synchronization races.
-Child uploads and metadata jobs wait for parent moves; queued descendant paths follow local moves.
-Negative Graph directory sizes no longer abort metadata decoding. Existing duplicate cloud folders
-require separate reconciliation. See [move investigation](doc/folder-move-sync-2026-09-11.md)
-and [download completion fix](doc/download-placeholder-race-2026-09-10.md).
+The default mount is `~/TwoDrive/OneDrive`. [Everyday use and desktop controls →](doc/usage.md)
 
-## 0.2.5 release cancels downloads / 释放空间会取消下载
+## Files On-Demand, at a glance
 
-未固定文件正在下载时，选择“释放空间”会取消下载、删除未完成片段，并保持仅云端。
-对文件夹操作会取消其范围内的下载；旧句柄不会自动重启已取消的下载，主动重新打开文件可以重新下载。
-正常传输时每 100 毫秒检查取消；如果网络请求阻塞，则在当前请求返回或超时后退出，不继续重试。
-上传仍按原规则处理：保留未上传数据，上传成功后才释放。“始终保留”的固定保护不变，需先取消固定。
+| State | Meaning |
+| --- | --- |
+| <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="28" height="28" alt="Cloud"> **Online-only** | Visible in the mount; content is not cached locally. Reading it requires a download. |
+| <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-syncing.svg" width="28" height="28" alt="Syncing"> **In progress** | Downloading, being written, waiting to upload, or uploading—not necessarily an active network transfer. |
+| <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-synced.svg" width="28" height="28" alt="Synced"> **Available locally** | Cached content is available locally and can be released when eligible. This is not an Always Keep policy. |
+| <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-pinned.svg" width="28" height="28" alt="Pinned"> **Always keep** | Pinned content is protected from cache release. Confirm its download has finished before relying on it offline. |
+| <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-error.svg" width="28" height="28" alt="Error"> **Needs attention** | An error or conflict needs inspection. Do not assume cloud synchronization has completed. |
 
-Release space cancels downloads of unpinned files and removes partial data. Folder releases include
-descendants. Old handles cannot restart a cancelled transfer; an explicit new open can download again.
-Checks occur every 100 ms during transfer/backoff. An already-blocked request must return or time out
-before cancellation completes. Uploads retain their deferred-release protection.
-See [cancellation and verification details](doc/download-cancellation-2026-09-08.md).
+<img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="22" height="22" alt="Cloud"> + <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-syncing.svg" width="22" height="22" alt="Syncing"> **Release pending:** a release was requested while changes were still being written or uploaded. Local data stays until upload succeeds and open handles close.
 
-## 0.2.4 directory browsing / 目录浏览修复
+Folder emblems summarize descendants; they do not prove that every file is cached. Newly discovered cloud files remain online-only, including beneath an already pinned folder. [Pinning and release semantics →](doc/usage.md#keep-or-release-content)
 
-浏览包含 `.part.02` 等未知扩展名大文件的目录时，Nautilus/GIO 的文件类型探测不再触发
-整个文件下载。名称、大小、目录结构等使用已有 SQLite 元数据；不会为了列目录预取内容。
-当前约 16,000 个条目的实测元数据数据库约 15 MB，不增加新的文件头或内容缓存。
-未知格式可能显示通用文件图标；主动打开、复制文件仍正常下载。
+## Get started
 
-上传过程中选择“释放空间”，会显示**云朵＋同步**两个标记。上传成功并安全释放缓存后，
-变为单独云朵。父目录也会汇总显示该状态；上传失败/冲突不会伪装成已完成。
-未上传完成的数据仍必须保留，直到云端确认成功，避免提前释放造成数据丢失。
+**Install → Register your Microsoft app → Sign in and mount.**
 
-Nautilus/GIO MIME probes no longer hydrate cloud-only files. Directory browsing uses the existing
-SQLite metadata; it does not create a content or header prefetch cache. Unknown formats may use a
-generic icon until opened. Explicit reads and copies still download normally. Deferred releases show
-both cloud and syncing emblems, changing to cloud-only after upload and safe cache removal.
+Download the **amd64 `.deb` and checksum** from [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest). The package targets Ubuntu/Zorin OS with GNOME and includes the daemon, CLI, Nautilus extension, tray, and Settings helper.
 
-See [root cause, verification and upgrade notes](doc/directory-browsing-2026-09-08.md).
+Follow the [installation and sign-in guide](doc/getting-started.md) for Microsoft Entra/Azure app registration, Graph permissions, and service setup. Authentication uses OAuth 2.0 + PKCE: **bring your own client ID; no client secret**. For other Linux setups, see [building from source](CONTRIBUTING.md#build-and-check).
 
-## 0.2.3 reliability update / 稳定性更新
+## Before trusting it with your files
 
-启动时先从本地元数据挂载，再在后台恢复上传和同步；浏览目录不再等待云端下载。
-Nautilus 的状态查询在后台执行。上传遇到临时断网会保留原上传会话并自动重试。
-Downloads/Pictures 备份保持只上传、不额外缓存，本地删除不删除云端备份。
+> [!WARNING]
+> TwoDrive is experimental. Keep independent backups of important files. **Deleting inside the mount also deletes the cloud item; Release space does not.** A successful local save is not confirmation of a completed cloud upload.
 
-The mount becomes available before network recovery. Directory snapshots and background reads
-keep browsing responsive during transfers; transient network failures preserve resumable sessions.
-Known-folder backups retry without duplicating local data or propagating local deletions.
-See [verification and recovery details](doc/responsiveness-recovery-2026-09-08.md).
+Tokens are stored in a local JSON file with mode `0600`, not an encrypted keyring; Secret Service is not integrated. Full POSIX ownership, permissions, and directory timestamp semantics are not preserved.
 
-## 中文指南
+The desktop helpers are still limited: **Settings is read-only**, and **Pause sync currently changes the tray display only**, not the daemon. See [current limitations and safety](doc/usage.md#current-limitations-and-safety) before use.
 
-### 功能与安全边界
+## Development
 
-- 默认挂载到 `~/TwoDrive/OneDrive`，目录项先显示，文件在打开时才下载。
-- 支持本地新建、修改、移动和删除；默认并发上传 4 个文件，失败任务持久化等待重试。
-- 文件系统修改采用本地优先语义：保存、建目录、重命名和删除先提交到本地缓存与 SQLite，
-  随后由后台队列更新 OneDrive。网络故障不会反向造成编辑器保存失败。
-- 支持“始终保留在此设备上”和“释放空间”。本地新增文件可继承固定目录策略；云端新发现的
-  文件默认保持仅云端，不会自动下载。
-- 大于 10 MiB 的文件使用 Microsoft Graph upload session 分片上传，并持久化会话以便重启后
-  从服务端确认的偏移继续。
-- FUSE 挂载会报告缓存磁盘的真实可用空间，支持文件管理器和解压工具的容量预检。
-- ETag 冲突时保留两份：云端新版本保留原名，本地修改保存为 `TwoDrive conflict` 副本。
-- TwoDrive 是 public desktop client，使用 OAuth2 Authorization Code + PKCE，不需要也不应创建 `client_secret`。
-- OAuth token 存放在 `~/.config/twodrive/tokens.json`，权限为 `0600`。当前尚未接入 Secret Service。
+Contributions, reproducible bug reports, and documentation improvements are welcome. Start with [CONTRIBUTING](CONTRIBUTING.md) for the Rust workspace, test commands, and an isolated mock backend that does not touch your real OneDrive. [Release history](CHANGELOG.md) and [engineering notes](doc/README.md#engineering-notes) live outside this overview.
 
-TwoDrive 仍是实验性软件。重要文件应另有备份；OneDrive 不保存完整的 POSIX uid/gid/
-mode 和目录时间戳语义。
+[MIT license](LICENSE). An independent project, not an official Microsoft client.
 
-### 1. 安装 Release 中的 Deb
-
-从 [Releases](../../releases/latest) 下载 `twodrive_0.2.6-1_amd64.deb`，然后执行：
-
-```bash
-cd ~/Downloads
-sudo apt install ./twodrive_0.2.6-1_amd64.deb
-```
-
-该包适用于 amd64 的 Ubuntu/Zorin OS GNOME 环境，并会安装 CLI、daemon、托盘辅助程序、设置程序、
-systemd 用户服务和 Nautilus 扩展。
-
-### 2. 创建 Azure App Registration
-
-1. 在 Microsoft Entra 管理中心创建 App Registration。
-2. 账户类型选择“任何组织目录中的账户和个人 Microsoft 账户”。
-3. 在 Authentication 中添加“移动和桌面应用程序”重定向 URI：`http://localhost:53682`。
-4. 添加 Microsoft Graph 委托权限：`Files.ReadWrite`、`User.Read`、`offline_access`、`openid`、`profile`。
-5. 记录 Application (client) ID。不要创建 client secret。
-
-### 3. 配置与登录
-
-先生成本地配置：
-
-```bash
-twodrive status
-```
-
-编辑 `~/.config/twodrive/config.toml`，至少替换 `client_id`：
-
-```toml
-[graph]
-client_id = "YOUR_AZURE_APP_CLIENT_ID"
-tenant = "common"
-redirect_uri = "http://localhost:53682"
-scopes = ["Files.ReadWrite", "User.Read", "offline_access", "openid", "profile"]
-```
-
-这是本地配置，不要将其或 `tokens.json` 提交到仓库。然后登录：
-
-```bash
-twodrive login
-```
-
-浏览器授权成功后，启用后台挂载：
-
-```bash
-systemctl --user enable --now twodrive-daemon.service
-nautilus -q
-```
-
-验证：
-
-```bash
-twodrive status
-systemctl --user status twodrive-daemon.service
-mountpoint ~/TwoDrive/OneDrive
-```
-
-### 4. 日常使用
-
-```bash
-# 只同步云端元数据，不主动下载文件内容
-twodrive sync
-
-# 始终保留文件或目录
-twodrive pin /Documents/report.pdf
-twodrive pin /Courses
-
-# 取消该项目的显式固定策略
-twodrive unpin /Documents/report.pdf
-
-# 仅删除可释放的本地缓存，不删除云端文件
-twodrive release /Documents/report.pdf
-
-# 按保留期限清理未固定缓存
-twodrive cache prune
-```
-
-在 Nautilus 中也可使用右键菜单“Release space”和“Always keep on this device”。直接删除
-`~/TwoDrive/OneDrive` 中的文件会同时删除云端文件；“释放空间”只删除本地缓存，两者语义不同。
-
-### 5. 路径和故障排查
-
-- 挂载：`~/TwoDrive/OneDrive`
-- 配置：`~/.config/twodrive/config.toml`
-- Token：`~/.config/twodrive/tokens.json`
-- 数据库：`~/.local/share/twodrive/twodrive.sqlite3`
-- 缓存：`~/.local/share/twodrive/cache`
-
-```bash
-journalctl --user -u twodrive-daemon.service -f
-systemctl --user restart twodrive-daemon.service
-fusermount3 -u ~/TwoDrive/OneDrive
-```
-
-登录失败时，优先检查 Azure 中的平台类型、redirect URI、账户类型和 Graph 委托权限是否与本地
-配置完全一致。
-
-### 6. 卸载
-
-```bash
-systemctl --user disable --now twodrive-daemon.service
-sudo apt remove twodrive
-```
-
-卸载软件包不会自动删除你的 token、数据库和缓存。
-
-## English Guide
-
-### Features and safety boundaries
-
-- Mounts at `~/TwoDrive/OneDrive` by default. Metadata is shown first; file content is downloaded
-  when an application opens the file.
-- Supports local create, edit, move, and delete with four concurrent uploads by default. Failed jobs
-  remain in durable retry queues.
-- Filesystem mutations are local-first: save, mkdir, rename, and delete commit to the local cache and
-  SQLite before background workers update OneDrive. A network outage does not turn a durable local
-  editor save into an application error.
-- Supports Always Keep and Release Space. Locally created descendants can inherit a pinned directory
-  policy; newly discovered cloud files stay online-only until opened or explicitly pinned.
-- Files larger than 10 MiB use Microsoft Graph upload sessions. Session URLs and source identity are
-  persisted so restart recovery resumes from the offset confirmed by the service.
-- The FUSE mount reports real backing-store capacity for file-manager and archive-tool preflight checks.
-- ETag conflicts preserve both versions: the cloud winner keeps the original name and the local edit
-  is uploaded as a stable `TwoDrive conflict` copy.
-- TwoDrive is a public desktop client using OAuth2 Authorization Code + PKCE. Do not create a
-  `client_secret`.
-- OAuth tokens are stored in `~/.config/twodrive/tokens.json` with mode `0600`. Secret Service is not
-  integrated yet.
-
-TwoDrive is still experimental. Keep independent backups of important data. OneDrive does not
-preserve full POSIX uid/gid/mode or directory timestamp semantics.
-
-### 1. Install the Deb release
-
-Download `twodrive_0.2.6-1_amd64.deb` from [Releases](../../releases/latest), then run:
-
-```bash
-cd ~/Downloads
-sudo apt install ./twodrive_0.2.6-1_amd64.deb
-```
-
-The package targets amd64 Ubuntu/Zorin OS GNOME systems and includes the CLI, daemon, tray helper,
-settings app, systemd user unit, Nautilus extension, and emblems.
-
-### 2. Create an Azure App Registration
-
-1. Create an App Registration in the Microsoft Entra admin center.
-2. Select accounts in any organizational directory and personal Microsoft accounts.
-3. Under Authentication, add the Mobile and desktop applications redirect URI
-   `http://localhost:53682`.
-4. Add delegated Microsoft Graph permissions: `Files.ReadWrite`, `User.Read`, `offline_access`,
-   `openid`, and `profile`.
-5. Record the Application (client) ID. Do not create a client secret.
-
-### 3. Configure and sign in
-
-Generate the local configuration:
-
-```bash
-twodrive status
-```
-
-Edit `~/.config/twodrive/config.toml` and replace at least the client ID:
-
-```toml
-[graph]
-client_id = "YOUR_AZURE_APP_CLIENT_ID"
-tenant = "common"
-redirect_uri = "http://localhost:53682"
-scopes = ["Files.ReadWrite", "User.Read", "offline_access", "openid", "profile"]
-```
-
-This is local configuration. Never commit it or `tokens.json`. Sign in and start the daemon:
-
-```bash
-twodrive login
-systemctl --user enable --now twodrive-daemon.service
-nautilus -q
-```
-
-Verify the installation:
-
-```bash
-twodrive status
-systemctl --user status twodrive-daemon.service
-mountpoint ~/TwoDrive/OneDrive
-```
-
-### 4. Daily use
-
-```bash
-# Metadata-only sync; does not proactively download file contents
-twodrive sync
-
-# Always keep a file or directory locally
-twodrive pin /Documents/report.pdf
-twodrive pin /Courses
-
-# Remove this item's explicit pin policy
-twodrive unpin /Documents/report.pdf
-
-# Delete releasable local cache only; does not delete the cloud file
-twodrive release /Documents/report.pdf
-
-# Prune old unpinned cache according to config retention
-twodrive cache prune
-```
-
-Nautilus also provides Release space and Always keep on this device actions. Deleting a file inside
-`~/TwoDrive/OneDrive` deletes both its local view and cloud item. Release space only removes eligible
-local cache; these actions intentionally have different semantics. Release requests made while a file
-is syncing are persisted in SQLite. The local cache is removed after a successful upload and after
-open file handles close; failed/conflicting uploads retain their local contents. Pinned items stay
-local, and choosing Always keep on this device cancels an outstanding release request.
-
-Folder syncing emblems reflect syncing descendant files, rather than a stale state on the folder.
-OneDrive rejects file names containing `" * : < > ? \ |`; these uploads show an error while preserving
-local content. Rename an unsupported character (for example `:` to `：`) to retry a local-only file.
-
-Nautilus provides **Copy path** for all local files and folders, including items outside TwoDrive.
-It copies the absolute path including the selected item's own name; multiple paths are separated by
-newlines. Clipboard paths are plain text without quotes. Add shell quoting when using a path in a
-terminal command (especially if it contains spaces or shell metacharacters).
-
-### 5. Paths and troubleshooting
-
-- Mount: `~/TwoDrive/OneDrive`
-- Config: `~/.config/twodrive/config.toml`
-- Token: `~/.config/twodrive/tokens.json`
-- Database: `~/.local/share/twodrive/twodrive.sqlite3`
-- Cache: `~/.local/share/twodrive/cache`
-
-```bash
-journalctl --user -u twodrive-daemon.service -f
-systemctl --user restart twodrive-daemon.service
-fusermount3 -u ~/TwoDrive/OneDrive
-```
-
-For login failures, first verify that the Azure platform type, redirect URI, supported account type,
-and delegated Graph permissions exactly match the local configuration.
-
-### 6. Uninstall
-
-```bash
-systemctl --user disable --now twodrive-daemon.service
-sudo apt remove twodrive
-```
-
-Removing the package does not automatically delete your token, database, or cache.
-
-## Build From Source
-
-Install build/runtime prerequisites and build the workspace:
-
-```bash
-sudo apt install cargo rustc fuse3 sqlite3 python3-gi gir1.2-gtk-3.0 \
-  gir1.2-gtk-4.0 gir1.2-ayatanaappindicator3-0.1 python3-nautilus
-cargo build --workspace
-```
-
-Run the full validation gates:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-Build the Deb package with `scripts/build-deb.sh`. For isolated local testing, use the mock backend
-with temporary `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `TWODRIVE_MOUNT_DIR` values so the real token,
-database, cache, and mount remain untouched.
-
-## Architecture and recovery notes
-
-- `twodrive-core`: configuration, SQLite metadata/state, pin policy, and durable recovery records.
-- `twodrive-backend`: Microsoft Graph, OAuth2 PKCE, delta, download, upload sessions, and retry logic.
-- `twodrive-fs`: FUSE operations, hydration, durable writes, upload recovery, and POSIX compatibility.
-- `twodrive-cli`: user commands and desktop integration helpers.
-- `twodrive-daemon`: background mount, known-folder upload-only watcher, and power policy.
-
-`write`, `flush`, `fsync`, path-based `truncate`, `mkdir`, `rename`, and `unlink` commit locally before
-success. A separate `writing` state prevents a crash from uploading a half-written generation.
-Locally created records keep a stable local identity for their whole lifetime; the OneDrive item ID
-is bound separately after upload, so a fast close/reopen cannot race with identity replacement.
-
-Closed `dirty` or `uploading` records replay concurrently after restart. Folder creation and moves
-use `pending_metadata_operations`, while deletes use `pending_deletes`; both queues survive restart.
-Operations for one item are serialized, and remote delta metadata cannot overwrite a pending local
-move or changing content generation. Large uploads resume their persisted Graph session. A successful
-application save means the local generation is durable; cloud completion, retry, conflict, or error is
-reported as separate synchronization state.
-
-## License
-
-[MIT](LICENSE)
+<sub>Desktop launchers and the idle tray use your icon theme’s <code>folder-cloud</code>. The cloud above is the existing TwoDrive status emblem, not a new application logo. <a href="doc/assets/README.md">Asset provenance</a> · <a href="https://github.com/LumiaBlack51/twodrive/tree/main/doc">Online documentation</a>.</sub>
