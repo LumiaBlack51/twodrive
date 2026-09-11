@@ -31,7 +31,20 @@ TwoDrive 是一个面向 **GNOME/Linux、使用 Rust 编写的实验性 OneDrive
 
 默认挂载位置是 `~/TwoDrive/OneDrive`。[日常使用与桌面操作 →](doc/usage.zh-CN.md)
 
-## 一眼看懂文件状态
+## 文件管理器集成
+
+在 Nautilus 中直接查看文件状态，通过右键菜单管理云端文件。
+
+### 一眼看懂文件状态
+
+<p align="center">
+  <img src="doc/assets/nautilus-file-status.png" width="960" alt="Nautilus 文件夹中的 TwoDrive 状态标记：蓝色云朵、紫色图钉、橙色处理中和绿色本地可用">
+  <br>
+  <sub>仅云端、始终保留、处理中与本地可用，在同一文件夹中清晰呈现。</sub>
+</p>
+
+<details>
+<summary><strong>展开查看各状态标记的含义</strong></summary>
 
 | 状态 | 含义 |
 | --- | --- |
@@ -44,6 +57,20 @@ TwoDrive 是一个面向 **GNOME/Linux、使用 Rust 编写的实验性 OneDrive
 <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="22" height="22" alt="Cloud"> + <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-syncing.svg" width="22" height="22" alt="Syncing"> **等待释放：** 在写入或上传尚未完成时申请了释放空间。必须等上传成功且文件句柄关闭，才会移除本地数据。
 
 文件夹标记汇总子项状态，并不意味着所有文件都已缓存。即使父目录已经固定，新发现的云端文件仍默认保持仅云端。[固定与释放的具体语义 →](doc/usage.zh-CN.md#固定与释放内容)
+
+</details>
+
+### 右键即可管理
+
+将选定内容保留在本机，释放缓存而不删除云端文件，或查看当前状态，无需离开文件管理器。
+
+<p align="center">
+  <img src="doc/assets/nautilus-context-menu.png" width="460" alt="Nautilus 中选中文件后的 TwoDrive 右键菜单，包含复制路径、释放空间、始终保留、取消始终保留、立即同步和查看状态">
+  <br>
+  <sub>本地保留、同步与状态查看，直接从原生右键菜单操作。</sub>
+</p>
+
+[查看完整桌面操作说明 →](doc/usage.zh-CN.md#固定与释放内容)
 
 ## 开始使用
 
@@ -67,5 +94,3 @@ TwoDrive 是一个面向 **GNOME/Linux、使用 Rust 编写的实验性 OneDrive
 欢迎提交可复现的问题、代码和文档改进。[贡献指南（英文）](CONTRIBUTING.md)介绍了 Rust 工作区、测试命令，以及不会触碰真实 OneDrive 的隔离 mock 环境。[版本历史](CHANGELOG.zh-CN.md)和[工程记录](doc/README.md#engineering-notes)单独维护，不再占据项目首页。
 
 采用 [MIT 许可证](LICENSE)。这是独立项目，并非 Microsoft 官方客户端。
-
-<sub>桌面入口和空闲托盘使用当前图标主题提供的 <code>folder-cloud</code>。页首云朵复用 TwoDrive 已有状态图标，并非新设计的应用 Logo。<a href="doc/assets/README.md">图片与图标来源</a> · <a href="https://github.com/LumiaBlack51/twodrive/tree/main/doc">在线文档</a>。</sub>

@@ -31,7 +31,20 @@ TwoDrive is an **experimental Rust OneDrive client for GNOME/Linux**. Browse you
 
 The default mount is `~/TwoDrive/OneDrive`. [Everyday use and desktop controls →](doc/usage.md)
 
-## Files On-Demand, at a glance
+## File manager integration
+
+See file status at a glance and manage cloud files directly in Nautilus.
+
+### Files On-Demand, at a glance
+
+<p align="center">
+  <img src="doc/assets/nautilus-file-status.png" width="960" alt="Nautilus folder showing TwoDrive's blue cloud, purple pin, orange in-progress and green locally available status emblems">
+  <br>
+  <sub>Online-only, always kept, in progress, and locally available — in the same folder.</sub>
+</p>
+
+<details>
+<summary><strong>What each status indicator means</strong></summary>
 
 | State | Meaning |
 | --- | --- |
@@ -44,6 +57,20 @@ The default mount is `~/TwoDrive/OneDrive`. [Everyday use and desktop controls �
 <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="22" height="22" alt="Cloud"> + <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-syncing.svg" width="22" height="22" alt="Syncing"> **Release pending:** a release was requested while changes were still being written or uploaded. Local data stays until upload succeeds and open handles close.
 
 Folder emblems summarize descendants; they do not prove that every file is cached. Newly discovered cloud files remain online-only, including beneath an already pinned folder. [Pinning and release semantics →](doc/usage.md#keep-or-release-content)
+
+</details>
+
+### Manage files with a right-click
+
+Keep selected content on your device, release its cache without deleting the cloud file, or check its status — without leaving the file manager.
+
+<p align="center">
+  <img src="doc/assets/nautilus-context-menu.png" width="460" alt="A selected file in Nautilus with TwoDrive context-menu actions: Copy path, Release space, Always keep on this device, Cancel always keep on this device, Sync now and View status">
+  <br>
+  <sub>Local availability, synchronization, and status controls in the native context menu.</sub>
+</p>
+
+[Explore the desktop controls →](doc/usage.md#keep-or-release-content)
 
 ## Get started
 
@@ -67,5 +94,3 @@ The desktop helpers are still limited: **Settings is read-only**, and **Pause sy
 Contributions, reproducible bug reports, and documentation improvements are welcome. Start with [CONTRIBUTING](CONTRIBUTING.md) for the Rust workspace, test commands, and an isolated mock backend that does not touch your real OneDrive. [Release history](CHANGELOG.md) and [engineering notes](doc/README.md#engineering-notes) live outside this overview.
 
 [MIT license](LICENSE). An independent project, not an official Microsoft client.
-
-<sub>Desktop launchers and the idle tray use your icon theme’s <code>folder-cloud</code>. The cloud above is the existing TwoDrive status emblem, not a new application logo. <a href="doc/assets/README.md">Asset provenance</a> · <a href="https://github.com/LumiaBlack51/twodrive/tree/main/doc">Online documentation</a>.</sub>
