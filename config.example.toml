@@ -1,5 +1,6 @@
 [graph]
-client_id = "YOUR_AZURE_APP_CLIENT_ID"
+# Shared TwoDrive public application; override only for a custom registration.
+client_id = "178705ac-2286-441b-9652-1a4d86be2c51"
 tenant = "common"
 redirect_uri = "http://localhost:53682"
 scopes = [

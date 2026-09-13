@@ -74,11 +74,11 @@ TwoDrive 是一个面向 **GNOME/Linux、使用 Rust 编写的实验性 OneDrive
 
 ## 开始使用
 
-**安装 → 注册 Microsoft 应用 → 登录并挂载。**
+**安装 → 登录 → 挂载。**
 
 从 [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest) 下载 **amd64 `.deb` 安装包及校验文件**。软件包面向 Ubuntu/Zorin OS 的 GNOME 环境，包含后台服务、CLI、Nautilus 扩展、托盘和 Settings 辅助程序。
 
-按照[安装与登录指南](doc/getting-started.zh-CN.md)完成 Microsoft Entra/Azure 应用注册、Graph 权限配置和服务启动。登录使用 OAuth 2.0 + PKCE：**需要自己的 client ID，不需要 client secret**。其他 Linux 环境可参考[源码构建指南（英文）](CONTRIBUTING.md#build-and-check)。
+从 0.2.8 起，TwoDrive 内置公共 Microsoft 应用 ID：**无需自行注册应用，也不需要 client secret**。按照[安装与登录指南](doc/getting-started.zh-CN.md)，通过 OAuth 2.0 + PKCE 授权自己的账户并启动服务。组织策略可能要求管理员批准。其他 Linux 环境可参考[源码构建指南（英文）](CONTRIBUTING.md#build-and-check)。
 
 ## 使用重要文件之前
 

@@ -6,7 +6,7 @@ Start with installation, then read the everyday-use guide before trusting the mo
 
 | Guide / 指南 | English | 简体中文 |
 | --- | --- | --- |
-| Install, register an app, sign in / 安装、应用注册与登录 | [Get started](getting-started.md) | [开始使用](getting-started.zh-CN.md) |
+| Install and sign in / 安装与登录 | [Get started](getting-started.md) | [开始使用](getting-started.zh-CN.md) |
 | Files On-Demand, desktop controls, safety / 按需文件、桌面操作与安全 | [Everyday use](usage.md) | [日常使用](usage.zh-CN.md) |
 | Release history / 版本历史 | [Changelog](../CHANGELOG.md) | [版本历史](../CHANGELOG.zh-CN.md) |
 

@@ -246,6 +246,7 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GraphConfig {
+    #[serde(deserialize_with = "deserialize_client_id")]
     pub client_id: String,
     pub tenant: String,
     pub redirect_uri: String,
@@ -290,10 +291,25 @@ pub struct KnownFolderConfig {
     pub remote: String,
 }
 
+// Public desktop application identifier, not a client secret.
+pub const DEFAULT_GRAPH_CLIENT_ID: &str = "178705ac-2286-441b-9652-1a4d86be2c51";
+
+fn deserialize_client_id<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(match value.trim() {
+        "" | "PASTE_AZURE_APP_CLIENT_ID_HERE" | "YOUR_AZURE_APP_CLIENT_ID" => {
+            DEFAULT_GRAPH_CLIENT_ID.to_string()
+        }
+        _ => value,
+    })
+}
+
 impl Default for GraphConfig {
     fn default() -> Self {
         Self {
-            client_id: "PASTE_AZURE_APP_CLIENT_ID_HERE".to_string(),
+            client_id: DEFAULT_GRAPH_CLIENT_ID.to_string(),
             tenant: "common".to_string(),
             redirect_uri: "http://localhost:53682".to_string(),
             scopes: vec![
@@ -2099,6 +2115,46 @@ pub fn parse_duration_seconds(value: &str) -> anyhow::Result<i64> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn graph_login_defaults_and_legacy_configs_use_shared_app() {
+        let default = Config::default();
+        assert_eq!(default.graph.client_id, DEFAULT_GRAPH_CLIENT_ID);
+        default.validate_graph_login().unwrap();
+        for input in [
+            "",
+            "[graph]",
+            "[graph]\nclient_id = \"\"",
+            "[graph]\nclient_id = \"PASTE_AZURE_APP_CLIENT_ID_HERE\"",
+            "[graph]\nclient_id = \"YOUR_AZURE_APP_CLIENT_ID\"",
+        ] {
+            let config: Config = toml::from_str(input).unwrap();
+            assert_eq!(config.graph.client_id, DEFAULT_GRAPH_CLIENT_ID);
+            config.validate_graph_login().unwrap();
+        }
+    }
+
+    #[test]
+    fn graph_custom_registration_survives_config_round_trip() {
+        let config: Config = toml::from_str(
+            r#"
+            [graph]
+            client_id = "11111111-2222-3333-4444-555555555555"
+            tenant = "organizations"
+            redirect_uri = "http://localhost:54321"
+            scopes = ["Files.ReadWrite"]
+        "#,
+        )
+        .unwrap();
+        let loaded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(
+            loaded.graph.client_id,
+            "11111111-2222-3333-4444-555555555555"
+        );
+        assert_eq!(loaded.graph.tenant, "organizations");
+        assert_eq!(loaded.graph.redirect_uri, "http://localhost:54321");
+        assert_eq!(loaded.graph.scopes, ["Files.ReadWrite"]);
+    }
 
     struct TestDatabase {
         db: Database,

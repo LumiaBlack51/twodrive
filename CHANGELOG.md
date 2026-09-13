@@ -4,6 +4,10 @@
 
 User-facing highlights moved from the former README. Releases hold published assets and verification notes; [debian/changelog](debian/changelog) retains package history. These entries describe changes at release time, not fresh test results or a guarantee of current behavior.
 
+## 0.2.8 — Sign in without app registration
+
+TwoDrive now includes its public Microsoft application ID. New users can sign in directly; missing, blank, and legacy placeholder IDs use the built-in application on load. Custom registrations remain supported. Organization consent policies may still require administrator approval.
+
 ## 0.2.7 — Release pinned content
 
 Release space now cancels explicit and inherited pins for the selected file or folder subtree before safely releasing cache. Released children stay online-only beneath pinned parents. Automatic pruning still protects pins; uploads and open handles still defer release until safe.

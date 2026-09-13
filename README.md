@@ -74,11 +74,11 @@ Keep selected content on your device, release its cache without deleting the clo
 
 ## Get started
 
-**Install → Register your Microsoft app → Sign in and mount.**
+**Install → Sign in → Mount.**
 
 Download the **amd64 `.deb` and checksum** from [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest). The package targets Ubuntu/Zorin OS with GNOME and includes the daemon, CLI, Nautilus extension, tray, and Settings helper.
 
-Follow the [installation and sign-in guide](doc/getting-started.md) for Microsoft Entra/Azure app registration, Graph permissions, and service setup. Authentication uses OAuth 2.0 + PKCE: **bring your own client ID; no client secret**. For other Linux setups, see [building from source](CONTRIBUTING.md#build-and-check).
+Since 0.2.8, TwoDrive includes its public Microsoft application ID: **no app registration or client secret is needed**. Follow the [installation and sign-in guide](doc/getting-started.md) to authorize your account with OAuth 2.0 + PKCE and start the service. Organization policies may require administrator approval. For other Linux setups, see [building from source](CONTRIBUTING.md#build-and-check).
 
 ## Before trusting it with your files
 

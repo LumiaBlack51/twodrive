@@ -1,3 +1,11 @@
+twodrive (0.2.8-1) unstable; urgency=medium
+
+  * Use the shared TwoDrive public application for sign-in by default.
+  * Resolve legacy placeholder client IDs while preserving custom registrations.
+  * Remove mandatory app registration from English and Chinese setup guides.
+
+ -- TwoDrive Developers <noreply@localhost>  Sun, 13 Sep 2026 12:00:00 +0800
+
 twodrive (0.2.7-2) unstable; urgency=medium
 
   * Fix intermittent Nautilus status emblems caused by invalid async handles.
