@@ -12,6 +12,10 @@ Start with installation, then read the everyday-use guide before trusting the mo
 
 Shared references / 共用参考：[Configuration / 配置示例](../config.example.toml) · [Contributing / 开发与贡献（英文）](../CONTRIBUTING.md) · [Assets / 图片来源](assets/README.md)
 
+## 故障记录与维护流程
+
+从 2026-09-15 起，每次故障须记录根因、解决办法和验证边界：[故障记录](incidents.md) · [维护指导](../AGENTS.md)。
+
 ## Engineering notes
 
 These are historical investigations/design records, not the current user manual. The project description includes intended features that may not be implemented. 以下为历史调查与设计，包含尚未实现的设想，不应当作当前功能清单。

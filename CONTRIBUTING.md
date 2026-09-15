@@ -8,6 +8,10 @@ Focused fixes, tests, translations, and documentation improvements are welcome. 
 
 [Open an issue](https://github.com/LumiaBlack51/twodrive/issues) with the version, distribution, desktop/Nautilus versions, installation method, reproduction, expected behavior, and sanitized output. Distinguish local saving from cloud completion. Never attach tokens, upload-session URLs, a whole database/cache directory, or unredacted personal paths. See [diagnostics](doc/usage.md#paths-and-diagnostics).
 
+## Incident records
+
+For every fault investigated from 2026-09-15 onward, follow [AGENTS.md](AGENTS.md) and add or update an entry in [the incident log](doc/incidents.md). Record evidence, root cause, the fix, regression coverage and verification limits alongside the fix. Mark unresolved causes explicitly; link recurring faults to their earlier records.
+
 ## Build and check
 
 Use a recent stable Rust toolchain supporting **Rust 2024** and the locked dependencies. No minimum Rust version is currently declared. On Ubuntu/Zorin, install native build and desktop/runtime prerequisites:
