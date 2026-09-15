@@ -4,6 +4,12 @@
 
 User-facing highlights moved from the former README. Releases hold published assets and verification notes; [debian/changelog](debian/changelog) retains package history. These entries describe changes at release time, not fresh test results or a guarantee of current behavior.
 
+## 0.2.9 — Archive extraction reliability
+
+Local file creation now atomically records cache ownership and Writing state, independently of cloud delta filtering. Extracting archives into folders still awaiting cloud creation or moves no longer fails with an I/O error. Cloud updates remain blocked behind pending parent operations. Includes the previously unpublished Nautilus shortcut helper change to keep filesystem probes off the UI thread.
+
+Details: [archive extraction investigation](doc/archive-extraction-2026-09-15.md).
+
 ## 0.2.8 — Sign in without app registration
 
 TwoDrive now includes its public Microsoft application ID. New users can sign in directly; missing, blank, and legacy placeholder IDs use the built-in application on load. Custom registrations remain supported. Organization consent policies may still require administrator approval.

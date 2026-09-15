@@ -9,11 +9,11 @@
 
 已发布的 `.deb` 面向 **amd64 架构的 Ubuntu/Zorin OS GNOME 环境**，包含 CLI、后台服务、用户服务单元、Nautilus 扩展、状态图标、GTK 3 托盘和 GTK 4 Settings 辅助程序，需要 FUSE；扩展面向 Nautilus 4。其他发行版和桌面组合不属于该软件包的目标环境。
 
-从 [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest) 下载 `.deb` 及配套 `.deb.sha256`，在下载目录内先校验再安装。以下以 `0.2.8-1` 为例，请替换为实际文件名：
+从 [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest) 下载 `.deb` 及配套 `.deb.sha256`，在下载目录内先校验再安装。以下以 `0.2.9-1` 为例，请替换为实际文件名：
 
 ```bash
-sha256sum -c twodrive_0.2.8-1_amd64.deb.sha256 && \
-  sudo apt install ./twodrive_0.2.8-1_amd64.deb
+sha256sum -c twodrive_0.2.9-1_amd64.deb.sha256 && \
+  sudo apt install ./twodrive_0.2.9-1_amd64.deb
 ```
 
 托盘能否显示取决于桌面是否支持 AppIndicator/StatusNotifier；仅安装相应 Python 库不保证 GNOME Shell 一定显示托盘。源码安装见[贡献指南（英文）](../CONTRIBUTING.md#build-and-check)。

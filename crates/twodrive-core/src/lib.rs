@@ -1180,6 +1180,37 @@ impl Database {
         self.allow_pin_inheritance(remote_id)
     }
 
+    /// Persist a local create in Writing state before exposing it to workers.
+    /// Cloud delta guards must not suppress user writes beneath pending folders.
+    pub fn create_local_file(
+        &self,
+        local_id: &str,
+        path: &str,
+        cache_path: &Path,
+    ) -> anyhow::Result<FileRecord> {
+        let path = normalize_cloud_path(path);
+        let conn = self.connect()?;
+        conn.execute(
+            r#"
+            INSERT INTO files(
+                remote_id, cloud_remote_id, path, parent_path, name, is_dir, size,
+                modified_unix, etag, state, cache_path, cache_accessed_unix,
+                pin_inheritance_blocked
+            ) VALUES (?1, NULL, ?2, ?3, ?4, 0, 0, ?5, '', 'writing', ?6, ?5, 1)
+            "#,
+            params![
+                local_id,
+                path,
+                parent_cloud_path(&path),
+                cloud_name(&path),
+                now_unix(),
+                cache_path.to_string_lossy()
+            ],
+        )?;
+        self.get_by_remote_id(local_id)?
+            .ok_or_else(|| anyhow::anyhow!("created local file disappeared"))
+    }
+
     pub fn create_local_directory(&self, local_id: &str, path: &str) -> anyhow::Result<FileRecord> {
         let path = normalize_cloud_path(path);
         let mut conn = self.connect()?;
@@ -2192,6 +2223,44 @@ mod tests {
     fn add_file(db: &Database, id: &str, path: &str) {
         db.upsert_metadata(&MetadataEntry::new_file(id, path, 4, 1, "etag"))
             .unwrap();
+    }
+
+    #[test]
+    fn local_create_is_atomic_and_can_reuse_a_pending_delete_path() {
+        let test = TestDatabase::new("local-create");
+        add_file(&test.db, "old-cloud", "/file");
+        let old = test.db.get_by_path("/file").unwrap().unwrap();
+        test.db.queue_pending_delete(&old).unwrap();
+        let cache = test.root.join("new-cache");
+        fs::write(&cache, b"").unwrap();
+        let record = test
+            .db
+            .create_local_file("local-upload-new", "/file", &cache)
+            .unwrap();
+        assert_eq!(record.state, FileState::Writing);
+        assert_eq!(record.cache_path, Some(cache.clone()));
+        assert!(record.cloud_remote_id.is_none());
+        assert!(
+            test.db
+                .create_local_file("local-upload-collision", "/file", &cache)
+                .is_err()
+        );
+        assert!(
+            test.db
+                .get_by_remote_id("local-upload-collision")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            test.db
+                .get_by_path("/file")
+                .unwrap()
+                .unwrap()
+                .metadata
+                .remote_id,
+            "local-upload-new"
+        );
+        assert_eq!(test.db.pending_deletes().unwrap().len(), 1);
     }
 
     #[test]

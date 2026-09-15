@@ -1,3 +1,12 @@
+twodrive (0.2.9-1) unstable; urgency=medium
+
+  * Fix archive extraction and local file creation under pending cloud folders.
+  * Persist new files atomically with cache ownership and Writing state.
+  * Keep shortcut filesystem probes off the Nautilus UI thread.
+  * Add pending-folder upload, collision and mounted ZIP extraction regressions.
+
+ -- TwoDrive Developers <noreply@localhost>  Tue, 15 Sep 2026 18:00:00 +0800
+
 twodrive (0.2.8-1) unstable; urgency=medium
 
   * Use the shared TwoDrive public application for sign-in by default.

@@ -1336,23 +1336,10 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .open(&cache_path)?;
         cache_guard.lock_shared()?;
 
-        let now = current_unix_i64();
-        let metadata = MetadataEntry::new_file(
-            temporary_remote_id.clone(),
-            path.clone(),
-            0,
-            now,
-            format!("etag-{temporary_remote_id}"),
-        );
-        let record = match (|| -> anyhow::Result<FileRecord> {
-            self.db.upsert_metadata(&metadata)?;
-            self.db.mark_cached(&temporary_remote_id, &cache_path)?;
-            self.db
-                .mark_state(&temporary_remote_id, FileState::Writing)?;
-            self.db
-                .get_by_remote_id(&temporary_remote_id)?
-                .ok_or_else(|| anyhow::anyhow!("created upload record disappeared"))
-        })() {
+        let record = match self
+            .db
+            .create_local_file(&temporary_remote_id, &path, &cache_path)
+        {
             Ok(record) => record,
             Err(err) => {
                 if let Err(cleanup_err) = self.db.remove_by_remote_id(&temporary_remote_id) {
@@ -3942,6 +3929,134 @@ os.close(fd)
         assert!(stats.fragment_size > 0);
         assert!(stats.name_length >= 255);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires /dev/fuse, fusermount3 and python3; uses an isolated temporary mount"]
+    fn zip_extraction_into_pending_folder_on_mount() {
+        let root = test_root("zip-extraction");
+        let mount = root.join("mount");
+        fs::create_dir_all(&mount).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        // Do not enqueue this folder: reproduce extraction before cloud creation settles.
+        db.create_local_directory("local-upload-archive", "/archive")
+            .unwrap();
+        let filesystem =
+            TwoDriveFs::new(db.clone(), root.join("cache"), MockBackend::new()).unwrap();
+        let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+        let result = Command::new("python3")
+            .arg("-c")
+            .arg(
+                r#"
+import io, pathlib, sys, zipfile
+entries = {'__MACOSX/._TINY_compiler_fixed': b'AppleDouble metadata',
+           'TINY_compiler_fixed/main.c': b'int main(void) { return 0; }',
+           'TINY_compiler_fixed/empty': b''}
+archive = io.BytesIO()
+with zipfile.ZipFile(archive, 'w') as z:
+    for name, data in entries.items():
+        z.writestr(name, data)
+archive.seek(0)
+with zipfile.ZipFile(archive) as z:
+    z.extractall(sys.argv[1])
+for name, data in entries.items():
+    assert (pathlib.Path(sys.argv[1]) / name).read_bytes() == data
+"#,
+            )
+            .arg(mount.join("archive"))
+            .output()
+            .unwrap();
+        drop(session);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(
+            db.pending_metadata_operation("local-upload-archive")
+                .unwrap()
+                .is_some()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_files_in_pending_nested_folders_survive_until_upload() {
+        let mut test = TestFs::new("archive-pending-folders");
+        let db = test.fs.db.clone();
+        db.create_local_directory("local-upload-archive", "/archive")
+            .unwrap();
+        let nested = db
+            .create_local_directory("local-upload-macos", "/archive/__MACOSX")
+            .unwrap();
+        let parent = test.fs.inodes.insert_or_update(nested);
+        for name in ["._TINY_compiler_fixed", "ordinary.txt"] {
+            let (ino, fh, _) = test
+                .fs
+                .create_upload(parent, OsStr::new(name), libc::O_CREAT | libc::O_EXCL)
+                .unwrap();
+            let handle = &test.fs.write_handles[&fh];
+            let id = handle.record_remote_id.clone();
+            let cache = handle.cache_path.clone();
+            assert_eq!(
+                db.get_by_remote_id(&id).unwrap().unwrap().state,
+                FileState::Writing
+            );
+            write_slice(&cache, 0, b"archive content").unwrap();
+            test.fs.inodes.set_size(ino, 15);
+            test.fs.sync_handle(fh, false).unwrap();
+            test.fs.write_handles.remove(&fh);
+            db.mark_dirty_with_size(&id, 15).unwrap();
+            let record = db.get_by_remote_id(&id).unwrap().unwrap();
+            assert!(
+                !recover_dirty_record(
+                    &db,
+                    test.fs.backend.as_ref(),
+                    record.clone(),
+                    &mut |_, _| Ok(())
+                )
+                .unwrap()
+            );
+            // Stale delta entries must still be ignored while the parent is pending.
+            db.upsert_metadata(&MetadataEntry::new_file(
+                "stale-cloud",
+                &record.metadata.path,
+                0,
+                0,
+                "stale",
+            ))
+            .unwrap();
+            assert_eq!(fs::read(cache).unwrap(), b"archive content");
+            assert_eq!(
+                db.get_by_path(&record.metadata.path)
+                    .unwrap()
+                    .unwrap()
+                    .metadata
+                    .remote_id,
+                id
+            );
+        }
+        recover_pending_metadata_operations(&db, test.fs.backend.as_ref()).unwrap();
+        assert!(db.pending_metadata_operations().unwrap().is_empty());
+        for name in ["._TINY_compiler_fixed", "ordinary.txt"] {
+            let path = format!("/archive/__MACOSX/{name}");
+            let record = db.get_by_path(&path).unwrap().unwrap();
+            assert!(
+                recover_dirty_record(&db, test.fs.backend.as_ref(), record, &mut |_, _| Ok(()))
+                    .unwrap()
+            );
+            let remote = test
+                .fs
+                .backend
+                .get_metadata_by_path(&path)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                test.fs.backend.download(&remote.remote_id).unwrap(),
+                b"archive content"
+            );
+        }
     }
 
     #[test]

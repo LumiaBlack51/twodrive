@@ -18,6 +18,8 @@ These are historical investigations/design records, not the current user manual.
 
 | Topic | Record |
 | --- | --- |
+| Archive extraction I/O error | [2026-09-15](archive-extraction-2026-09-15.md) |
+| Nautilus startup investigation | [2026-09-11](nautilus-startup-2026-09-11.md) |
 | Folder-move ordering | [2026-09-11](folder-move-sync-2026-09-11.md) |
 | Download/placeholder race | [2026-09-10](download-placeholder-race-2026-09-10.md) |
 | PDF save reliability | [2026-09-09](pdf-save-reliability-2026-09-09.md) |
