@@ -22,6 +22,11 @@ REFRESH_INTERVAL_MS = 1500
 REFRESH_TIMER_STARTED = False
 POLL_IN_PROGRESS = False
 POLL_QUEUED = False
+PATH_CACHE = {}
+PATH_CACHE_TTL = 10.0
+PENDING_PATHS = {}
+PATH_READ_IN_PROGRESS = False
+PATH_READ_QUEUED = False
 STATE_LOCK = threading.Lock()
 LOG_PATH = os.path.expanduser("~/.local/state/twodrive/nautilus.log")
 
@@ -37,8 +42,8 @@ def mount_dir():
 def cloud_path_from_local_path(path):
     root = os.path.abspath(mount_dir())
     resolved = os.path.abspath(path)
-    # Resolve desktop shortcuts only outside our mount. realpath(full_path) issues
-    # synchronous FUSE lookups for every component on Nautilus's UI thread.
+    # Called by the helper process only: even readlink outside our mount can
+    # block on another filesystem. Stop as soon as a shortcut enters our mount.
     for _ in range(40):
         if resolved == root or resolved.startswith(root + os.sep):
             break
@@ -71,7 +76,60 @@ def cloud_path(file_info):
     path = location.get_path() if location else None
     if not path:
         return None
-    return cloud_path_from_local_path(path)
+    path = os.path.abspath(path)
+    root = os.path.abspath(mount_dir())
+    if path == root:
+        return "/"
+    if path.startswith(root + os.sep):
+        return "/" + os.path.relpath(path, root)
+    cached = PATH_CACHE.get(path)
+    if cached and time.monotonic() - cached[0] < PATH_CACHE_TTL:
+        return cached[1]
+    PENDING_PATHS[path] = file_info
+    if len(PENDING_PATHS) > MAX_TRACKED_FILES:
+        PENDING_PATHS.pop(next(iter(PENDING_PATHS)))
+    queue_path_read()
+    return None
+
+
+def queue_path_read():
+    global PATH_READ_QUEUED
+    if PATH_READ_QUEUED or PATH_READ_IN_PROGRESS:
+        return
+    PATH_READ_QUEUED = True
+    GLib.idle_add(resolve_pending_paths)
+
+
+def resolve_pending_paths():
+    global PATH_READ_QUEUED, PATH_READ_IN_PROGRESS
+    PATH_READ_QUEUED = False
+    pending = dict(PENDING_PATHS)
+    PENDING_PATHS.clear()
+    if not pending:
+        return False
+    PATH_READ_IN_PROGRESS = True
+
+    def finished(resolved):
+        global PATH_READ_IN_PROGRESS
+        # Cache failures briefly too; an unavailable mount must not cause a
+        # subprocess retry loop. A later Nautilus refresh can retry it.
+        now = time.monotonic()
+        for path in pending:
+            PATH_CACHE.pop(path, None)
+            PATH_CACHE[path] = (now, resolved.get(path))
+        while len(PATH_CACHE) > MAX_TRACKED_FILES * 4:
+            PATH_CACHE.pop(next(iter(PATH_CACHE)))
+        try:
+            for path, file_info in pending.items():
+                if resolved.get(path):
+                    refresh_file(file_info)
+        finally:
+            PATH_READ_IN_PROGRESS = False
+            if PENDING_PATHS:
+                queue_path_read()
+
+    read_helper_async(list(pending), finished, "--resolve-paths")
+    return False
 
 
 def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local, has_pending_release=False):
@@ -275,12 +333,16 @@ def db_states_for(paths):
 
 
 def read_states_async(paths, callback):
+    read_helper_async(paths, callback, "--read-states")
+
+
+def read_helper_async(paths, callback, operation):
     # nautilus-python 4.0 can retain the GIL while its native main loop is idle.
     # Use a child process and Gio callbacks, not Python worker threads, so the
     # first lookup completes even when the user does not click or refresh.
     try:
         process = Gio.Subprocess.new(
-            ["/usr/bin/python3", os.path.abspath(__file__), "--read-states"],
+            ["/usr/bin/python3", os.path.abspath(__file__), operation],
             Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE
             | Gio.SubprocessFlags.STDERR_PIPE,
         )
@@ -569,7 +631,7 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
     def update_file_info(self, file_info):
         path = cloud_path(file_info)
         if not path:
-            return
+            return Nautilus.OperationResult.COMPLETE
         with STATE_LOCK:
             transient = TRANSIENT_STATES.get(path)
             cached = STATUS_CACHE.get(path)
@@ -585,3 +647,5 @@ class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoPro
 
 if __name__ == "__main__" and sys.argv[1:] == ["--read-states"]:
     print(json.dumps(db_states_for(json.load(sys.stdin))))
+elif __name__ == "__main__" and sys.argv[1:] == ["--resolve-paths"]:
+    print(json.dumps({path: cloud_path_from_local_path(path) for path in json.load(sys.stdin)}))

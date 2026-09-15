@@ -110,6 +110,51 @@ class CloudPathTests(unittest.TestCase):
 
 
 class MainThreadTests(unittest.TestCase):
+    def test_shortcut_resolution_is_batched_outside_ui_thread(self):
+        callbacks, idle, refreshed = [], [], []
+        extension = EXTENSION.TwoDriveExtension()
+        def make_file(path):
+            return types.SimpleNamespace(
+                get_location=lambda: types.SimpleNamespace(get_path=lambda: path),
+                invalidate_extension_info=lambda: refreshed.append(path),
+            )
+        files = [make_file("/desktop/link"), make_file("/ordinary")]
+        with patch.dict(EXTENSION.PATH_CACHE, {}, clear=True), \
+             patch.dict(EXTENSION.PENDING_PATHS, {}, clear=True), \
+             patch.object(EXTENSION, "PATH_READ_QUEUED", False), \
+             patch.object(EXTENSION, "PATH_READ_IN_PROGRESS", False), \
+             patch.object(os, "readlink", side_effect=AssertionError("UI filesystem probe")), \
+             patch.object(EXTENSION.GLib, "idle_add", side_effect=idle.append), \
+             patch.object(EXTENSION, "read_helper_async", side_effect=lambda paths, cb, op: callbacks.append((paths, cb, op))):
+            for file_info in files:
+                self.assertEqual(extension.update_file_info(file_info), EXTENSION.Nautilus.OperationResult.COMPLETE)
+            self.assertEqual(len(idle), 1)
+            self.assertFalse(idle.pop()())
+            paths, callback, operation = callbacks.pop()
+            self.assertEqual(paths, ["/desktop/link", "/ordinary"])
+            self.assertEqual(operation, "--resolve-paths")
+            # Requests arriving while a helper is active get a later batch.
+            EXTENSION.cloud_path(make_file("/later"))
+            self.assertEqual(idle, [])
+            callback({"/desktop/link": "/must", "/ordinary": None})
+            self.assertEqual(refreshed, ["/desktop/link"])
+            self.assertEqual(EXTENSION.cloud_path(files[0]), "/must")
+            self.assertIsNone(EXTENSION.cloud_path(files[1]))
+            self.assertEqual(len(idle), 1)
+            idle.pop()()
+            callbacks.pop()[1]({})
+            self.assertEqual(idle, [])
+            self.assertFalse(EXTENSION.PATH_READ_IN_PROGRESS)
+
+    def test_direct_mount_and_nonlocal_callbacks_do_not_start_path_reader(self):
+        with patch.object(EXTENSION, "mount_dir", return_value="/mount/OneDrive"), \
+             patch.object(EXTENSION, "queue_path_read", side_effect=AssertionError("unnecessary helper")), \
+             patch.object(os, "readlink", side_effect=AssertionError("UI filesystem probe")):
+            for local_path, expected in [("/mount/OneDrive", "/"),
+                                         ("/mount/OneDrive/a", "/a"), (None, None)]:
+                file_info = types.SimpleNamespace(get_location=lambda: types.SimpleNamespace(get_path=lambda: local_path))
+                self.assertEqual(EXTENSION.cloud_path(file_info), expected)
+
     def test_poll_uses_native_async_reader_without_python_threads(self):
         callbacks = []
         with patch.dict(EXTENSION.TRACKED_FILES, {"/poll": {}}, clear=True), \
