@@ -7,7 +7,6 @@ use reqwest::blocking::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::process::Command;
 use std::time::Duration;
 use tiny_http::{Response, Server};
 use twodrive_core::{AppPaths, Config, TokenData, TokenStore, now_unix};
@@ -51,7 +50,7 @@ impl GraphBackend {
             .append_pair("state", &state);
 
         println!("Open this URL to sign in:\n{auth_url}\n");
-        let _ = Command::new("xdg-open").arg(auth_url.as_str()).spawn();
+        let _ = open::that(auth_url.as_str());
         println!(
             "Waiting for Microsoft OAuth callback on {} ...",
             config.graph.redirect_uri

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+use std::{fs, path::PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenData {
     pub access_token: String,
@@ -22,7 +22,7 @@ impl TokenStore {
             return Ok(None);
         }
 
-        let data = fs::read_to_string(&self.path)?;
+        let data = String::from_utf8(crate::private_file::read_secret(&self.path)?)?;
         Ok(Some(serde_json::from_str(&data)?))
     }
 
@@ -30,12 +30,7 @@ impl TokenStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&self.path, serde_json::to_string_pretty(token)?)?;
-        fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600))?;
-        eprintln!(
-            "twodrive: token Secret Service integration is not enabled yet; using 0600 fallback file {}",
-            self.path.display()
-        );
+        crate::private_file::write_secret(&self.path, &serde_json::to_vec_pretty(token)?)?;
         Ok(())
     }
 

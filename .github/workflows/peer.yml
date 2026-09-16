@@ -1,0 +1,60 @@
+name: Peer native builds
+on:
+  push:
+    branches: [codex/peer-control]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo test -p twodrive-peer -p twodrive-core --locked
+      - run: cargo clippy -p twodrive-peer --all-targets --locked -- -D warnings
+      - run: cargo build -p twodrive-peer --bin twodrive-peer --release --locked --target x86_64-pc-windows-msvc
+      - shell: pwsh
+        run: |
+          $exe = (Resolve-Path target/x86_64-pc-windows-msvc/release/twodrive-peer.exe).Path
+          & $exe --version
+          if ($LASTEXITCODE) { throw "Version command failed" }
+          & $exe health-check --output health.json
+          if ($LASTEXITCODE) { throw "Health check failed" }
+          $health = Get-Content health.json | ConvertFrom-Json
+          if (!$health.ok -or $health.platform -ne 'windows-x86_64') { throw "Invalid health check" }
+          $state = Join-Path $env:RUNNER_TEMP "twodrive-peer-smoke"
+          & $exe --state-dir $state init
+          if ($LASTEXITCODE) { throw "Identity init failed" }
+          $identity = Get-FileHash (Join-Path $state 'identity.dat')
+          & $exe --state-dir $state init
+          if ((Get-FileHash (Join-Path $state 'identity.dat')).Hash -ne $identity.Hash) { throw "Identity changed" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $exe dist/twodrive-peer.exe
+          Copy-Item doc/peer-quickstart.zh-CN.md dist/README.zh-CN.md
+          Copy-Item crates/twodrive-peer/src/release-public-key.hex dist/
+          (Get-FileHash dist/twodrive-peer.exe -Algorithm SHA256).Hash.ToLower() + '  twodrive-peer.exe' | Set-Content -Encoding ascii dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twodrive-peer-windows-x86_64
+          path: dist/
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: python3 -m unittest discover -s packaging/nautilus -p 'test_*.py'
+      - run: cargo build -p twodrive-peer --bin twodrive-peer --release --locked
+      - run: target/release/twodrive-peer health-check --output health.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twodrive-peer-linux-x86_64
+          path: target/release/twodrive-peer

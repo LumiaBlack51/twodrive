@@ -7,3 +7,5 @@ pub use mock::MockBackend;
 pub use storage::{CloudBackend, DeltaResult};
 // Compatibility re-export for existing consumers.
 pub use onedrive::GraphBackend;
+
+pub mod control;

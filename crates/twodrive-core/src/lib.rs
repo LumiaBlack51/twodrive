@@ -21,3 +21,5 @@ pub use time::{now_unix, parse_duration_seconds};
 
 #[cfg(test)]
 mod tests;
+
+pub mod private_file;

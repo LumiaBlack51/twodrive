@@ -31,3 +31,9 @@ TwoDrive/
 # Python extension test bytecode
 __pycache__/
 *.pyc
+
+# Peer local state / offline publisher secrets
+identity.dat
+release-key.dat
+selected-roots.json
+trusted.json
