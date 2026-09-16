@@ -198,18 +198,38 @@ impl ControlStore for GraphBackend {
             "control delete lookup failed"
         );
         let item: Item = serde_json::from_slice(&bounded(response, MAX_CONTROL_BYTES)?)?;
-        let delete_url = format!(
-            "{GRAPH}/me/drive/items/{}/permanentDelete",
-            segment(&item.id)
-        );
+        #[derive(Deserialize)]
+        struct Drive {
+            id: String,
+        }
+        let drive: Drive = serde_json::from_slice(&bounded(
+            self.get_with_retry(&format!("{GRAPH}/me/drive?$select=id"))?,
+            MAX_CONTROL_BYTES,
+        )?)?;
+        let delete_url = permanent_delete_url(&drive.id, &item.id);
         retry_request(|| self.client.post(&delete_url).bearer_auth(&token))
             .context("control permanent delete failed")?;
         Ok(())
     }
 }
+fn permanent_delete_url(drive: &str, item: &str) -> String {
+    format!(
+        "{GRAPH}/drives/{}/items/{}/permanentDelete",
+        segment(drive),
+        segment(item)
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn permanent_delete_uses_documented_drive_route_with_encoded_ids() {
+        assert_eq!(
+            permanent_delete_url("drive", "item"),
+            "https://graph.microsoft.com/v1.0/drives/drive/items/item/permanentDelete"
+        );
+        assert!(!permanent_delete_url("drive/elsewhere", "item?query=x").contains("item?query"));
+    }
     #[test]
     fn pagination_cannot_exfiltrate_bearer_or_escape_bucket() {
         let path = "/v1.0/me/drive/items/abc/children";
