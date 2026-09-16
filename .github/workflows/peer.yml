@@ -26,6 +26,12 @@ jobs:
       - shell: pwsh
         run: |
           $exe = (Resolve-Path target/x86_64-pc-windows-msvc/release/twodrive-peer.exe).Path
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          $dependencies = & $dumpbin.FullName /dependents $exe
+          if ($dependencies -match 'VCRUNTIME|MSVCP') { throw "Unexpected VC runtime DLL dependency" }
+          $dependencies | Write-Output
           & $exe --version
           if ($LASTEXITCODE) { throw "Version command failed" }
           & $exe health-check --output health.json
