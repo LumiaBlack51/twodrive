@@ -94,3 +94,13 @@ The desktop helpers are still limited: **Settings is read-only**, and **Pause sy
 Contributions, reproducible bug reports, and documentation improvements are welcome. Start with [CONTRIBUTING](CONTRIBUTING.md) for the Rust workspace, test commands, and an isolated mock backend that does not touch your real OneDrive. [Release history](CHANGELOG.md) and [engineering notes](doc/README.md#engineering-notes) live outside this overview.
 
 [MIT license](LICENSE). An independent project, not an official Microsoft client.
+
+## Experimental device peer
+
+The `codex/peer-control` branch adds a standalone Windows/Linux `twodrive-peer`
+control process alongside the refactored provider architecture. It uses separate
+local state and does not replace the installed mount or daemon. See the
+[implementation and security boundary](doc/peer-implementation.md) and
+[first two-machine test guide](doc/peer-quickstart.zh-CN.md). Native Windows
+artifacts are built by the Peer native builds workflow. This stage implements
+authenticated control messages and signed updates, not file backup transfer.

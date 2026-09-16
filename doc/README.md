@@ -36,3 +36,6 @@ These are historical investigations/design records, not the current user manual.
 | Original description and goals | [Design document](twodrive_project_description.md) |
 
 Existing investigation paths are retained so earlier release links continue to work. 原有路径不变，避免破坏历史发布说明链接。
+
+- [Experimental device peer: implementation and audit](peer-implementation.md)
+- [Peer 第一次 Windows/Linux 联调](peer-quickstart.zh-CN.md)

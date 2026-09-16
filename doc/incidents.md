@@ -44,6 +44,41 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20260916-03：peer 健康检查无法写入相对输出文件
+
+- 日期：2026-09-16
+- 状态：已修复，本地回归通过；Windows 原生最终 CI 待确认。
+- 影响版本与环境：实验 peer 0.1.0，截至 7f357bd；不影响现用 TwoDrive 实例。
+- 关联历史故障：无；不是 TD-20260916-02 的协议信任问题。
+
+### 症状与影响
+
+原生 CI 在运行 release exe 的 `health-check --output health.json` 时退出失败；构建本身和绝对路径的原生更新子进程测试通过。阻断 artifact 交付检查，未造成已有文件丢失。
+
+### 触发条件与复现
+
+在空的隔离当前目录执行上述命令，输出使用不带父目录的相对文件名。本地新增 CLI 回归测试在旧函数上稳定失败，退出码 1。
+
+### 根因与证据
+
+Path::parent 对单文件名返回空路径；原子写入尝试在空路径创建临时文件，而不是当前目录。core 新增的私密文件写入辅助函数存在相同边界，虽然 peer 的实际 token 路径使用绝对父目录。
+
+### 解决办法与恢复操作
+
+已将空父目录规范为 `.`，保持同目录原子替换和 Unix 目录 fsync。没有用户数据恢复操作。
+
+### 验证结果与边界
+
+`release_health_command_writes_relative_output_without_state_side_effects` 在修复前失败，修复后通过；格式、Clippy 和 diff 检查通过。Windows 原生重跑结果待补充。测试不访问 OneDrive，不代表真实登录通过。
+
+### 防复发措施与后续
+
+保留真实 CLI 子进程测试，验证生成预期健康结果且不创建 peer 运行状态。原生 CI 在上传产物前执行 release 健康检查。
+
+### 交付记录
+
+触发 CI：[35067546462](https://github.com/LumiaBlack51/twodrive/actions/runs/35067546462)。修复提交和最终 artifact 待补充。
+
 ## TD-20260916-02：relay-lab 原型的云端信任与控制重放边界不足
 
 - 日期：2026-09-16
@@ -57,7 +92,7 @@
 
 ### 触发条件与复现
 
-审计 identity.rs 的 manifest 自签名验证、graph.rs::list_manifests 和 crypto.rs::verify_payload 调用链，确认信任列表完全来源于云端。新协议用未知自签名设备、重复信封、过期信封、错误会话/目标作为合成回归输入。旧原型未接入稳定实例，也未在真实云端进行攻击测试。
+审计 identity.rs 的 manifest 自签名验证、graph.rs::list_manifests 和 crypto.rs::verify_payload 调用链，确认信任列表完全来源于云端。新协议用未知自签名设备、重复信封、过期信封、错误会话/目标作为合成回归输入。旧原型复制到隔离临时目录后，新增两项安全要求测试；均可重复失败（云端注入身份被接收、同一信封两次解密均被接收）。原始工作区原型未修改，也未在真实云端进行攻击测试。
 
 ### 根因与证据
 
@@ -71,7 +106,7 @@
 
 ### 验证结果与边界
 
-初轮 peer 7 项、core 31 项 Linux 测试通过，包括未知设备拒绝、双向握手与 ping/pong、重放/过期/会话拒绝，以及正常更新、错误签名、损坏文件、健康检查失败回退。完整 workspace、原生 Windows CI 和更多集成测试进行中。测试为模拟，非真实 OneDrive 端到端。没有执行旧原型攻击复现，不能声称“旧测试失败、修复后通过”已完整实证。
+初轮 peer 7 项、core 31 项 Linux 测试通过，包括未知设备拒绝、双向握手与 ping/pong、重放/过期/会话拒绝，以及正常更新、错误签名、损坏文件、健康检查失败回退。完整 workspace、原生 Windows CI 和更多集成测试进行中。测试为模拟，非真实 OneDrive 端到端。已在原型副本运行 audited_cloud_manifest_is_not_local_authorization 和 audited_control_replay_must_be_rejected，两项均因预期的安全边界缺失而失败；新 peer 的对应未知身份和重放拒绝测试通过。两套实现协议不同，这不是将同一测试直接移植到旧生产版本。
 
 ### 防复发措施与后续
 

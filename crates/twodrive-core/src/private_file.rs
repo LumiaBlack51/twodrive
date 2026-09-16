@@ -28,7 +28,8 @@ pub fn write_secret(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     let bytes = protected.as_slice();
     let parent = path
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("missing parent"))?;
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(bytes)?;

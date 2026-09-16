@@ -8,7 +8,10 @@ use std::{
 use twodrive_core::AppPaths;
 
 pub fn atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = path.parent().context("missing parent")?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     tmp.write_all(bytes)?;

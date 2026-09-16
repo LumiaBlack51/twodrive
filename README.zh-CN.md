@@ -94,3 +94,11 @@ TwoDrive 是一个面向 **GNOME/Linux、使用 Rust 编写的实验性 OneDrive
 欢迎提交可复现的问题、代码和文档改进。[贡献指南（英文）](CONTRIBUTING.md)介绍了 Rust 工作区、测试命令，以及不会触碰真实 OneDrive 的隔离 mock 环境。[版本历史](CHANGELOG.zh-CN.md)和[工程记录](doc/README.md#engineering-notes)单独维护，不再占据项目首页。
 
 采用 [MIT 许可证](LICENSE)。这是独立项目，并非 Microsoft 官方客户端。
+
+## 实验性设备 Peer
+
+`codex/peer-control` 分支增加独立 Windows/Linux `twodrive-peer` 控制进程，
+复用重构后的 provider 架构，使用单独的本地状态，不替换现有挂载或 daemon。
+见[实现与安全边界](doc/peer-implementation.md)及
+[第一次双机联调](doc/peer-quickstart.zh-CN.md)。Windows 原生 exe 由
+Peer native builds CI 生成。本阶段提供认证控制消息和签名更新，不包含文件备份传输。
