@@ -41,6 +41,7 @@ install -m 0644 "$project_root/doc/responsiveness-recovery-2026-09-08.md" \
     "$project_root/doc/download-placeholder-race-2026-09-10.md" \
     "$project_root/doc/folder-move-sync-2026-09-11.md" \
     "$project_root/doc/archive-extraction-2026-09-15.md" \
+    "$project_root/doc/incidents.md" \
     "$package_root/usr/share/doc/twodrive/doc/"
 install -m 0644 "$project_root/LICENSE" "$package_root/usr/share/doc/twodrive/copyright"
 gzip -n -9 -c "$project_root/debian/changelog" \
@@ -48,4 +49,4 @@ gzip -n -9 -c "$project_root/debian/changelog" \
 
 install -d "$project_root/dist"
 dpkg-deb --build --root-owner-group "$package_root" \
-    "$project_root/dist/twodrive_0.2.9-1_amd64.deb"
+    "$project_root/dist/twodrive_0.2.10-1_amd64.deb"

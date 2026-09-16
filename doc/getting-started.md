@@ -9,11 +9,11 @@
 
 The published `.deb` targets **amd64 Ubuntu/Zorin OS with GNOME**. It includes the CLI, daemon, user service, Nautilus extension, status emblems, GTK 3 tray, and GTK 4 Settings helper. FUSE is required; the extension targets Nautilus 4. Other distributions and desktop combinations are not covered by this package target.
 
-Download the `.deb` and matching `.deb.sha256` from [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest). In the download directory, verify and install. This example uses `0.2.9-1`; substitute the filenames you downloaded:
+Download the `.deb` and matching `.deb.sha256` from [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest). In the download directory, verify and install. This example uses `0.2.10-1`; substitute the filenames you downloaded:
 
 ```bash
-sha256sum -c twodrive_0.2.9-1_amd64.deb.sha256 && \
-  sudo apt install ./twodrive_0.2.9-1_amd64.deb
+sha256sum -c twodrive_0.2.10-1_amd64.deb.sha256 && \
+  sudo apt install ./twodrive_0.2.10-1_amd64.deb
 ```
 
 Tray visibility depends on the desktop's AppIndicator/StatusNotifier support; its Python library alone does not guarantee GNOME Shell will display it. For source installation, see [CONTRIBUTING](../CONTRIBUTING.md#build-and-check).

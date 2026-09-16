@@ -66,7 +66,7 @@ Tokens are plaintext JSON with mode `0600`; Secret Service is not implemented. D
 
 The mount's recovery/metadata loop waits 60 seconds between passes and uses `ac_upload_concurrency` for the upload pool. Displayed AC/battery intervals do **not** currently implement adaptive power scheduling. `cache.max_size` is stored/displayed but is **not an enforced disk quota**. Do not rely on those fields to limit traffic, battery use, or disk consumption.
 
-Full POSIX uid/gid/mode and directory timestamp semantics are not preserved. The client operates against the signed-in user's `/me/drive`; do not assume multi-account management or arbitrary SharePoint library support.
+File and directory rwx permissions are stored locally and enforced on this mount, including executable files and `chmod`; they survive remounts but do not sync to OneDrive. Cloud-only imports and existing entries default to 0644 (files) or 0755 (directories). Full POSIX ownership, special mode bits, and directory timestamp semantics are not preserved; the mount root mode remains fixed. The client operates against the signed-in user's `/me/drive`; do not assume multi-account management or arbitrary SharePoint library support.
 
 ## Optional known-folder uploads
 

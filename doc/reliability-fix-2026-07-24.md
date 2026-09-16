@@ -102,3 +102,8 @@ stable local identities plus durable create-folder/move and delete queues; file 
 to replay from dirty cache. Upload sessions persist their resumable state. OneDrive does not store
 full POSIX mode, uid, gid, or directory timestamps, so TwoDrive acknowledges those metadata
 operations for compatibility but does not sync them as remote filesystem metadata.
+
+> Update (2026-09-16): version 0.2.10 adds durable local rwx modes and FUSE permission
+> checks for create/chmod. Modes survive remounts but are not synced to OneDrive.
+> This supersedes the mode-acknowledgement limitation above; see
+> [TD-20260916-01](incidents.md#td-20260916-01c-编译产物在挂载中无法执行).

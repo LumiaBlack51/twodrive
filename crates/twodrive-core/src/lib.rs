@@ -136,6 +136,8 @@ pub struct FileRecord {
     /// Stable remote identity assigned by OneDrive. `metadata.remote_id` is the
     /// local identity used by the cache/database and never changes after create.
     pub cloud_remote_id: Option<String>,
+    /// Local rwx permissions, never imported from or exported to the cloud.
+    pub local_mode: Option<u16>,
     pub state: FileState,
     pub cache_path: Option<PathBuf>,
     pub cache_accessed_unix: Option<i64>,
@@ -598,6 +600,12 @@ impl Database {
             "download_generation",
             "ALTER TABLE files ADD COLUMN download_generation INTEGER NOT NULL DEFAULT 0",
         )?;
+        ensure_column(
+            &conn,
+            "files",
+            "local_mode",
+            "ALTER TABLE files ADD COLUMN local_mode INTEGER",
+        )?;
         let migrated = conn
             .query_row(
                 "SELECT value FROM app_state WHERE key = 'pin_policy_v1_migrated'",
@@ -1058,7 +1066,7 @@ impl Database {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let record = self.query_record(
             &tx,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
             params![remote_id],
         )?;
         let Some(record) = record else {
@@ -1188,6 +1196,16 @@ impl Database {
         path: &str,
         cache_path: &Path,
     ) -> anyhow::Result<FileRecord> {
+        self.create_local_file_with_mode(local_id, path, cache_path, 0o644)
+    }
+
+    pub fn create_local_file_with_mode(
+        &self,
+        local_id: &str,
+        path: &str,
+        cache_path: &Path,
+        mode: u32,
+    ) -> anyhow::Result<FileRecord> {
         let path = normalize_cloud_path(path);
         let conn = self.connect()?;
         conn.execute(
@@ -1195,8 +1213,8 @@ impl Database {
             INSERT INTO files(
                 remote_id, cloud_remote_id, path, parent_path, name, is_dir, size,
                 modified_unix, etag, state, cache_path, cache_accessed_unix,
-                pin_inheritance_blocked
-            ) VALUES (?1, NULL, ?2, ?3, ?4, 0, 0, ?5, '', 'writing', ?6, ?5, 1)
+                pin_inheritance_blocked, local_mode
+            ) VALUES (?1, NULL, ?2, ?3, ?4, 0, 0, ?5, '', 'writing', ?6, ?5, 1, ?7)
             "#,
             params![
                 local_id,
@@ -1204,7 +1222,8 @@ impl Database {
                 parent_cloud_path(&path),
                 cloud_name(&path),
                 now_unix(),
-                cache_path.to_string_lossy()
+                cache_path.to_string_lossy(),
+                mode & 0o777
             ],
         )?;
         self.get_by_remote_id(local_id)?
@@ -1212,6 +1231,15 @@ impl Database {
     }
 
     pub fn create_local_directory(&self, local_id: &str, path: &str) -> anyhow::Result<FileRecord> {
+        self.create_local_directory_with_mode(local_id, path, 0o755)
+    }
+
+    pub fn create_local_directory_with_mode(
+        &self,
+        local_id: &str,
+        path: &str,
+        mode: u32,
+    ) -> anyhow::Result<FileRecord> {
         let path = normalize_cloud_path(path);
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1230,15 +1258,16 @@ impl Database {
             r#"
             INSERT INTO files(
                 remote_id, cloud_remote_id, path, parent_path, name, is_dir, size,
-                modified_unix, etag, state, pin_inheritance_blocked
-            ) VALUES (?1, NULL, ?2, ?3, ?4, 1, 0, ?5, '', 'dirty', 0)
+                modified_unix, etag, state, pin_inheritance_blocked, local_mode
+            ) VALUES (?1, NULL, ?2, ?3, ?4, 1, 0, ?5, '', 'dirty', 0, ?6)
             "#,
             params![
                 local_id,
                 path,
                 parent_cloud_path(&path),
                 cloud_name(&path),
-                now_unix()
+                now_unix(),
+                mode & 0o777
             ],
         )?;
         tx.execute(
@@ -1249,6 +1278,16 @@ impl Database {
         self.recompute_pin_inheritance()?;
         self.get_by_remote_id(local_id)?
             .ok_or_else(|| anyhow::anyhow!("created local directory disappeared"))
+    }
+
+    /// Changing permissions must not dirty content or enqueue a cloud upload.
+    pub fn set_local_mode(&self, local_id: &str, mode: u32) -> anyhow::Result<()> {
+        let changed = self.connect()?.execute(
+            "UPDATE files SET local_mode = ?1 WHERE remote_id = ?2",
+            params![mode & 0o777, local_id],
+        )?;
+        anyhow::ensure!(changed == 1, "cannot chmod an unknown local item");
+        Ok(())
     }
 
     /// Pending operations on this item or its ancestors must settle before
@@ -1377,7 +1416,8 @@ impl Database {
                 modified_unix = ?5,
                 state = CASE WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
                 cache_path = ?7,
-                cache_accessed_unix = ?8
+                cache_accessed_unix = ?8,
+                local_mode = ?10
             WHERE remote_id = ?9
             "#,
             params![
@@ -1393,6 +1433,7 @@ impl Database {
                     .map(|path| path.to_string_lossy()),
                 now_unix(),
                 target_local_id,
+                source.local_mode,
             ],
         )?;
         tx.commit()?;
@@ -1482,7 +1523,7 @@ impl Database {
         let conn = self.connect()?;
         let record = self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
             params![remote_id],
         )?;
         let Some(record) = record else {
@@ -1531,7 +1572,7 @@ impl Database {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = self.query_record(&tx,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
             params![record.metadata.remote_id])?;
         let Some(record) = current else {
             return Ok(false);
@@ -1672,7 +1713,7 @@ impl Database {
         let normalized = normalize_cloud_path(path);
         self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE path = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE path = ?1",
             params![normalized],
         )
     }
@@ -1681,7 +1722,7 @@ impl Database {
         let conn = self.connect()?;
         self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
             params![remote_id],
         )
     }
@@ -1693,7 +1734,7 @@ impl Database {
         let conn = self.connect()?;
         self.query_record(
             &conn,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE cloud_remote_id = ?1",
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE cloud_remote_id = ?1",
             params![cloud_remote_id],
         )
     }
@@ -1730,7 +1771,7 @@ impl Database {
         let current = self
             .query_record(
                 &tx,
-                "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id FROM files WHERE remote_id = ?1",
+                "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
                 params![local_id],
             )?
             .ok_or_else(|| anyhow::anyhow!("uploaded local item disappeared: {local_id}"))?;
@@ -1797,7 +1838,7 @@ impl Database {
         let normalized = normalize_cloud_path(parent_path);
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode
             FROM files
             WHERE parent_path = ?1
             ORDER BY is_dir DESC, lower(name), name
@@ -1814,7 +1855,7 @@ impl Database {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode
             FROM files
             WHERE (
                 ?1 = '/' AND path <> '/' AND substr(path, 1, 1) = '/'
@@ -1834,7 +1875,7 @@ impl Database {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             r#"
-            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id
+            SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode
             FROM files
             ORDER BY path
             "#,
@@ -2023,6 +2064,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
             etag: row.get(7)?,
         },
         cloud_remote_id: row.get(14)?,
+        local_mode: row.get(15)?,
         state: FileState::from_str(&state_value).map_err(|err| {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(err))
         })?,
@@ -2743,6 +2785,17 @@ mod tests {
         let db = Database::new(&db_path);
         db.init().unwrap();
         let pinned_root = db.get_by_remote_id("root").unwrap().unwrap();
+        assert_eq!(pinned_root.local_mode, None);
+        assert_eq!(
+            db.get_by_remote_id("child").unwrap().unwrap().local_mode,
+            None
+        );
+        db.set_local_mode("child", 0o750).unwrap();
+        db.init().unwrap();
+        assert_eq!(
+            db.get_by_remote_id("child").unwrap().unwrap().local_mode,
+            Some(0o750)
+        );
         let child = db.get_by_remote_id("child").unwrap().unwrap();
         assert!(pinned_root.pin_explicit);
         assert!(!child.pin_explicit);
@@ -2822,6 +2875,71 @@ mod tests {
         }
         assert_eq!(db.all_records().unwrap().len(), 160);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_permissions_survive_cloud_updates_release_and_replacement() {
+        let test = TestDatabase::new("local-permissions");
+        let cache = test.root.join("program.cache");
+        fs::write(&cache, b"program").unwrap();
+        let record = test
+            .db
+            .create_local_file_with_mode("local-upload-program", "/program", &cache, 0o750)
+            .unwrap();
+        assert_eq!(record.local_mode, Some(0o750));
+        test.db
+            .set_local_mode(&record.metadata.remote_id, 0o751)
+            .unwrap();
+        assert_eq!(
+            test.db.get_by_path("/program").unwrap().unwrap().state,
+            FileState::Writing
+        );
+        test.db
+            .mark_state(&record.metadata.remote_id, FileState::Uploading)
+            .unwrap();
+        let mut remote = MetadataEntry::new_file("cloud-program", "/program", 7, 2, "v1");
+        let uploaded = test
+            .db
+            .commit_uploaded(&record.metadata.remote_id, "/program", &remote, &cache)
+            .unwrap();
+        assert_eq!(uploaded.local_mode, Some(0o751));
+        remote.etag = "v2".to_string();
+        test.db.upsert_metadata(&remote).unwrap();
+        remote.etag = "v3".to_string();
+        test.db.upsert_metadata_batch([&remote]).unwrap();
+        test.db.release_path("/program").unwrap();
+        test.db.init().unwrap();
+        let released = test.db.get_by_path("/program").unwrap().unwrap();
+        assert_eq!(released.local_mode, Some(0o751));
+        assert_eq!(released.state, FileState::OnlineOnly);
+        assert!(released.cache_path.is_none());
+        let replacement_cache = test.root.join("replacement.cache");
+        fs::write(&replacement_cache, b"replacement").unwrap();
+        test.db
+            .create_local_file_with_mode(
+                "local-upload-replacement",
+                "/replacement",
+                &replacement_cache,
+                0o640,
+            )
+            .unwrap();
+        let replaced = test
+            .db
+            .replace_file_locally(
+                "local-upload-replacement",
+                &record.metadata.remote_id,
+                "/program",
+            )
+            .unwrap();
+        assert_eq!(replaced.local_mode, Some(0o640));
+        test.db
+            .remove_by_remote_id(&record.metadata.remote_id)
+            .unwrap();
+        test.db.upsert_metadata(&remote).unwrap();
+        assert_eq!(
+            test.db.get_by_path("/program").unwrap().unwrap().local_mode,
+            None
+        );
     }
 
     #[test]
