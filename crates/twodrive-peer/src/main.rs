@@ -24,6 +24,8 @@ struct Cli {
 enum Action {
     /// Microsoft OAuth/PKCE in a browser; uses the existing public Application ID.
     Login,
+    /// Probe live AppFolder list/put/get/delete using one disposable control object.
+    Doctor,
     /// Create a persistent identity and print its fingerprint for out-of-band verification.
     Init,
     /// Discover currently present devices (cloud discovery does not imply trust).
@@ -89,6 +91,7 @@ enum Action {
 }
 fn main() {
     if let Err(error) = run() {
+        eprintln!("{}", twodrive_backend::control::safe_diagnostic(&error));
         // Never dump Graph/OAuth response bodies, tokens, URLs or private local paths.
         eprintln!(
             "TwoDrive Peer: operation failed. {}",
@@ -142,6 +145,10 @@ fn run() -> anyhow::Result<()> {
             println!("Device fingerprint: {}", runtime::identity(&home)?.id());
             println!("State directory: {}", home.display());
             Ok(())
+        }
+        Action::Doctor => {
+            let _lock = local::lock(&home, "worker.lock")?;
+            GraphBackend::from_paths(&local::app_paths(&home))?.control_doctor()
         }
         Action::Peers => {
             let graph = GraphBackend::from_paths(&local::app_paths(&home))?;

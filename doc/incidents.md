@@ -44,6 +44,85 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20260916-08：peer 升版暴露更新测试固定候选版本
+
+- 日期：2026-09-16
+- 状态：已验证本地完整 Rust 测试；Windows 原生检查待补记。
+- 影响版本与环境：0.1.1 构建期间的更新单测/健康夹具；不是生产反回滚逻辑故障。
+- 关联历史故障：TD-20260916-07 升版验证中发现；与 Graph 故障机制不同。
+
+### 症状与影响
+
+完整 Rust 测试有两项失败：update must be a newer stable version。
+
+### 触发条件与复现
+
+把 peer 版本从 0.1.0 升至 0.1.1 后执行 cargo test --workspace --locked。
+
+### 根因与证据
+
+测试固定以 0.1.1 作为新版本，已不高于当前版本；生产反回滚检查正确拒绝。原生健康夹具同样写死版本。
+
+### 解决办法与恢复操作
+
+测试候选及原生夹具按编译版本 patch + 1 构造，第二次升级为 patch + 2。生产更新检查不改。无本地恢复操作。
+
+### 验证结果与边界
+
+旧测试在 0.1.1 实际失败；修复后完整 Rust 测试通过；原生夹具验证待补记。此项不属于真实 GitHub 自动升级验证。
+
+### 防复发措施与后续
+
+候选版本应相对编译版本生成；保留不递增版本拒绝及回滚水位断言。
+
+### 交付记录
+
+随本次控制通道修复提交，提交待补记。
+
+## TD-20260916-07：真实 Graph permanentDelete 拒绝导致 peer 轮询失败
+
+- 日期：2026-09-16
+- 状态：已验证 Linux 真实 Graph 控制对象读写删除修复；Windows/Linux 双机握手待重新验证。
+- 影响版本与环境：codex/peer-control cc472ea，peer 0.1.0，用户 Windows/Linux 同账号真实联调；修复版本 0.1.1。
+- 关联历史故障：TD-20260916-06 为分页编码问题。本次已观测失败在删除阶段，为另一根因；之前 mock 和原生 CI 没有覆盖真实 Graph 删除能力。
+
+### 症状与影响
+
+用户 Windows 登录成功后持续 poll failed，Linux ping 仅入本地队列，未完成真实握手。Linux 同账号真实探针复现删除失败；原程序隐藏错误阶段。
+
+### 触发条件与复现
+
+使用既有隔离 peer 登录状态访问 AppFolder。真实 approot、namespace、devices/list 均 200；新建 diagnostics bucket 201，探针 PUT 201，GET 200 且内容一致；旧空 POST permanentDelete 返回 411。显式 Content-Length: 0 后返回 400 invalidRequest，脱敏消息为固定文本 API not found。轮询实际收件箱也复现 400。没有读取或删除用户普通文件。
+
+### 根因与证据
+
+1. reqwest 空 POST 不自动发送 Content-Length；真实 Graph 前端拒绝为 411。新增回环 HTTP 测试在旧构造上失败（header 为 None），修复后为 0，通过。
+2. 本账号使用文档 drive-ID 路由仍返回 API not found。不能把微软文档列出接口当成当前账号支持证据；具体服务端原因/Windows 原始失败阶段不能仅由 Linux 结果推断。
+3. 原 runtime 把读取失败当成无效信封并继续删除，网络故障时可能丢消息。新增回归在旧逻辑上失败（delete 被调用），修复后保留对象重试。
+
+### 解决办法与恢复操作
+
+- 控制通道空 POST 显式携带 Content-Length: 0。仅 permanentDelete 的 400 + invalidRequest + 精确 API not found 回退到普通 DELETE；本进程记忆不可用能力并提示进入回收站。401/403、其它 400、限流及 5xx 不回退，不清空回收站。
+- 控制 HTTP 错误使用类型化诊断，操作名、数字状态、固定允许列表错误码和固定 hint；不输出 URL、ID、响应正文、token 或任意服务端文本。可开启逐操作成功日志。doctor 报配置 AppFolder/过期状态/refresh 是否存在（不是已授权 scope 的证明），只校验自建唯一探针。
+- 发现阶段记录读取错误；收件箱读取失败保留消息，下次重试，不计为协议拒绝。
+
+本地恢复：暂停下载目录中的 Linux peer PID 344856/344857；稳定 daemon PID 204605 及挂载未改动。使用原隔离 peer auth 做真实探针，未重新登录或更换用户设备身份。最初两次失败探针遗留对象的清理结果待补记。
+
+### 验证结果与边界
+
+- 真实账号 doctor 修复后：PUT 201、GET 200 内容一致、permanentDelete 400 触发明确能力回退、DELETE 204、随后 LIST 200 且本次对象不存在。
+- 空 POST 和读取失败保留消息两项已证明旧代码失败、修复后通过。固定错误码脱敏及严格回退条件单测通过；本地 114 项默认 Rust 测试、19 项 Python 测试通过。格式与 Clippy 通过；Windows 原生构建待完成。
+- Python 初次读取重定向内容曾发生网络 timeout；Rust doctor 读回成功。不据此推断 Windows 网络状况。
+- **边界**：以上是 Linux 对真实 Microsoft Graph，不是 mock；仍不等于 Windows/Linux 真机握手与 ping/pong。Windows 需替换新 exe 运行 doctor、互信后验证。普通删除进入回收站，不保证永久清除。
+
+### 防复发措施与后续
+
+保留 empty_permanent_delete_post_has_explicit_zero_content_length、only_explicit_api_not_found_allows_recycle_fallback、diagnostic_never_echoes_untrusted_error_fields、failed_mailbox_read_is_not_deleted_or_counted_as_rejected。新云端功能须增加真实账号探针，不能仅以 mock/CI 宣称支持。说明和重测命令见 [双机指南](peer-quickstart.zh-CN.md)。
+
+### 交付记录
+
+尚未提交或发布；Windows/Linux 0.1.1 构建及校验和待补记。稳定 TwoDrive 不发布、不安装、不重启。
+
 ## TD-20260916-06：控制通道分页校验拒绝等价的 OneDrive ID 编码
 
 - 日期：2026-09-16

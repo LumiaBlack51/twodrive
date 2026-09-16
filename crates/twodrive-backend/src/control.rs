@@ -28,3 +28,37 @@ pub fn validate_component(value: &str) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Safe diagnostic assembled exclusively from static labels and numeric status.
+#[derive(Debug)]
+pub struct ControlDiagnostic {
+    pub operation: &'static str,
+    pub status: Option<u16>,
+    pub code: &'static str,
+}
+impl std::fmt::Display for ControlDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "control operation={} status={} code={} hint={}",
+            self.operation,
+            self.status
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".into()),
+            self.code,
+            match self.status {
+                Some(401) => "token-or-audience-relogin",
+                Some(403) => "permission-or-scope-or-account-policy",
+                Some(429) => "throttled",
+                _ => "inspect-operation",
+            }
+        )
+    }
+}
+impl std::error::Error for ControlDiagnostic {}
+pub fn safe_diagnostic(error: &anyhow::Error) -> String {
+    error
+        .downcast_ref::<ControlDiagnostic>()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "local-state-protocol-or-unclassified-error (details omitted)".into())
+}

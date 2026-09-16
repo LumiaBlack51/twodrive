@@ -76,8 +76,15 @@ pub fn discover(store: &dyn ControlStore, now: i64) -> anyhow::Result<Vec<Presen
         if object.size > MAX_CONTROL_BYTES as u64 {
             continue;
         }
-        let Ok(bytes) = store.get("devices", &object.name) else {
-            continue;
+        let bytes = match store.get("devices", &object.name) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!(
+                    "Discovery read failed: {}",
+                    twodrive_backend::control::safe_diagnostic(&error)
+                );
+                continue;
+            }
         };
         let Ok(p) = serde_json::from_slice::<Presence>(&bytes) else {
             continue;
@@ -137,8 +144,9 @@ pub fn worker(home: &Path, auto_update: bool, ready: Option<&Path>) -> anyhow::R
         match result {
             Ok(true) => return Ok(75),
             Ok(false) => (),
-            Err(_) => eprintln!(
-                "Peer poll failed; retrying in 5 seconds (credentials and remote error bodies omitted)."
+            Err(error) => eprintln!(
+                "Peer poll failed; retrying in 5 seconds: {}",
+                twodrive_backend::control::safe_diagnostic(&error)
             ),
         }
         std::thread::sleep(Duration::from_secs(5));
@@ -181,10 +189,15 @@ fn tick(
     }
     let bucket = format!("in-{}", engine.identity.id());
     for object in store.list(&bucket)? {
+        // A transport failure is not an invalid envelope. Preserve it for retry.
+        let bytes = if object.size <= MAX_CONTROL_BYTES as u64 {
+            Some(store.get(&bucket, &object.name)?)
+        } else {
+            None
+        };
         let incoming = (|| -> anyhow::Result<_> {
-            ensure!(object.size <= MAX_CONTROL_BYTES as u64, "oversized object");
-            let bytes = store.get(&bucket, &object.name)?;
-            let env: Envelope = serde_json::from_slice(&bytes)?;
+            let bytes = bytes.as_ref().context("oversized object")?;
+            let env: Envelope = serde_json::from_slice(bytes)?;
             ensure!(
                 object.name == format!("{}.json", env.header.id),
                 "mailbox name mismatch"
@@ -404,6 +417,56 @@ mod tests {
             )
             .unwrap();
         }
+    }
+    #[test]
+    fn failed_mailbox_read_is_not_deleted_or_counted_as_rejected() {
+        struct FailingRead {
+            bucket: String,
+            deleted: std::cell::Cell<bool>,
+        }
+        impl ControlStore for FailingRead {
+            fn list(&self, bucket: &str) -> anyhow::Result<Vec<ControlObject>> {
+                Ok(if bucket == self.bucket {
+                    vec![ControlObject {
+                        name: "test.json".into(),
+                        size: 8,
+                    }]
+                } else {
+                    vec![]
+                })
+            }
+            fn get(&self, _: &str, _: &str) -> anyhow::Result<Vec<u8>> {
+                anyhow::bail!("synthetic transport outage")
+            }
+            fn put(&self, _: &str, _: &str, _: &[u8]) -> anyhow::Result<()> {
+                Ok(())
+            }
+            fn delete(&self, _: &str, _: &str) -> anyhow::Result<()> {
+                self.deleted.set(true);
+                Ok(())
+            }
+        }
+        let mut h = Harness::new();
+        let store = FailingRead {
+            bucket: format!("in-{}", h.engine.identity.id()),
+            deleted: std::cell::Cell::new(false),
+        };
+        let result = tick(
+            &store,
+            h.home.path(),
+            &mut h.engine,
+            &mut h.counters,
+            &mut h.published,
+            &mut h.hello,
+            &mut h.updates,
+            false,
+        );
+        assert!(
+            !store.deleted.get(),
+            "a failed fetch must remain in the mailbox"
+        );
+        assert!(result.is_err());
+        assert_eq!(h.counters.rejected, 0);
     }
     #[test]
     fn two_isolated_peers_discover_pair_and_exchange_via_opaque_cloud_store() {

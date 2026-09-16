@@ -294,13 +294,18 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
+    fn test_version(offset: u64) -> Version {
+        let mut version = Version::parse(crate::VERSION).unwrap();
+        version.patch += offset;
+        version
+    }
     fn package() -> (SigningKey, Release, Vec<u8>) {
         let key = SigningKey::generate(&mut OsRng);
         let bytes = b"synthetic executable fixture".to_vec();
         let mut r = Release {
             schema: 1,
             product: "twodrive-peer".into(),
-            version: Version::new(0, 1, 1),
+            version: test_version(1),
             platform: "windows-x86_64".into(),
             file: "twodrive-peer.exe".into(),
             size: bytes.len() as u64,
@@ -323,7 +328,7 @@ mod tests {
             Some(r.version.clone())
         );
         assert!(stage(home.path(), &r, &bytes, &public, "windows-x86_64").is_err());
-        r.version = Version::new(0, 1, 2);
+        r.version = test_version(2);
         r.signature = hex::encode(key.sign(&r.signing_bytes()).to_bytes());
         stage(home.path(), &r, &bytes, &public, "windows-x86_64").unwrap();
         assert!(
@@ -336,11 +341,11 @@ mod tests {
             .is_err()
         );
         let state = UpdateState::load(home.path()).unwrap();
-        assert_eq!(state.active, Some(Version::new(0, 1, 1)));
+        assert_eq!(state.active, Some(test_version(1)));
         assert_eq!(state.highwater, state.active);
         assert!(state.pending.is_none());
         assert!(
-            version_dir(home.path(), &Version::new(0, 1, 1))
+            version_dir(home.path(), &test_version(1))
                 .join("twodrive-peer.exe")
                 .exists()
         );
@@ -414,11 +419,11 @@ mod tests {
         activate(home.path(), &public, &release.platform, health_check).unwrap();
         assert_eq!(
             UpdateState::load(home.path()).unwrap().active,
-            Some(Version::new(0, 1, 1))
+            Some(test_version(1))
         );
         // A correctly signed but non-executable next package must fail actual spawning.
         let broken = b"validly signed, cannot execute";
-        release.version = Version::new(0, 1, 2);
+        release.version = test_version(2);
         release.size = broken.len() as u64;
         release.sha256 = hex::encode(Sha256::digest(broken));
         release.signature = hex::encode(key.sign(&release.signing_bytes()).to_bytes());
@@ -426,17 +431,17 @@ mod tests {
         assert!(activate(home.path(), &public, &release.platform, health_check).is_err());
         assert_eq!(
             UpdateState::load(home.path()).unwrap().active,
-            Some(Version::new(0, 1, 1))
+            Some(test_version(1))
         );
         // Simulate post-activation worker failure and retain anti-rollback highwater.
         let mut state = UpdateState::load(home.path()).unwrap();
         state.previous = state.active.clone();
-        state.active = Some(Version::new(0, 1, 2));
+        state.active = Some(test_version(2));
         state.highwater = state.active.clone();
         state.save(home.path()).unwrap();
         rollback(home.path()).unwrap();
         let state = UpdateState::load(home.path()).unwrap();
-        assert_eq!(state.active, Some(Version::new(0, 1, 1)));
-        assert_eq!(state.highwater, Some(Version::new(0, 1, 2)));
+        assert_eq!(state.active, Some(test_version(1)));
+        assert_eq!(state.highwater, Some(test_version(2)));
     }
 }

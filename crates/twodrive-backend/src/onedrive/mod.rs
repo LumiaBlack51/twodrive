@@ -31,6 +31,7 @@ pub struct GraphBackend {
     client: Client,
     upload_sessions_path: PathBuf,
     upload_sessions: Arc<Mutex<UploadSessionStore>>,
+    control_permanent_delete_unavailable: std::sync::atomic::AtomicBool,
     control_folders: Mutex<std::collections::HashMap<String, (Instant, String)>>,
 }
 
@@ -57,6 +58,7 @@ impl GraphBackend {
                 .build()?,
             upload_sessions_path,
             upload_sessions,
+            control_permanent_delete_unavailable: std::sync::atomic::AtomicBool::new(false),
             control_folders: Mutex::new(std::collections::HashMap::new()),
         })
     }

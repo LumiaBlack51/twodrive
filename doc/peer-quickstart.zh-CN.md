@@ -65,3 +65,35 @@ Windows `run --auto-update` 接受可信设备的 `notify-update --to ... --tag 
 ## 验证边界
 
 自动测试使用合成身份、模拟云存储和本地更新包；真实 Microsoft 登录、账号策略、Graph AppFolder/permanentDelete 可用性以及 Windows/Linux 真机双向链路必须按上面流程验证。测试结果和发布交付见 peer-implementation.md。该实验版本不包含文件备份、Explorer 集成或 Windows 服务。
+
+## 0.1.1 真实 Graph 排障与替换
+
+退出两端旧 peer（Ctrl+C），替换独立的 `twodrive-peer.exe` / `twodrive-peer`，保留原 peer state、身份与登录。先用 `--version` 确认为 0.1.1；不要删除 identity.dat，也不需要重复 init/login。没有新的签名 Release 时 `--auto-update` 不会自动获取本次 CI 修复，需要手动替换。
+
+Windows：
+
+```powershell
+$env:TWODRIVE_PEER_DIAGNOSTICS = '1'
+.\twodrive-peer.exe --version
+.\twodrive-peer.exe doctor
+.\twodrive-peer.exe trust LINUX_FINGERPRINT
+.\twodrive-peer.exe run --auto-update
+```
+
+Linux：
+
+```bash
+export TWODRIVE_PEER_DIAGNOSTICS=1
+./twodrive-peer --version
+./twodrive-peer doctor
+./twodrive-peer trust WINDOWS_FINGERPRINT
+./twodrive-peer run
+```
+
+doctor 必须在本机 run 停止时执行。它在 AppFolder/peer-control-v1/diagnostics 内写入一个唯一探针、读回校验、删除并确认消失；不删除旧消息或其它文件。成功应有 `doctor put=ok`、`doctor get=ok content_match=true`、`doctor delete=ok`、`doctor list=ok deleted_object_absent=true`。失败时保留 operation/status/code，不要提供 token 文件或 Graph 完整正文。
+
+诊断区分 approot.resolve-or-create、namespace.lookup/create、bucket.lookup/create、list、get.content、put、delete.lookup/drive/permanent/recycle。AppFolder 的第一次 GET 可自动创建应用目录。`status=401` 提示 token/audience；403 提示权限/scope/账号策略；`token-acquisition-or-refresh` 表示本地 token 获取/续期失败。doctor 中 configured_appfolder 仅表示配置请求了该权限，并非证明微软实际授予。网络故障仅报告 timeout/connect-or-tls/transport，不输出请求 URL。
+
+真实账号上原来的空 POST permanentDelete 返回 411；添加 Content-Length: 0 后返回 400 invalidRequest / API not found。0.1.1 在此**精确响应**下回退为普通 DELETE（进入 OneDrive 回收站），只作用于本次控制对象。401/403、其它 400、429 或 5xx 不触发回退。每个进程首次回退会明确告知；回收站可能积累短期控制消息，不是永久删除保证。不要为排障清空整个 OneDrive 回收站。
+
+确认双方 `Authenticated` 后再新发 ping；以前排队消息可能已过期。两端必须互相信任，Linux 单方 trust 不够。若需要重新登录，先停止 peer，只运行此实验 peer 的 login。取消详细成功日志：PowerShell `Remove-Item Env:TWODRIVE_PEER_DIAGNOSTICS`；Linux `unset TWODRIVE_PEER_DIAGNOSTICS`，错误诊断始终保留。
