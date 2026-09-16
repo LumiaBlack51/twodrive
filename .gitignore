@@ -37,3 +37,6 @@ identity.dat
 release-key.dat
 selected-roots.json
 trusted.json
+
+# Cargo build settings are not runtime account configuration.
+!/.cargo/config.toml
