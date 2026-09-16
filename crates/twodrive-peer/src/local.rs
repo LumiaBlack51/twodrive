@@ -47,7 +47,21 @@ pub fn prepare(home: &Path) -> anyhow::Result<PathBuf> {
         !home.join("twodrive.sqlite3").exists() && !home.join("config.toml").exists(),
         "refusing an existing TwoDrive data/config directory"
     );
+    let marker = home.join("peer-state-v1");
+    if home.exists() && !marker.exists() {
+        ensure!(
+            fs::read_dir(home)?.next().is_none(),
+            "state directory must be empty or an existing peer state directory"
+        );
+    }
+    if marker.exists() {
+        ensure!(
+            read(&marker, 64)? == b"TwoDrive Peer state v1\n",
+            "invalid peer state marker"
+        );
+    }
     fs::create_dir_all(home)?;
+    atomic(&marker, b"TwoDrive Peer state v1\n")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -137,7 +137,12 @@ impl Presence {
             "stale or invalid presence time"
         );
         ensure!(
-            self.version.len() < 40 && self.platform.len() < 40,
+            self.version.len() < 40
+                && semver::Version::parse(&self.version).is_ok()
+                && matches!(
+                    self.platform.as_str(),
+                    "windows-x86_64" | "linux-x86_64" | "unsupported"
+                ),
             "invalid presence metadata"
         );
         let key = bytes32(&self.signing)?;
