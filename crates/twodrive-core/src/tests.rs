@@ -27,12 +27,12 @@ fn graph_login_defaults_and_legacy_configs_use_shared_app() {
 fn graph_custom_registration_survives_config_round_trip() {
     let config: Config = toml::from_str(
         r#"
-        [graph]
-        client_id = "11111111-2222-3333-4444-555555555555"
-        tenant = "organizations"
-        redirect_uri = "http://localhost:54321"
-        scopes = ["Files.ReadWrite"]
-    "#,
+            [graph]
+            client_id = "11111111-2222-3333-4444-555555555555"
+            tenant = "organizations"
+            redirect_uri = "http://localhost:54321"
+            scopes = ["Files.ReadWrite"]
+        "#,
     )
     .unwrap();
     let loaded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
@@ -577,23 +577,23 @@ fn legacy_pinned_states_migrate_to_a_single_explicit_root() {
     let conn = Connection::open(&db_path).unwrap();
     conn.execute_batch(
         r#"
-        CREATE TABLE files (
-            remote_id TEXT PRIMARY KEY,
-            path TEXT NOT NULL UNIQUE,
-            parent_path TEXT NOT NULL,
-            name TEXT NOT NULL,
-            is_dir INTEGER NOT NULL,
-            size INTEGER NOT NULL,
-            modified_unix INTEGER NOT NULL,
-            etag TEXT NOT NULL,
-            state TEXT NOT NULL,
-            cache_path TEXT,
-            cache_accessed_unix INTEGER
-        );
-        INSERT INTO files VALUES
-            ('root', '/Pinned', '/', 'Pinned', 1, 0, 1, 'e1', 'pinned', NULL, NULL),
-            ('child', '/Pinned/a.txt', '/Pinned', 'a.txt', 0, 1, 1, 'e2', 'pinned', '/tmp/a', 1);
-        "#,
+            CREATE TABLE files (
+                remote_id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                parent_path TEXT NOT NULL,
+                name TEXT NOT NULL,
+                is_dir INTEGER NOT NULL,
+                size INTEGER NOT NULL,
+                modified_unix INTEGER NOT NULL,
+                etag TEXT NOT NULL,
+                state TEXT NOT NULL,
+                cache_path TEXT,
+                cache_accessed_unix INTEGER
+            );
+            INSERT INTO files VALUES
+                ('root', '/Pinned', '/', 'Pinned', 1, 0, 1, 'e1', 'pinned', NULL, NULL),
+                ('child', '/Pinned/a.txt', '/Pinned', 'a.txt', 0, 1, 1, 'e2', 'pinned', '/tmp/a', 1);
+            "#,
     )
     .unwrap();
     drop(conn);

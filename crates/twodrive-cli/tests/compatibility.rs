@@ -8,16 +8,14 @@ use std::{
 struct Sandbox(PathBuf);
 impl Sandbox {
     fn new() -> Self {
-        Self(
-            std::env::temp_dir().join(format!(
+        Self(std::env::temp_dir().join(format!(
                 "twodrive-cli-contract-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_nanos()
-            )),
-        )
+            )))
     }
     fn run(&self, args: &[&str]) -> std::process::Output {
         Command::new(env!("CARGO_BIN_EXE_twodrive"))
