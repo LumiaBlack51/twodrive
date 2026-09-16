@@ -47,7 +47,7 @@
 ## TD-20260916-08：peer 升版暴露更新测试固定候选版本
 
 - 日期：2026-09-16
-- 状态：已验证本地完整 Rust 测试；Windows 原生检查待补记。
+- 状态：已验证本地及 Windows 原生完整测试和更新进程夹具。
 - 影响版本与环境：0.1.1 构建期间的更新单测/健康夹具；不是生产反回滚逻辑故障。
 - 关联历史故障：TD-20260916-07 升版验证中发现；与 Graph 故障机制不同。
 
@@ -69,7 +69,7 @@
 
 ### 验证结果与边界
 
-旧测试在 0.1.1 实际失败；修复后完整 Rust 测试通过；原生夹具验证待补记。此项不属于真实 GitHub 自动升级验证。
+旧测试在 0.1.1 实际失败；修复后完整 Rust 测试通过；本地及 Windows 原生夹具验证通过。此项不属于真实 GitHub 自动升级验证。
 
 ### 防复发措施与后续
 
@@ -77,7 +77,7 @@
 
 ### 交付记录
 
-随本次控制通道修复提交，提交待补记。
+随本次控制通道修复提交 c2776f1；见 TD-20260916-07 的交付链接。
 
 ## TD-20260916-07：真实 Graph permanentDelete 拒绝导致 peer 轮询失败
 
@@ -106,13 +106,15 @@
 - 控制 HTTP 错误使用类型化诊断，操作名、数字状态、固定允许列表错误码和固定 hint；不输出 URL、ID、响应正文、token 或任意服务端文本。可开启逐操作成功日志。doctor 报配置 AppFolder/过期状态/refresh 是否存在（不是已授权 scope 的证明），只校验自建唯一探针。
 - 发现阶段记录读取错误；收件箱读取失败保留消息，下次重试，不计为协议拒绝。
 
-本地恢复：暂停下载目录中的 Linux peer PID 344856/344857；稳定 daemon PID 204605 及挂载未改动。使用原隔离 peer auth 做真实探针，未重新登录或更换用户设备身份。最初两次失败探针遗留对象的清理结果待补记。
+本地恢复：暂停下载目录中的 Linux peer PID 344856/344857；稳定 daemon PID 204605 及挂载未改动。使用原隔离 peer auth 做真实探针，未重新登录或更换用户设备身份。最初两次失败探针遗留的两项对象已校验测试内容后普通删除；未清空回收站。
 
 ### 验证结果与边界
 
 - 真实账号 doctor 修复后：PUT 201、GET 200 内容一致、permanentDelete 400 触发明确能力回退、DELETE 204、随后 LIST 200 且本次对象不存在。
-- 空 POST 和读取失败保留消息两项已证明旧代码失败、修复后通过。固定错误码脱敏及严格回退条件单测通过；本地 114 项默认 Rust 测试、19 项 Python 测试通过。格式与 Clippy 通过；Windows 原生构建待完成。
+- 空 POST 和读取失败保留消息两项已证明旧代码失败、修复后通过。固定错误码脱敏及严格回退条件单测通过；本地 114 项默认 Rust 测试、19 项 Python 测试通过。格式与 Clippy 通过；Windows 原生 72 项默认测试及额外更新进程测试通过，Linux CI 114 项默认及额外更新进程测试通过。
 - Python 初次读取重定向内容曾发生网络 timeout；Rust doctor 读回成功。不据此推断 Windows 网络状况。
+- 本机两个临时隔离身份通过真实 Graph 完成互相 Authenticated、双向 PING/PONG round trip verified；临时云端 presence/收件箱及本地测试身份/token 已清理。它们运行于同一 Linux 主机，不是 Windows/Linux 双机实测。
+- 下载目录 0.1.1 发布版再次运行 doctor 全部通过，其中 permanentDelete 直接返回 204。**更正边界**：400 API not found 是当时的真实响应，不能推断该账号永久不支持此 API；程序仍优先永久删除，仅对精确能力响应作本进程回退。
 - **边界**：以上是 Linux 对真实 Microsoft Graph，不是 mock；仍不等于 Windows/Linux 真机握手与 ping/pong。Windows 需替换新 exe 运行 doctor、互信后验证。普通删除进入回收站，不保证永久清除。
 
 ### 防复发措施与后续
@@ -121,7 +123,13 @@
 
 ### 交付记录
 
-尚未提交或发布；Windows/Linux 0.1.1 构建及校验和待补记。稳定 TwoDrive 不发布、不安装、不重启。
+修复提交：[c2776f1](https://github.com/LumiaBlack51/twodrive/commit/c2776f10148ee6b90dd65b13023281e04537ece6)。[原生 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/35074280918) Windows/Linux 均成功；Windows release exe 原生版本、健康、自身份持久化及系统 DLL 依赖检查通过。Linux 发布版 SHA-256：`8f03fba31b94a3a59f7f58e7e3466b4a07d88f6e91be49775319b21057786d2e`，已替换本地下载目录 peer，并保留 0.1.0 备份。未发布 GitHub Release；稳定 TwoDrive 不发布、不安装、不重启。
+
+
+- Windows exe：7662080 bytes，SHA-256 `84b33e056bc417c574b6016ec3d72376f264e38680ce9f36c8170fe5b14187b0`；与下载 CI SHA256SUMS 一致，PE AMD64 已核对。CI artifact ID 10436929068。
+- 本地手动替换包：`dist/peer-0.1.1/twodrive-peer-0.1.1-windows-x86_64.zip`，亦已复制到本地下载目录。ZIP SHA-256 `c50ec246e014018964182a75546fbe9bf42b8c06363554596fa4bc6829b3ec30`。包内 exe 是上述未修改的 CI 原件；没有自动更新签名 manifest、令牌或私钥。
+- 原用户 Linux 身份短时运行 40 秒：poll/read 错误均 0，6 次 permanentDelete 204；未观察到原 Windows 对端认证。已停止测试 peer 进程，等待两端替换/重启；稳定 daemon PID 204605、启动时间 14:18:36 CST 不变。
+- 后续记录提交仅补充验证/交付，不改变已构建可执行文件输入。尚未执行 Windows 用户设备真实 doctor/双机 ping；不得把原生 CI 或本机双进程当作这项完成。
 
 ## TD-20260916-06：控制通道分页校验拒绝等价的 OneDrive ID 编码
 
