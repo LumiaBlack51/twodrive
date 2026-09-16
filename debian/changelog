@@ -1,3 +1,12 @@
+twodrive (0.2.10-2) unstable; urgency=medium
+
+  * Refactor domain, persistence, provider, filesystem and service responsibilities.
+  * Preserve existing configuration, SQLite, OAuth and Files On-Demand behavior.
+  * Add provider/CLI/authentication characterization and isolated daemon smoke tests.
+  * Remove the duplicate filesystem clock helper; retain recovery and migrations.
+
+ -- TwoDrive Developers <noreply@localhost>  Wed, 16 Sep 2026 20:00:00 +0800
+
 twodrive (0.2.10-1) unstable; urgency=medium
 
   * Persist local file and directory rwx modes across remounts and cloud updates.
