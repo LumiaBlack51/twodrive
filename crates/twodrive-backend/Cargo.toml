@@ -15,4 +15,5 @@ tiny_http.workspace = true
 time.workspace = true
 twodrive-core.workspace = true
 url.workspace = true
+percent-encoding = "2"
 open = "5"

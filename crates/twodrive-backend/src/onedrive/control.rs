@@ -38,6 +38,15 @@ fn bounded(mut response: reqwest::blocking::Response, max: usize) -> anyhow::Res
 fn segment(s: &str) -> String {
     percent_encode_path_segment(s)
 }
+fn decoded_segments(path: &str) -> anyhow::Result<Vec<String>> {
+    path.split('/')
+        .map(|segment| {
+            Ok(percent_encoding::percent_decode_str(segment)
+                .decode_utf8()?
+                .into_owned())
+        })
+        .collect()
+}
 fn validate_next(url: &str, expected_path: &str) -> anyhow::Result<()> {
     let u = url::Url::parse(url)?;
     ensure!(
@@ -47,7 +56,7 @@ fn validate_next(url: &str, expected_path: &str) -> anyhow::Result<()> {
             && u.username().is_empty()
             && u.password().is_none()
             && u.fragment().is_none()
-            && u.path() == expected_path,
+            && decoded_segments(u.path())? == decoded_segments(expected_path)?,
         "unsafe Graph pagination URL"
     );
     Ok(())
@@ -229,6 +238,16 @@ mod tests {
             "https://graph.microsoft.com/v1.0/drives/drive/items/item/permanentDelete"
         );
         assert!(!permanent_delete_url("drive/elsewhere", "item?query=x").contains("item?query"));
+    }
+    #[test]
+    fn pagination_accepts_equivalent_onedrive_id_encoding() {
+        assert!(
+            validate_next(
+                "https://graph.microsoft.com/v1.0/me/drive/items/ABC!123/children?$skiptoken=x",
+                "/v1.0/me/drive/items/ABC%21123/children"
+            )
+            .is_ok()
+        );
     }
     #[test]
     fn pagination_cannot_exfiltrate_bearer_or_escape_bucket() {

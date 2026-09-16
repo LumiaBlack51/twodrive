@@ -1862,6 +1862,7 @@ dependencies = [
  "anyhow",
  "base64",
  "open",
+ "percent-encoding",
  "rand 0.8.6",
  "reqwest",
  "serde",
