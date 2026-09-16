@@ -87,7 +87,10 @@
 
 ### 交付记录
 
-修复和 0.2.10-1 deb 已在本地完成；提交哈希及 GitHub Release 尚未产生，待发布后补充。
+- 修复提交：[b9fa018](https://github.com/LumiaBlack51/twodrive/commit/b9fa01888c91a6a6696c76aa74d52819985e40a6)。
+- 已合并 [PR #3](https://github.com/LumiaBlack51/twodrive/pull/3)，合并提交：[37234e4](https://github.com/LumiaBlack51/twodrive/commit/37234e49a982190dbe01f72608c69c783ee8e864)。合并树与已测试构建输入一致。
+- Release：[TwoDrive 0.2.10-1](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.10-1)，已发布 amd64 deb 及 sha256 文件；GitHub 报告的两项资产 SHA-256 均与本地一致。
+- 安装包中的故障记录为发布前验证快照；本次补记仅更新交付链接，不修改发布二进制。
 
 ## TD-20260915-01：新建目录中解压文件报 I/O 错误
 
