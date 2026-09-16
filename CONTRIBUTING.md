@@ -68,6 +68,14 @@ Use the printed temporary mount from another terminal. Close its files, unmount 
 
 Local identities remain stable; cloud IDs are bound separately. Mutations and pending work are recorded before cloud completion. Recovery must not upload stale generations, run child work ahead of pending parent moves, or discard unuploaded content during release. Read the [engineering notes](doc/README.md#engineering-notes) for earlier investigations.
 
+For internal ownership and preserved compatibility seams, see the
+[refactor architecture and verification record](doc/refactor-2026-09-16.md).
+For a standalone disposable daemon smoke test, build the workspace then run:
+
+```bash
+python3 scripts/test-isolated-mock.py --cli target/debug/twodrive --daemon target/debug/twodrive-daemon
+```
+
 ## Propose a change
 
 Use a focused branch and pull request. Explain behavior, data risks, and tests actually run; add regressions for reproducible bugs. Never report skipped/unrun tests as passing.

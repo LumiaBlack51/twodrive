@@ -4,6 +4,10 @@
 
 User-facing highlights moved from the former README. Releases hold published assets and verification notes; [debian/changelog](debian/changelog) retains package history. These entries describe changes at release time, not fresh test results or a guarantee of current behavior.
 
+## 0.2.10-2 — Internal architecture refactor
+
+Separate storage, persistence, OneDrive/OAuth, Files On-Demand, service orchestration and presentation by responsibility. No intentional behavior or data-format changes. Branch prerelease; not merged into main. [Architecture and verification](doc/refactor-2026-09-16.md).
+
 ## 0.2.10 — Execute compiled programs on the mount
 
 Preserve local file and directory rwx permissions, including create/umask and chmod, across renames, remounts, uploads and cloud metadata refreshes. Compiled programs can now execute directly on the mount. FUSE enforces local permissions. These permissions stay in this device's database and do not sync to OneDrive; existing files keep their default mode until changed with chmod.

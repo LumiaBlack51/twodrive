@@ -7,7 +7,7 @@ trap 'rm -rf -- "$package_root"' EXIT
 chmod 0755 "$package_root"
 
 remap_flags="--remap-path-prefix=${HOME}=/home/build --remap-path-prefix=${project_root}=/usr/src/twodrive"
-RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${remap_flags}" cargo build --workspace --release
+RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }${remap_flags}" cargo build --workspace --release --locked
 
 install -d "$package_root/DEBIAN"
 install -m 0644 "$project_root/packaging/deb/control" "$package_root/DEBIAN/control"
@@ -42,6 +42,7 @@ install -m 0644 "$project_root/doc/responsiveness-recovery-2026-09-08.md" \
     "$project_root/doc/folder-move-sync-2026-09-11.md" \
     "$project_root/doc/archive-extraction-2026-09-15.md" \
     "$project_root/doc/incidents.md" \
+    "$project_root/doc/refactor-2026-09-16.md" \
     "$package_root/usr/share/doc/twodrive/doc/"
 install -m 0644 "$project_root/LICENSE" "$package_root/usr/share/doc/twodrive/copyright"
 gzip -n -9 -c "$project_root/debian/changelog" \
@@ -49,4 +50,4 @@ gzip -n -9 -c "$project_root/debian/changelog" \
 
 install -d "$project_root/dist"
 dpkg-deb --build --root-owner-group "$package_root" \
-    "$project_root/dist/twodrive_0.2.10-1_amd64.deb"
+    "$project_root/dist/twodrive_0.2.10-2_amd64.deb"
