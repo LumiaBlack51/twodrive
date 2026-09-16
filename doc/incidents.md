@@ -285,3 +285,12 @@ Windows Python 默认编码为 GBK。并非管道消息截断或同步成功丢�
 - 同批发布的既有 Nautilus 修复：[030132f](https://github.com/LumiaBlack51/twodrive/commit/030132f)，与解压故障根因不同。
 - Release：[TwoDrive 0.2.9-1](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.9-1)
 - 详细调查：[Archive extraction I/O error](archive-extraction-2026-09-15.md)
+
+## TD-20260916-UI：Flutter 默认测试仍引用已移除的 MyApp
+
+- 状态：已修复；完整 Flutter 6 项测试通过，静态分析无问题。
+- 触发条件：前端重设计时检查完整 Flutter 测试入口。
+- 根因与证据：`apps/full/test/widget_test.dart` 仍为默认计数器测试，构造不存在的 `MyApp`；实际入口为 `TwoDrive`。与此前 FUSE 故障无关。
+- 解决办法：替换为真实界面的托盘/管理中心布局、导航、暂停确认与断连禁用测试，测试使用注入的隔离数据。
+- 本地恢复：无。验证边界：不涉及真实 OneDrive、原生托盘窗口行为或 CFAPI。
+- 防复发：后续前端修改运行完整 `flutter test` 与 `flutter analyze`。

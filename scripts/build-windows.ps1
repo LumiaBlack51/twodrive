@@ -19,9 +19,9 @@ if ($Edition -ne "Lite") {
     try {
         if ($Offline) { flutter pub get --offline --enforce-lockfile } else { flutter pub get --enforce-lockfile }
         Check-Exit "Flutter dependencies"
-        flutter analyze lib
+        flutter analyze
         Check-Exit "Flutter analysis"
-        flutter test test/engine_client_test.dart
+        flutter test
         Check-Exit "Flutter state regression"
         flutter build windows --release --no-pub
         Check-Exit "Flutter release"
