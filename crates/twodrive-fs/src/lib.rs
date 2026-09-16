@@ -519,7 +519,10 @@ pub fn mount_backend<B: CloudBackend>(
             }
         }
     });
-    let options = [MountOption::FSName("twodrive".to_string())];
+    let options = [
+        MountOption::FSName("twodrive".to_string()),
+        MountOption::DefaultPermissions,
+    ];
     let result = fuser::mount2(fs, &mount_dir, &options);
     let _ = stop_tx.send(());
     let _ = recovery.join();
@@ -1287,11 +1290,22 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn create_upload(
         &mut self,
         parent: u64,
         name: &OsStr,
         flags: i32,
+    ) -> anyhow::Result<(u64, u64, FileAttr)> {
+        self.create_upload_with_mode(parent, name, flags, 0o644)
+    }
+
+    fn create_upload_with_mode(
+        &mut self,
+        parent: u64,
+        name: &OsStr,
+        flags: i32,
+        mode: u32,
     ) -> anyhow::Result<(u64, u64, FileAttr)> {
         let parent_path = self
             .inodes
@@ -1336,10 +1350,12 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .open(&cache_path)?;
         cache_guard.lock_shared()?;
 
-        let record = match self
-            .db
-            .create_local_file(&temporary_remote_id, &path, &cache_path)
-        {
+        let record = match self.db.create_local_file_with_mode(
+            &temporary_remote_id,
+            &path,
+            &cache_path,
+            mode,
+        ) {
             Ok(record) => record,
             Err(err) => {
                 if let Err(cleanup_err) = self.db.remove_by_remote_id(&temporary_remote_id) {
@@ -1652,7 +1668,12 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         Ok(())
     }
 
-    fn create_directory(&mut self, parent: u64, name: &OsStr) -> anyhow::Result<(u64, FileAttr)> {
+    fn create_directory(
+        &mut self,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+    ) -> anyhow::Result<(u64, FileAttr)> {
         let parent_path = self
             .inodes
             .path_for_ino(parent)
@@ -1671,7 +1692,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         }
 
         let local_id = format!("local-upload-{}", unique_suffix());
-        let record = self.db.create_local_directory(&local_id, &path)?;
+        let record = self
+            .db
+            .create_local_directory_with_mode(&local_id, &path, mode)?;
         let ino = self.inodes.insert_or_update(record.clone());
         self.upload_pool.enqueue(local_id)?;
         Ok((ino, attr_for_record(ino, &record)))
@@ -1855,7 +1878,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         &mut self,
         _req: &Request<'_>,
         ino: u64,
-        _mode: Option<u32>,
+        mode: Option<u32>,
         _uid: Option<u32>,
         _gid: Option<u32>,
         size: Option<u64>,
@@ -1869,6 +1892,23 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        if let Some(mode) = mode {
+            let Some(mut record) = self.record_for_ino(ino) else {
+                reply.error(if ino == ROOT_INO {
+                    libc::EOPNOTSUPP
+                } else {
+                    libc::ENOENT
+                });
+                return;
+            };
+            if let Err(err) = self.db.set_local_mode(&record.metadata.remote_id, mode) {
+                eprintln!("twodrive chmod error: {err:#}");
+                reply.error(libc::EIO);
+                return;
+            }
+            record.local_mode = Some((mode & 0o777) as u16);
+            self.inodes.replace_ino_record(ino, record);
+        }
         if let Some(size) = size {
             let result = if let Some(handle) = fh.and_then(|fh| self.write_handles.get(&fh)) {
                 OpenOptions::new()
@@ -2272,11 +2312,11 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
-        _mode: u32,
-        _umask: u32,
+        mode: u32,
+        umask: u32,
         reply: ReplyEntry,
     ) {
-        match self.create_directory(parent, name) {
+        match self.create_directory(parent, name, mode & !umask) {
             Ok((_ino, attr)) => reply.entry(&TTL, &attr, 0),
             Err(err) => {
                 eprintln!("twodrive create directory error: {err:#}");
@@ -2398,12 +2438,12 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
-        _mode: u32,
-        _umask: u32,
+        mode: u32,
+        umask: u32,
         flags: i32,
         reply: ReplyCreate,
     ) {
-        match self.create_upload(parent, name, flags) {
+        match self.create_upload_with_mode(parent, name, flags, mode & !umask) {
             Ok((_ino, fh, attr)) => reply.created(&TTL, &attr, 0, fh, 0),
             Err(err) => {
                 eprintln!("twodrive create upload error: {err:#}");
@@ -2770,7 +2810,9 @@ fn attr_for_record(ino: u64, record: &FileRecord) -> FileAttr {
         ctime: time,
         crtime: time,
         kind,
-        perm: if record.metadata.is_dir { 0o755 } else { 0o644 },
+        perm: record
+            .local_mode
+            .unwrap_or(if record.metadata.is_dir { 0o755 } else { 0o644 }),
         nlink: if record.metadata.is_dir { 2 } else { 1 },
         uid: current_uid(),
         gid: current_gid(),
@@ -3675,6 +3717,77 @@ mod tests {
             libc::O_WRONLY | libc::O_NOATIME,
             OsStr::new("nautilus")
         ));
+    }
+
+    #[test]
+    #[ignore = "requires /dev/fuse, fusermount3, python3 and cc; uses an isolated temporary mount"]
+    fn compiled_program_and_chmod_survive_remount() {
+        let root = test_root("executable-mode");
+        let mount = root.join("mount");
+        fs::create_dir_all(&mount).unwrap();
+        let db = Database::new(root.join("test.sqlite3"));
+        db.init().unwrap();
+        for phase in ["create", "remount"] {
+            let filesystem =
+                TwoDriveFs::new(db.clone(), root.join("cache"), MockBackend::new()).unwrap();
+            let session =
+                fuser::spawn_mount2(filesystem, &mount, &[MountOption::DefaultPermissions])
+                    .unwrap();
+            let result = Command::new("python3")
+                .arg("-c")
+                .arg(
+                    r#"
+import os, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+program = root / 'hello'
+if sys.argv[2] == 'create':
+    os.umask(0o027)
+    descriptor = os.open(root / 'created-executable', os.O_CREAT | os.O_WRONLY, 0o777)
+    os.close(descriptor)
+    assert (root / 'created-executable').stat().st_mode & 0o777 == 0o750
+    (root / 'hello.c').write_text('int main(void) { return 23; }\n')
+    subprocess.run(['cc', str(root / 'hello.c'), '-o', str(program)], check=True)
+    assert program.stat().st_mode & 0o777 == 0o750, oct(program.stat().st_mode)
+    assert subprocess.run([str(program)]).returncode == 23
+    program.chmod(0o640)
+    try:
+        subprocess.run([str(program)])
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError('execution allowed after removing execute bits')
+    program.chmod(0o000)
+    try:
+        program.read_bytes()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError('read allowed after removing read bits')
+    program.chmod(0o751)
+    assert subprocess.run([str(program)]).returncode == 23
+    (root / 'private').mkdir(mode=0o777)
+    assert (root / 'private').stat().st_mode & 0o777 == 0o750
+    (root / 'private').chmod(0o700)
+    program.rename(root / 'renamed')
+else:
+    program = root / 'renamed'
+    assert program.stat().st_mode & 0o777 == 0o751
+    assert (root / 'private').stat().st_mode & 0o777 == 0o700
+    assert subprocess.run([str(program)]).returncode == 23
+"#,
+                )
+                .arg(&mount)
+                .arg(phase)
+                .output()
+                .unwrap();
+            drop(session);
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

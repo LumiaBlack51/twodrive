@@ -4,6 +4,12 @@
 
 User-facing highlights moved from the former README. Releases hold published assets and verification notes; [debian/changelog](debian/changelog) retains package history. These entries describe changes at release time, not fresh test results or a guarantee of current behavior.
 
+## 0.2.10 — Execute compiled programs on the mount
+
+Preserve local file and directory rwx permissions, including create/umask and chmod, across renames, remounts, uploads and cloud metadata refreshes. Compiled programs can now execute directly on the mount. FUSE enforces local permissions. These permissions stay in this device's database and do not sync to OneDrive; existing files keep their default mode until changed with chmod.
+
+Details: [incident TD-20260916-01](doc/incidents.md#td-20260916-01c-编译产物在挂载中无法执行).
+
 ## 0.2.9 — Archive extraction reliability
 
 Local file creation now atomically records cache ownership and Writing state, independently of cloud delta filtering. Extracting archives into folders still awaiting cloud creation or moves no longer fails with an I/O error. Cloud updates remain blocked behind pending parent operations. Includes the previously unpublished Nautilus shortcut helper change to keep filesystem probes off the UI thread.

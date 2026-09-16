@@ -1,3 +1,12 @@
+twodrive (0.2.10-1) unstable; urgency=medium
+
+  * Persist local file and directory rwx modes across remounts and cloud updates.
+  * Honor create umask and chmod; allow compiled programs to execute on the mount.
+  * Enforce local permissions through FUSE default_permissions.
+  * Add mounted compiler/chmod/remount and database permission regressions.
+
+ -- TwoDrive Developers <noreply@localhost>  Wed, 16 Sep 2026 18:00:00 +0800
+
 twodrive (0.2.9-1) unstable; urgency=medium
 
   * Fix archive extraction and local file creation under pending cloud folders.
