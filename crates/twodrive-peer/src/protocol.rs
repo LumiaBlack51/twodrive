@@ -281,7 +281,13 @@ mod tests {
         bad.header.id = nonce();
         assert!(b.receive(&bad, 1000).is_err());
         let mut bad = original.clone();
-        bad.ciphertext.replace_range(..2, "ff");
+        let replacement = if bad.ciphertext.starts_with('0') {
+            "1"
+        } else {
+            "0"
+        };
+        bad.ciphertext.replace_range(..1, replacement);
+        assert_ne!(bad.ciphertext, original.ciphertext);
         assert!(b.receive(&bad, 1000).is_err());
         assert!(b.receive(&original, 1121).is_err());
         let c = Identity::generate();

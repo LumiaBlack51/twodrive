@@ -18,6 +18,7 @@ struct DelayedBackend {
     inner: MockBackend,
     active: AtomicUsize,
     max_active: AtomicUsize,
+    slow_release: Option<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
 }
 
 impl DelayedBackend {
@@ -26,6 +27,7 @@ impl DelayedBackend {
             inner: MockBackend::new(),
             active: AtomicUsize::new(0),
             max_active: AtomicUsize::new(0),
+            slow_release: None,
         }
     }
 }
@@ -57,6 +59,14 @@ impl CloudBackend for DelayedBackend {
     ) -> anyhow::Result<MetadataEntry> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_active.fetch_max(active, Ordering::SeqCst);
+        if path.contains("slow")
+            && let Some(release) = &self.slow_release
+        {
+            release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(15))?;
+        }
         thread::sleep(if path.contains("slow") {
             Duration::from_millis(800)
         } else {
@@ -313,23 +323,22 @@ fn completed_known_folder_job_is_persisted_while_slower_job_runs() {
         },
     ];
     let worker_paths = paths.clone();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
     let worker = thread::spawn(move || {
+        // Deliberately exceed the old 500ms polling window to model a busy CI runner.
+        thread::sleep(Duration::from_millis(600));
+        let mut backend = DelayedBackend::new();
+        backend.slow_release = Some(std::sync::Mutex::new(release_rx));
         let mut state = KnownFolderState::default();
-        process_known_folder_uploads(
-            &worker_paths,
-            &DelayedBackend::new(),
-            &db,
-            &config,
-            jobs,
-            &mut state,
-        )
-        .map(|()| state)
+        process_known_folder_uploads(&worker_paths, &backend, &db, &config, jobs, &mut state)
+            .map(|()| state)
     });
 
     let fast_key = fast_path.to_string_lossy().into_owned();
     let slow_key = slow_path.to_string_lossy().into_owned();
     let mut observed_incremental_commit = false;
-    for _ in 0..25 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
         if let Ok(state) = KnownFolderState::load(&paths.data_dir)
             && state.files.contains_key(&fast_key)
             && !state.pending.contains_key(&fast_key)
@@ -341,11 +350,13 @@ fn completed_known_folder_job_is_persisted_while_slower_job_runs() {
         thread::sleep(Duration::from_millis(20));
     }
 
+    // Release and join even when the observation failed; never leave a detached upload thread.
+    let _ = release_tx.send(());
+    let final_state = worker.join().unwrap().unwrap();
     assert!(
         observed_incremental_commit,
         "the fast result should be durable before the slow upload finishes"
     );
-    let final_state = worker.join().unwrap().unwrap();
     assert!(final_state.pending.is_empty());
     assert_eq!(final_state.files.len(), 2);
     fs::remove_dir_all(root).unwrap();
