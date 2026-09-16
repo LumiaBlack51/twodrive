@@ -461,6 +461,10 @@ mod tests {
     }
     #[test]
     fn locks_and_state_directory_guard_prevent_runtime_collision() {
+        let unrelated = tempfile::tempdir().unwrap();
+        fs::write(unrelated.path().join("unrelated.txt"), b"untouched").unwrap();
+        assert!(local::prepare(unrelated.path()).is_err());
+        assert!(!unrelated.path().join("peer-state-v1").exists());
         let home = tempfile::tempdir().unwrap();
         local::prepare(home.path()).unwrap();
         let guard = local::lock(home.path(), "worker.lock").unwrap();

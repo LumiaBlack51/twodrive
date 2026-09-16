@@ -298,4 +298,14 @@ mod tests {
         assert_eq!(a.id(), Identity::load_or_create(&path).unwrap().id());
         assert!(a.shared(&"00".repeat(32)).is_err());
     }
+    #[test]
+    fn cloud_presence_rejects_terminal_controls_and_unknown_platform() {
+        let id = Identity::generate();
+        let mut p = id.presence(&nonce(), 1000);
+        p.platform = "\x1b[2J".into();
+        assert!(p.verify(1000).is_err());
+        p.platform = "windows-x86_64".into();
+        p.version = "\nforged output".into();
+        assert!(p.verify(1000).is_err());
+    }
 }
