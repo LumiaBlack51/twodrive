@@ -1,5 +1,5 @@
 use super::GraphBackend;
-use super::http::*;
+use super::http::retry_request;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::{Rng, distributions::Alphanumeric};
@@ -25,7 +25,7 @@ impl GraphBackend {
             .build()?;
 
         let verifier = random_string(64);
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let challenge = pkce_challenge(&verifier);
         let state = random_string(32);
         let redirect = Url::parse(&config.graph.redirect_uri)?;
         let host = redirect.host_str().unwrap_or("127.0.0.1");
@@ -202,4 +202,79 @@ pub(super) fn random_string(len: usize) -> String {
         .take(len)
         .map(char::from)
         .collect()
+}
+
+fn pkce_challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pkce_s256_and_verifier_format_remain_compatible() {
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+        let verifier = random_string(64);
+        assert_eq!(verifier.len(), 64);
+        assert!(verifier.bytes().all(|b| b.is_ascii_alphanumeric()));
+        assert_eq!(pkce_challenge(&verifier).len(), 43);
+    }
+
+    #[test]
+    fn authorization_code_form_preserves_pkce_and_redirect() {
+        let request = Client::new()
+            .post("http://127.0.0.1/token")
+            .form(&CodeTokenRequest {
+                client_id: "test-client",
+                scope: "offline_access Files.ReadWrite".into(),
+                code: "a+b&c",
+                redirect_uri: "http://localhost:54321/callback",
+                grant_type: "authorization_code",
+                code_verifier: "verifier-123",
+            })
+            .build()
+            .unwrap();
+        let form = url::form_urlencoded::parse(request.body().unwrap().as_bytes().unwrap())
+            .into_owned()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(form.len(), 6);
+        assert_eq!(form["code"], "a+b&c");
+        assert_eq!(form["code_verifier"], "verifier-123");
+        assert_eq!(form["grant_type"], "authorization_code");
+        assert_eq!(form["redirect_uri"], "http://localhost:54321/callback");
+        assert_eq!(form["scope"], "offline_access Files.ReadWrite");
+        assert_eq!(form["client_id"], "test-client");
+    }
+
+    #[test]
+    fn token_response_preserves_expiry_defaults_and_optional_refresh_token() {
+        for (body, expires, refresh) in [
+            (r#"{"access_token":"synthetic-access"}"#, 3600, None),
+            (
+                r#"{"access_token":"synthetic-access","refresh_token":"synthetic-refresh","expires_in":120}"#,
+                120,
+                Some("synthetic-refresh"),
+            ),
+        ] {
+            let server = Server::http("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/token", server.server_addr());
+            let worker = std::thread::spawn(move || {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                request.respond(Response::from_string(body)).unwrap();
+            });
+            let before = now_unix();
+            let token = token_request(Client::new().post(endpoint), "test exchange").unwrap();
+            assert_eq!(token.access_token, "synthetic-access");
+            assert_eq!(token.refresh_token.as_deref(), refresh);
+            assert!((before + expires..=now_unix() + expires).contains(&token.expires_at_unix));
+            worker.join().unwrap();
+        }
+    }
 }

@@ -1,3 +1,6 @@
+mod onedrive;
+pub use onedrive::{DEFAULT_GRAPH_CLIENT_ID, GraphConfig};
+
 use crate::{AppPaths, parse_duration_seconds};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -8,16 +11,6 @@ pub struct Config {
     pub cache: CacheConfig,
     pub power: PowerConfig,
     pub known_folders: KnownFoldersConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct GraphConfig {
-    #[serde(deserialize_with = "deserialize_client_id")]
-    pub client_id: String,
-    pub tenant: String,
-    pub redirect_uri: String,
-    pub scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,38 +49,6 @@ pub struct KnownFoldersConfig {
 pub struct KnownFolderConfig {
     pub local: String,
     pub remote: String,
-}
-
-// Public desktop application identifier, not a client secret.
-pub const DEFAULT_GRAPH_CLIENT_ID: &str = "178705ac-2286-441b-9652-1a4d86be2c51";
-
-fn deserialize_client_id<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<String, D::Error> {
-    let value = String::deserialize(deserializer)?;
-    Ok(match value.trim() {
-        "" | "PASTE_AZURE_APP_CLIENT_ID_HERE" | "YOUR_AZURE_APP_CLIENT_ID" => {
-            DEFAULT_GRAPH_CLIENT_ID.to_string()
-        }
-        _ => value,
-    })
-}
-
-impl Default for GraphConfig {
-    fn default() -> Self {
-        Self {
-            client_id: DEFAULT_GRAPH_CLIENT_ID.to_string(),
-            tenant: "common".to_string(),
-            redirect_uri: "http://localhost:53682".to_string(),
-            scopes: vec![
-                "Files.ReadWrite".to_string(),
-                "User.Read".to_string(),
-                "offline_access".to_string(),
-                "openid".to_string(),
-                "profile".to_string(),
-            ],
-        }
-    }
 }
 
 impl Default for CacheConfig {
@@ -176,18 +137,6 @@ impl Config {
     pub fn save(&self, paths: &AppPaths) -> anyhow::Result<()> {
         fs::create_dir_all(&paths.config_dir)?;
         fs::write(&paths.config_path, toml::to_string_pretty(self)?)?;
-        Ok(())
-    }
-
-    pub fn validate_graph_login(&self) -> anyhow::Result<()> {
-        if self.graph.client_id.trim().is_empty()
-            || self.graph.client_id == "PASTE_AZURE_APP_CLIENT_ID_HERE"
-        {
-            anyhow::bail!(
-                "set graph.client_id in {} before running login",
-                AppPaths::discover()?.config_path.display()
-            );
-        }
         Ok(())
     }
 

@@ -2,8 +2,9 @@ use std::fs::{self};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
+use twodrive_core::now_unix;
 
-use crate::cache_io::{current_unix_i64, unique_suffix};
+use crate::cache_io::unique_suffix;
 
 #[derive(Debug)]
 pub(crate) struct ActivityGuard {
@@ -49,7 +50,7 @@ impl ActivityGuard {
         self.last_bytes_done = bytes_done;
         self.last_update = now_time;
         let _ = update_activity_file(&self.path, |active| {
-            let now = current_unix_i64();
+            let now = now_unix();
             if let Some(item) = active
                 .iter_mut()
                 .find(|item| item.get("id").and_then(serde_json::Value::as_str) == Some(&self.id))
@@ -79,8 +80,8 @@ impl ActivityGuard {
             "name": name,
             "bytes_done": bytes_done,
             "bytes_total": bytes_total,
-            "started_unix": current_unix_i64(),
-            "updated_unix": current_unix_i64(),
+            "started_unix": now_unix(),
+            "updated_unix": now_unix(),
         });
         update_activity_file(&self.path, |active| {
             active.retain(|entry| {
@@ -133,7 +134,7 @@ pub(crate) fn update_activity_file(
         fs::create_dir_all(parent)?;
     }
 
-    let now = current_unix_i64();
+    let now = now_unix();
     let existing = fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())

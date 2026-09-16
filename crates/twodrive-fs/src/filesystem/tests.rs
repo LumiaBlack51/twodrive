@@ -11,9 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use twodrive_backend::{CloudBackend, MockBackend};
+use twodrive_core::now_unix;
 use twodrive_core::{Database, FileState, MetadataEntry};
 
-use crate::cache_io::{current_unix_i64, write_slice};
+use crate::cache_io::write_slice;
 use crate::filesystem::{ROOT_INO, TwoDriveFs, filesystem_stats};
 use crate::hydration::{hydrate_generation, hydrate_pending_pins, hydrate_record};
 use crate::inodes::{InodeTable, unix_time};
@@ -263,7 +264,7 @@ impl TestFs {
         let root = std::env::temp_dir().join(format!(
             "twodrive-fs-{name}-{}-{}",
             std::process::id(),
-            current_unix_i64()
+            now_unix()
         ));
         fs::create_dir_all(&root).unwrap();
         let db = Database::new(root.join("test.sqlite3"));

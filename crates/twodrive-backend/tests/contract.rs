@@ -83,3 +83,20 @@ fn default_lookup_delta_and_download_contract() {
             .is_err()
     );
 }
+
+#[test]
+fn legacy_conflict_classification_keeps_existing_backend_compatibility() {
+    let backend = MinimalBackend(MockBackend::new());
+    for message in [
+        "Graph request failed with HTTP 412 Precondition Failed",
+        "HTTP 412",
+        "Precondition Failed",
+    ] {
+        assert!(backend.is_conflict_error(&anyhow::anyhow!(message)));
+    }
+    for message in ["HTTP 409", "HTTP 500", "request cancelled"] {
+        assert!(!backend.is_conflict_error(&anyhow::anyhow!(message)));
+    }
+    // Preserve the historical top-level-message behavior as well.
+    assert!(!backend.is_conflict_error(&anyhow::anyhow!("HTTP 412").context("outer failure")));
+}

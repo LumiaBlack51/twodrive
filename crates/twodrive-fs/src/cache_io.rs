@@ -52,13 +52,6 @@ pub(crate) fn current_gid() -> u32 {
     unsafe { libc::getgid() }
 }
 
-pub(crate) fn current_unix_i64() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 pub(crate) fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
