@@ -36,4 +36,40 @@ Installation uses immutable version directories, an atomic pending/active/previo
 
 ## Verification status
 
-In progress. Native CI run, artifact digests, regression results and remaining boundaries will be recorded after verification. Real Microsoft login and Windows/Linux OneDrive end-to-end require user-operated accounts/machines and are not claimed by mock tests.
+Local verification for this branch:
+
+- 110 default Rust tests passed; formatting, Clippy with `-D warnings` and `git diff --check` passed.
+- All six normally ignored FUSE tests explicitly passed with an isolated mock mount and the newly built CLI. Independent daemon smoke passed hydration, write/upload, move/delete, pin and release.
+- 19 Nautilus Python tests passed.
+- Peer tests cover two isolated state directories over an opaque mock cloud store, automatic discovery, no automatic trust, mutual challenge handshakes, bidirectional ping/pong, revocation, malformed messages, stale sessions, replay, low-order X25519 input and signature/routing tampering.
+- Update tests cover normal installation, wrong signature/product/platform/version, file damage, post-staging corruption, launch failure, rollback and retained high-water state. The explicitly enabled native-process test starts a compiled fixture executable, then rejects a correctly signed non-executable package and preserves the previous version. Fixtures use ephemeral test signing keys, never the publisher private key.
+- A real CLI process regression reproduced the relative-output health-check failure before fixing it. The old daemon test failed under a simulated 600ms startup delay; the revised barrier test passes the same delayed start while preserving the incremental-durability assertion. See TD-20260916-03/04 in the incident log.
+- Original relay-lab copied into an isolated temporary directory failed both newly added security requirements (injected self-signed cloud identity and duplicate control envelope). New peer equivalent security tests pass. Original supplied source was not modified.
+- Stable `twodrive-daemon.service` remains active, PID 204605, start time 2026-09-16 14:18:36 CST (before this development). No install, restart, unmount or existing account-file change was performed. The main worktree remains on its original commit with only the supplied untracked prototype.
+
+Native CI and artifact hashes are recorded below.
+
+## Explicit limits
+
+No real Microsoft account login was performed in this task, and no Windows/Linux real OneDrive discovery, handshake or message round trip is claimed. CI validates native Windows code, DPAPI, protocol logic and process execution with synthetic data; it cannot establish tenant consent, AppFolder/permanentDelete availability, browser policies, proxy behavior or account-specific Graph reliability. The first real test remains the [two-machine guide](peer-quickstart.zh-CN.md). Keep both machine clocks synchronized.
+
+No live signed GitHub Release update was published or downloaded end to end. Update validation/activation are tested with local synthetic signed packages and real native fixture processes, not with the user's installed Windows machine. A later publisher must sign a strictly newer version with the independent offline release key and publish the documented assets. No release private key is in Git, CI or artifacts. It is stored locally in the publisher's `~/.local/share/twodrive-peer-publisher/` directory and should be backed up offline.
+
+This phase has no backup file-transfer or remote filesystem operation. Selected roots are local authorization records only; cloud messages cannot enumerate or read any directory. State and the outbox are per-user; control transport is bounded and best-effort, messages expire, and old process sessions deliberately cannot execute queued old-session messages. A verified ping/pong confirms a particular round trip; it does not promise exactly-once delivery under crashes.
+
+The cloud can suppress/flood/reorder objects or erase presence, so availability against malicious cloud behavior is not promised. Fingerprints must be verified out of band once; a self-signed manifest alone does not establish ownership. Executable authenticity uses the pinned release key rather than Authenticode/SmartScreen reputation. Key rotation, comprehensive power-cut testing, long-running Windows service behavior and third-party security review remain future work.
+
+
+## Verified delivery
+
+- Build/source commit: [31ca30e](https://github.com/LumiaBlack51/twodrive/commit/31ca30e0433fbbf733930e14a88315058d472ec1), branch `codex/peer-control`, not merged into main.
+- [Final native CI run](https://github.com/LumiaBlack51/twodrive/actions/runs/35068850290): both jobs successful. Windows: 68 default tests plus the explicitly enabled native update process test; release PE execution, identity persistence and health output passed. Linux: 110 defaults, explicit update process test, Python tests, format/Clippy and release health passed. Six FUSE tests were run locally, not on CI.
+- Windows artifact `twodrive-peer-windows-x86_64`, artifact ID **10435477457**. CI ZIP digest: `5ff51411b8ad9efca30e19c0e50b9ea6992e3409865ef89f4396338655692e81`.
+- Linux CI artifact `twodrive-peer-linux-x86_64`, ID **10435760184**. CI ZIP digest: `8e39b8c8a6fc507c53d8e2d3e0af9ce342f3e0fe7b96030289d5b4a408c01873`. The separately provided local Linux binary is built on this workstation for its own glibc compatibility; it is not asserted byte-identical to the Ubuntu CI build.
+- Downloaded Windows exe: **7,656,448 bytes**, SHA-256 **`310f8ee544545e7bf7754f06a3c5e425d6ad3439bf6a688375f7e47eac59eaf5`**. Verified against CI SHA256SUMS, parsed PE machine 0x8664 (AMD64), and matching pinned public key. Native CI dependency inspection found only Windows system DLLs, no VCRUNTIME/MSVCP redistributable dependency.
+- Local Linux exe SHA-256: `a1c181ad1240b6999fd2e76e78b1992be000e7cc0d99dac721e65c8aaa099e89`.
+- Offline release manifests for these exact 0.1.0 binaries were signed after download/build with the independent publisher key. Their signatures and hashes were independently checked using Python cryptography. These manifests were not added to or substituted into the original CI artifact.
+- Local enhanced Windows ZIP: `dist/twodrive-peer-0.1.0-windows-x86_64.zip`, SHA-256 `e00bab8237a1aac6840b30cde3c5b91eda890483680f43ed4c9e39f325b72e50`. It contains the unchanged CI exe, quickstart, public key, checksum, signed release manifest and build provenance; no state, token or private key.
+- Original main/refactor worktrees and the running daemon were not modified. Delivery-only documentation updates after this build commit do not change the executable inputs. No GitHub Release, stable package or system installation was published.
+
+Failure transparency: initial CI stopped at two Clippy findings, fixed before final verification. Subsequent release health output and a pre-existing scheduler-sensitive daemon test failure are recorded with reproductions in TD-20260916-03/04. Superseded in-flight runs were cancelled; only the final successful run is the delivery reference. CI emits a non-fatal action Node-runtime deprecation notice, with all required steps passing.

@@ -47,7 +47,7 @@
 ## TD-20260916-06：控制通道分页校验拒绝等价的 OneDrive ID 编码
 
 - 日期：2026-09-16
-- 状态：已修复；单元测试证明旧代码失败、新代码通过，最终原生 CI 待确认。
+- 状态：已验证单元机制：旧代码失败、新代码通过，Linux/Windows 最终 CI 通过；真实 Graph 分页未验证。
 - 影响版本与环境：peer 控制 provider，至 fb05bcb；既有文件系统分页未改动。
 - 关联历史故障：TD-20260916-02 的不可信 URL 约束新增时边界遗漏，不是同一信任根因。
 
@@ -77,7 +77,7 @@
 
 ### 交付记录
 
-实验修复提交、最终 CI 待补充。
+[修复提交 31ca30e](https://github.com/LumiaBlack51/twodrive/commit/31ca30e0433fbbf733930e14a88315058d472ec1)；[最终 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/35068850290)。
 
 ## TD-20260916-05：peer 篡改测试可能没有实际改变随机密文
 
@@ -112,12 +112,12 @@
 
 ### 交付记录
 
-修复提交和最终 CI 待补充。
+[修复提交 fb05bcb](https://github.com/LumiaBlack51/twodrive/commit/fb05bcb943b086fc2413ab049fc5cbd17c2e94c3)；[最终 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/35068850290)。
 
 ## TD-20260916-04：CI 中既有 known-folder 持久化测试的短观察窗失败
 
 - 日期：2026-09-16
-- 状态：已修复测试调度依赖，本地验证通过；生产回归尚无证据。
+- 状态：已验证测试调度依赖修复：本地与最终 Linux CI 通过；生产回归尚无证据。
 - 影响版本与环境：重构前继承的 daemon 测试；peer CI 35068052022 的 Linux runner。
 - 关联历史故障：[响应与恢复](responsiveness-recovery-2026-09-08.md)描述需要保留的逐任务持久化行为；[历史调查](background-download-investigation-2026-09-08.md)曾记录另一项并发测试波动，不能据此认定相同根因。
 
@@ -139,7 +139,7 @@ completed_known_folder_job_is_persisted_while_slower_job_runs 在 CI 断言失�
 
 ### 验证结果与边界
 
-同样的 600ms 模拟启动延迟下，旧测试失败；新屏障版本在 1.55 秒内通过，且断言仍要求慢任务未完成时快结果已经持久化。原生 CI 结果待补充。属于测试确定性验证，不代表真实 OneDrive 上传性能。
+同样的 600ms 模拟启动延迟下，旧测试失败；新屏障版本在 1.55 秒内通过，且断言仍要求慢任务未完成时快结果已经持久化。最终原生 CI 通过。属于测试确定性验证，不代表真实 OneDrive 上传性能。
 
 ### 防复发措施与后续
 
@@ -147,12 +147,12 @@ completed_known_folder_job_is_persisted_while_slower_job_runs 在 CI 断言失�
 
 ### 交付记录
 
-[CI 35068052022](https://github.com/LumiaBlack51/twodrive/actions/runs/35068052022)，修复提交待补充。
+[CI 35068052022](https://github.com/LumiaBlack51/twodrive/actions/runs/35068052022)，[修复提交 fb05bcb](https://github.com/LumiaBlack51/twodrive/commit/fb05bcb943b086fc2413ab049fc5cbd17c2e94c3)；[最终 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/35068850290)。
 
 ## TD-20260916-03：peer 健康检查无法写入相对输出文件
 
 - 日期：2026-09-16
-- 状态：已修复，本地回归通过；Windows 原生最终 CI 待确认。
+- 状态：已验证：本地与 Windows 原生 CLI 回归及 release 自检通过。
 - 影响版本与环境：实验 peer 0.1.0，截至 7f357bd；不影响现用 TwoDrive 实例。
 - 关联历史故障：无；不是 TD-20260916-02 的协议信任问题。
 
@@ -174,7 +174,7 @@ Path::parent 对单文件名返回空路径；原子写入尝试在空路径创�
 
 ### 验证结果与边界
 
-`release_health_command_writes_relative_output_without_state_side_effects` 在修复前失败，修复后通过；格式、Clippy 和 diff 检查通过。Windows 原生重跑结果待补充。测试不访问 OneDrive，不代表真实登录通过。
+`release_health_command_writes_relative_output_without_state_side_effects` 在修复前失败，修复后通过；格式、Clippy 和 diff 检查通过。Windows 原生同一 CLI 回归及 release 自检通过。测试不访问 OneDrive，不代表真实登录通过。
 
 ### 防复发措施与后续
 
@@ -182,12 +182,12 @@ Path::parent 对单文件名返回空路径；原子写入尝试在空路径创�
 
 ### 交付记录
 
-触发 CI：[35067546462](https://github.com/LumiaBlack51/twodrive/actions/runs/35067546462)。修复提交和最终 artifact 待补充。
+触发 CI：[35067546462](https://github.com/LumiaBlack51/twodrive/actions/runs/35067546462)。[修复提交 69fb3d9](https://github.com/LumiaBlack51/twodrive/commit/69fb3d94c797867f8d702daf7801d6f73e04000f)；[最终 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/35068850290)。artifact 摘要见 [交付记录](peer-implementation.md#verified-delivery)。
 
 ## TD-20260916-02：relay-lab 原型的云端信任与控制重放边界不足
 
 - 日期：2026-09-16
-- 状态：已定位；新 peer 实现的回归验证进行中。
+- 状态：已验证新 peer 的本地及原生 CI 安全机制；真实 OneDrive 端到端未验证。
 - 影响版本与环境：用户提供的独立 twodrive-relay-lab 0.1.0 原型；不据此认定稳定 TwoDrive 存在相同攻击面。
 - 关联历史故障：无；与 FUSE 权限和本地创建记录故障无关。
 
@@ -211,7 +211,7 @@ Path::parent 对单文件名返回空路径；原子写入尝试在空路径创�
 
 ### 验证结果与边界
 
-初轮 peer 7 项、core 31 项 Linux 测试通过，包括未知设备拒绝、双向握手与 ping/pong、重放/过期/会话拒绝，以及正常更新、错误签名、损坏文件、健康检查失败回退。完整 workspace、原生 Windows CI 和更多集成测试进行中。测试为模拟，非真实 OneDrive 端到端。已在原型副本运行 audited_cloud_manifest_is_not_local_authorization 和 audited_control_replay_must_be_rejected，两项均因预期的安全边界缺失而失败；新 peer 的对应未知身份和重放拒绝测试通过。两套实现协议不同，这不是将同一测试直接移植到旧生产版本。
+初轮 peer 7 项、core 31 项 Linux 测试通过，包括未知设备拒绝、双向握手与 ping/pong、重放/过期/会话拒绝，以及正常更新、错误签名、损坏文件、健康检查失败回退。最终 110 项默认 Rust 测试、19 项 Python 测试、6 项实际隔离 FUSE 测试、独立 daemon smoke 通过。Windows 原生 CI 的 68 项默认测试及额外原生更新进程测试通过。测试为模拟，非真实 OneDrive 端到端。已在原型副本运行 audited_cloud_manifest_is_not_local_authorization 和 audited_control_replay_must_be_rejected，两项均因预期的安全边界缺失而失败；新 peer 的对应未知身份和重放拒绝测试通过。两套实现协议不同，这不是将同一测试直接移植到旧生产版本。
 
 ### 防复发措施与后续
 
@@ -219,7 +219,7 @@ Path::parent 对单文件名返回空路径；原子写入尝试在空路径创�
 
 ### 交付记录
 
-实验分支 codex/peer-control；提交、CI 和 artifact 链接待实际产生后补充。未发布或替换稳定 TwoDrive。
+实验分支 codex/peer-control；[构建提交 31ca30e](https://github.com/LumiaBlack51/twodrive/commit/31ca30e0433fbbf733930e14a88315058d472ec1)；[最终 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/35068850290)。产物摘要见 [交付记录](peer-implementation.md#verified-delivery)。未发布或替换稳定 TwoDrive。
 
 ## TD-20260916-01：C 编译产物在挂载中无法执行
 
