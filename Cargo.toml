@@ -5,6 +5,7 @@ members = [
     "crates/twodrive-core",
     "crates/twodrive-daemon",
     "crates/twodrive-fs",
+    "crates/twodrive-windows",
 ]
 resolver = "3"
 

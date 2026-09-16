@@ -1,0 +1,14 @@
+{
+  "result": "PASS",
+  "root": "C:\\Users\\Lenovo\\AppData\\Local\\Temp\\twodrive-editions-tmfrokn8\\state",
+  "checks": [
+    "same engine and tray bytes",
+    "Lite has no Flutter/Dart",
+    "Full owns single tray",
+    "second Lite tray rejected",
+    "close Full tray keeps engine",
+    "Lite reuses same engine PID",
+    "pause setting retained",
+    "close Lite tray keeps engine"
+  ]
+}

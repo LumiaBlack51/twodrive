@@ -31,3 +31,10 @@ TwoDrive/
 # Python extension test bytecode
 __pycache__/
 *.pyc
+
+# Windows build mirrors/artifacts and Flutter generated state
+/apps/full/.dart_tool/
+/apps/full/build/
+/apps/full/windows/flutter/ephemeral/
+/apps/full/*.log
+/dist-windows/

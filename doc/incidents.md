@@ -44,6 +44,135 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20260916-W03：文件页没有明确显示断连且重连遗留错误提示
+
+- 日期：2026-09-16
+- 状态：修复；3 项 Flutter 状态回归通过；最终原生界面断连/重连复验通过
+- 影响版本与环境：本地 Windows Full 开发预览，未发布
+- 关联历史故障：无
+
+### 症状与影响
+
+实机终止隔离测试后台后，文件列表被清空且按钮禁用，但页面只说没有文件，
+没有明确说明断连。检查客户端发现成功重连的 snapshot 不会清除此前传输错误。
+定时读取还会短暂显示“等待后台确认”，引起布局抖动。
+
+### 触发条件与复现
+
+Full 文件页连接隔离 Mock，终止本轮创建的 engine，再启动同一 state。
+截图证据显示初版文件页的断连说明不足。未接触日常账户。
+
+### 根因与证据
+
+错误条仅放在概览 status()；files() 对 null snapshot 和空文件列表用同一个提示。
+客户端仅在非 snapshot 成功时清 error。busy 同时用于轮询和用户命令。
+
+### 解决办法与恢复操作
+
+所有管理页显示连接状态/排队数与错误；断连使用独立说明并禁用操作；
+成功重连清除 transport error；pendingMutation 区分读轮询与写请求。
+仅重启一次性测试后台；没有修改实际同步状态。
+
+### 验证结果与边界
+
+Flutter 3 项回归验证断连清快照并禁操作、重连清错误、暂停等待后台确认、
+不匹配响应 ID 拒绝应用。实机暂停与 UI->IPC->排队链路已验证；
+最终修正版截图见本轮进度追加记录。CFAPI 和真实 Graph 未验证。
+
+### 防复发措施与后续
+
+apps/full/test/engine_client_test.dart 纳入打包脚本；界面不得乐观显示写操作成功。
+
+### 交付记录
+
+本地隔离分支，无 Release；见 [Windows 进度](windows-progress.md)。
+
+## TD-20260916-W01：Windows Full 依赖解析成功但原生编译失败
+
+- 日期：2026-09-16
+- 状态：已定位并在本机原生 Release 构建验证修复；CI 未执行
+- 影响版本与环境：Windows 新开发预览；Flutter 3.41.7、Dart 3.11.5
+- 关联历史故障：无；不是既有 Linux 用户故障
+
+### 症状与影响
+
+flutter analyze lib 通过，但 flutter build windows --release 失败。
+未安装、未发布该失败产物，无真实账户或文件受影响。
+
+### 触发条件与复现
+
+pubspec 使用 fluent_ui ^4.12.0，解析到 4.16.1；原生编译报
+ScrollCacheExtent 不存在、ignorePointer/onReorderItem 参数不存在。
+
+### 根因与证据
+
+4.16.1 源码使用了本机 Flutter 没有的 API；仅分析应用 lib 不会完整编译
+依赖。构建日志明确指向 pub 缓存中的 fluent_ui-4.16.1。
+另发现 Windows Pub 联网 TLS 错误，阻碍获取兼容依赖；不是同一根因。
+
+### 解决办法与恢复操作
+
+固定 fluent_ui 4.12.0，提交 pubspec.lock；该版本官方元数据要求 Flutter >=3.32。
+本机 Windows Pub TLS 失败时，用 WSL 官方 pub.dev HTTPS 下载归档，
+对照官方 archive_sha256 核验后补充开发缓存，使用离线锁定解析。
+未关闭 TLS、未升级 Flutter、未修改用户日常应用安装。
+缓存是构建工具依赖，非 TwoDrive 用户状态。
+
+### 验证结果与边界
+
+同一 Flutter 上旧依赖原生 build 失败，固定后 release exe 构建成功。
+增加双发行版脚本：必须检查 flutter build 和工具退出码，不能以 analyze
+成功替代。CI 配置尚未运行，多架构未验证。
+
+### 防复发措施与后续
+
+锁定 Flutter 和依赖，CI 原生编译 Full；跟随未来 Flutter 升级时有意更新。
+完整验证见 [Windows 进度](windows-progress.md)。
+
+### 交付记录
+
+本地隔离分支；未推送、未 Release；提交记录待本轮检查结束补记。
+
+## TD-20260916-W02：原生 IPC 测试误用 Windows 默认文本编码
+
+- 日期：2026-09-16
+- 状态：修复并原生重跑通过
+- 影响版本与环境：新测试脚本、中文 Windows Python 3.13，非引擎数据故障
+- 关联历史故障：无
+
+### 症状与影响
+
+测试脚本输出 PASS，同时 stderr reader 线程出现 GBK UnicodeDecodeError。
+该次输出不能作为干净验收证据。
+
+### 触发条件与复现
+
+subprocess.run(text=True) 未指定编码，读到 Rust UTF-8 本地化 OS 错误。
+连接前/关闭后 IPC 失败属于本测试预期路径。
+
+### 根因与证据
+
+Python traceback 位于 subprocess readerthread；引擎 JSON/错误为 UTF-8，
+Windows Python 默认编码为 GBK。并非管道消息截断或同步成功丢失。
+
+### 解决办法与恢复操作
+
+测试子进程显式 encoding="utf-8"；仅修改测试读取层，无本地账户恢复操作。
+
+### 验证结果与边界
+
+重跑原生 IPC 全流程无解码异常，上传/下载字节一致，断连与设置保留通过。
+其它地区语言环境未全部测试；协议规范固定 UTF-8。
+
+### 防复发措施与后续
+
+全部 Windows IPC 自动化脚本显式编码；CI 保留原生测试。
+没有将旧次带异常的 PASS 计为验收。
+
+### 交付记录
+
+本地隔离分支；未发布；证据见 [Windows 进度](windows-progress.md)。
+
 ## TD-20260916-01：C 编译产物在挂载中无法执行
 
 - 日期：2026-09-16

@@ -80,7 +80,7 @@ pub fn recover_dirty_uploads_concurrent<B: CloudBackend>(
     Ok(recovered.load(Ordering::Relaxed))
 }
 
-pub(crate) fn recover_dirty_record<B: CloudBackend>(
+pub fn recover_dirty_record<B: CloudBackend>(
     db: &Database,
     backend: &B,
     record: FileRecord,

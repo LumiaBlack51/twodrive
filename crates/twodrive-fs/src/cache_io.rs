@@ -44,10 +44,12 @@ pub(crate) fn sanitize_cache_name(remote_id: &str) -> String {
         .collect()
 }
 
+#[cfg(unix)]
 pub(crate) fn current_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+#[cfg(unix)]
 pub(crate) fn current_gid() -> u32 {
     unsafe { libc::getgid() }
 }
@@ -57,5 +59,5 @@ pub(crate) fn unique_suffix() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    format!("{nanos}-{}", unsafe { libc::getpid() })
+    format!("{nanos}-{}", std::process::id())
 }
