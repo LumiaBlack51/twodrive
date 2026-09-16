@@ -10,6 +10,7 @@ use crate::MockBackend;
 use reqwest::blocking::Client;
 use std::fs::{self};
 #[cfg(test)]
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -396,6 +397,7 @@ fn upload_session_store_round_trips_with_private_permissions() {
     let session = loaded.sessions.get("/large.bin").unwrap();
     assert_eq!(session.source_size, 42);
     assert_eq!(session.remote_id.as_deref(), Some("remote-id"));
+    #[cfg(unix)]
     assert_eq!(
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600

@@ -215,6 +215,10 @@ fn tick(
                         println!("Release notification: {tag}");
                         if auto_update && now - *update_attempts.get(tag).unwrap_or(&0) > 3600 {
                             update_attempts.retain(|_, t| now - *t < 3600);
+                            ensure!(
+                                update_attempts.len() < 64,
+                                "update notification rate limit reached"
+                            );
                             update_attempts.insert(tag.clone(), now);
                             if update::download_and_stage(home, tag).is_ok() {
                                 store.delete(&bucket, &object.name)?;
@@ -282,7 +286,14 @@ pub fn supervise(home: &Path, auto_update: bool) -> anyhow::Result<()> {
         if auto_update {
             cmd.arg("--auto-update");
         }
-        let mut child = cmd.spawn().context("unable to start peer worker")?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(_) if exe != bootstrap => {
+                update::rollback(home)?;
+                continue;
+            }
+            Err(err) => return Err(err).context("unable to start peer worker"),
+        };
         let start = Instant::now();
         let startup = loop {
             if ready.exists() {
@@ -316,5 +327,151 @@ pub fn supervise(home: &Path, auto_update: bool) -> anyhow::Result<()> {
         }
         ensure!(status.success(), "peer worker stopped");
         return Ok(());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use twodrive_backend::control::ControlObject;
+    type Objects = BTreeMap<(String, String), Vec<u8>>;
+    #[derive(Default)]
+    struct Memory(RefCell<Objects>);
+    impl ControlStore for Memory {
+        fn list(&self, bucket: &str) -> anyhow::Result<Vec<ControlObject>> {
+            Ok(self
+                .0
+                .borrow()
+                .iter()
+                .filter(|((b, _), _)| b == bucket)
+                .map(|((_, name), v)| ControlObject {
+                    name: name.clone(),
+                    size: v.len() as u64,
+                })
+                .collect())
+        }
+        fn get(&self, bucket: &str, name: &str) -> anyhow::Result<Vec<u8>> {
+            self.0
+                .borrow()
+                .get(&(bucket.into(), name.into()))
+                .cloned()
+                .context("missing")
+        }
+        fn put(&self, bucket: &str, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
+            self.0
+                .borrow_mut()
+                .insert((bucket.into(), name.into()), bytes.to_vec());
+            Ok(())
+        }
+        fn delete(&self, bucket: &str, name: &str) -> anyhow::Result<()> {
+            self.0.borrow_mut().remove(&(bucket.into(), name.into()));
+            Ok(())
+        }
+    }
+    struct Harness {
+        home: tempfile::TempDir,
+        engine: Engine,
+        counters: Counters,
+        published: i64,
+        hello: BTreeMap<String, i64>,
+        updates: BTreeMap<String, i64>,
+    }
+    impl Harness {
+        fn new() -> Self {
+            let home = tempfile::tempdir().unwrap();
+            local::prepare(home.path()).unwrap();
+            let engine = Engine::new(identity(home.path()).unwrap(), BTreeSet::new());
+            Self {
+                home,
+                engine,
+                counters: Counters::default(),
+                published: 0,
+                hello: BTreeMap::new(),
+                updates: BTreeMap::new(),
+            }
+        }
+        fn tick(&mut self, store: &Memory) {
+            tick(
+                store,
+                self.home.path(),
+                &mut self.engine,
+                &mut self.counters,
+                &mut self.published,
+                &mut self.hello,
+                &mut self.updates,
+                false,
+            )
+            .unwrap();
+        }
+    }
+    #[test]
+    fn two_isolated_peers_discover_pair_and_exchange_via_opaque_cloud_store() {
+        let store = Memory::default();
+        let mut a = Harness::new();
+        let mut b = Harness::new();
+        a.tick(&store);
+        b.tick(&store);
+        assert_eq!(discover(&store, now_unix()).unwrap().len(), 2);
+        let ai = a.engine.identity.id();
+        let bi = b.engine.identity.id();
+        assert!(!a.engine.authenticated(&bi, now_unix()));
+        trust(a.home.path(), &bi, false).unwrap();
+        trust(b.home.path(), &ai, false).unwrap();
+        for _ in 0..4 {
+            a.tick(&store);
+            b.tick(&store);
+        }
+        assert!(a.engine.authenticated(&bi, now_unix()) && b.engine.authenticated(&ai, now_unix()));
+        queue(a.home.path(), &bi, Message::Ping { nonce: nonce() }).unwrap();
+        queue(b.home.path(), &ai, Message::Ping { nonce: nonce() }).unwrap();
+        for _ in 0..4 {
+            a.tick(&store);
+            b.tick(&store);
+        }
+        assert_eq!(
+            (
+                a.counters.pings,
+                a.counters.pongs,
+                b.counters.pings,
+                b.counters.pongs
+            ),
+            (1, 1, 1, 1)
+        );
+        let path = a.home.path().join("private-directory");
+        fs::create_dir(&path).unwrap();
+        local::select_root(a.home.path(), &path).unwrap();
+        for data in store.0.borrow().values() {
+            let text = String::from_utf8_lossy(data);
+            assert!(
+                !text.contains("private-directory")
+                    && !text.contains("access_token")
+                    && !text.contains("identity.dat")
+            );
+        }
+        // Revocation takes effect while running; poisoned cloud input cannot keep the mailbox blocked.
+        trust(a.home.path(), &bi, true).unwrap();
+        store
+            .put(&format!("in-{ai}"), "poison.json", b"{not-json}")
+            .unwrap();
+        a.tick(&store);
+        assert!(!a.engine.authenticated(&bi, now_unix()));
+        assert_eq!(a.counters.rejected, 1);
+        assert!(store.list(&format!("in-{ai}")).unwrap().is_empty());
+    }
+    #[test]
+    fn locks_and_state_directory_guard_prevent_runtime_collision() {
+        let home = tempfile::tempdir().unwrap();
+        local::prepare(home.path()).unwrap();
+        let guard = local::lock(home.path(), "worker.lock").unwrap();
+        assert!(local::lock(home.path(), "worker.lock").is_err());
+        drop(guard);
+        assert!(local::lock(home.path(), "worker.lock").is_ok());
+        fs::write(home.path().join("twodrive.sqlite3"), b"untouched").unwrap();
+        assert!(local::prepare(home.path()).is_err());
+        assert_eq!(
+            fs::read(home.path().join("twodrive.sqlite3")).unwrap(),
+            b"untouched"
+        );
     }
 }

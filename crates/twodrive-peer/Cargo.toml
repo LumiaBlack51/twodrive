@@ -26,3 +26,11 @@ fs2 = "0.4"
 tempfile = "3"
 
 [dev-dependencies]
+
+[features]
+test-fixture = []
+
+[[bin]]
+name = "peer-health-fixture"
+path = "tests/fixtures/health.rs"
+required-features = ["test-fixture"]

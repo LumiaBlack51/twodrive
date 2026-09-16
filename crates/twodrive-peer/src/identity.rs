@@ -20,9 +20,9 @@ pub fn valid_id(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 pub fn bytes32(value: &str) -> anyhow::Result<[u8; 32]> {
-    Ok(hex::decode(value)?
+    hex::decode(value)?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("invalid key length"))?)
+        .map_err(|_| anyhow::anyhow!("invalid key length"))
 }
 pub struct Identity {
     signing: SigningKey,

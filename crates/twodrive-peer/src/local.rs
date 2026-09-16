@@ -34,13 +34,13 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
 }
 pub fn default_home() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
-    let root = std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA missing")?;
+    let root = PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA missing")?);
     #[cfg(not(windows))]
     let root = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/share")))
         .context("HOME missing")?;
-    Ok(PathBuf::from(root).join("twodrive-peer-lab"))
+    Ok(root.join("twodrive-peer-lab"))
 }
 pub fn prepare(home: &Path) -> anyhow::Result<PathBuf> {
     ensure!(

@@ -31,6 +31,7 @@ pub struct GraphBackend {
     client: Client,
     upload_sessions_path: PathBuf,
     upload_sessions: Arc<Mutex<UploadSessionStore>>,
+    control_folders: Mutex<std::collections::HashMap<String, (Instant, String)>>,
 }
 
 impl GraphBackend {
@@ -56,6 +57,7 @@ impl GraphBackend {
                 .build()?,
             upload_sessions_path,
             upload_sessions,
+            control_folders: Mutex::new(std::collections::HashMap::new()),
         })
     }
 

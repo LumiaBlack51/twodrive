@@ -91,13 +91,30 @@ impl GraphBackend {
     }
     fn control_bucket(&self, bucket: &str) -> anyhow::Result<String> {
         validate_component(bucket)?;
+        if let Some((time, id)) = self
+            .control_folders
+            .lock()
+            .map_err(|_| anyhow::anyhow!("control cache lock poisoned"))?
+            .get(bucket)
+            && time.elapsed() < std::time::Duration::from_secs(60)
+        {
+            return Ok(id.clone());
+        }
         let root: Item = serde_json::from_slice(&bounded(
             self.get_with_retry(&format!("{GRAPH}/me/drive/special/approot"))?,
             MAX_CONTROL_BYTES,
         )?)?;
         ensure!(root.folder.is_some(), "app root is not a folder");
         let namespace = self.control_folder(&root.id, ROOT)?;
-        self.control_folder(&namespace, bucket)
+        let id = self.control_folder(&namespace, bucket)?;
+        let mut cache = self
+            .control_folders
+            .lock()
+            .map_err(|_| anyhow::anyhow!("control cache lock poisoned"))?;
+        cache.retain(|_, (time, _)| time.elapsed() < std::time::Duration::from_secs(60));
+        ensure!(cache.len() < 128, "control bucket cache full");
+        cache.insert(bucket.into(), (std::time::Instant::now(), id.clone()));
+        Ok(id)
     }
 }
 impl ControlStore for GraphBackend {

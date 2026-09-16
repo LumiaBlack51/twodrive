@@ -397,4 +397,46 @@ mod tests {
         }
         assert_eq!(validate_tag("peer-v0.2.0").unwrap(), Version::new(0, 2, 0));
     }
+    #[test]
+    #[ignore = "requires TWODRIVE_TEST_UPDATE_EXE native fixture; explicitly run in native CI"]
+    fn native_process_install_health_and_start_failure_rollback() {
+        let exe = std::env::var_os("TWODRIVE_TEST_UPDATE_EXE").expect("native fixture required");
+        let bytes = std::fs::read(exe).unwrap();
+        let (key, mut release, _) = package();
+        let public = hex::encode(key.verifying_key().as_bytes());
+        release.platform = crate::identity::platform().into();
+        release.file = executable_name(&release.platform).into();
+        release.size = bytes.len() as u64;
+        release.sha256 = hex::encode(Sha256::digest(&bytes));
+        release.signature = hex::encode(key.sign(&release.signing_bytes()).to_bytes());
+        let home = tempfile::tempdir().unwrap();
+        stage(home.path(), &release, &bytes, &public, &release.platform).unwrap();
+        activate(home.path(), &public, &release.platform, health_check).unwrap();
+        assert_eq!(
+            UpdateState::load(home.path()).unwrap().active,
+            Some(Version::new(0, 1, 1))
+        );
+        // A correctly signed but non-executable next package must fail actual spawning.
+        let broken = b"validly signed, cannot execute";
+        release.version = Version::new(0, 1, 2);
+        release.size = broken.len() as u64;
+        release.sha256 = hex::encode(Sha256::digest(broken));
+        release.signature = hex::encode(key.sign(&release.signing_bytes()).to_bytes());
+        stage(home.path(), &release, broken, &public, &release.platform).unwrap();
+        assert!(activate(home.path(), &public, &release.platform, health_check).is_err());
+        assert_eq!(
+            UpdateState::load(home.path()).unwrap().active,
+            Some(Version::new(0, 1, 1))
+        );
+        // Simulate post-activation worker failure and retain anti-rollback highwater.
+        let mut state = UpdateState::load(home.path()).unwrap();
+        state.previous = state.active.clone();
+        state.active = Some(Version::new(0, 1, 2));
+        state.highwater = state.active.clone();
+        state.save(home.path()).unwrap();
+        rollback(home.path()).unwrap();
+        let state = UpdateState::load(home.path()).unwrap();
+        assert_eq!(state.active, Some(Version::new(0, 1, 1)));
+        assert_eq!(state.highwater, Some(Version::new(0, 1, 2)));
+    }
 }

@@ -14,7 +14,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo test -p twodrive-peer -p twodrive-core --locked
+      - run: cargo test -p twodrive-peer -p twodrive-core -p twodrive-backend --locked
+      - run: cargo build -p twodrive-peer --features test-fixture --bin peer-health-fixture --locked
+      - shell: pwsh
+        run: |
+          $env:TWODRIVE_TEST_UPDATE_EXE = (Resolve-Path target/debug/peer-health-fixture.exe).Path
+          cargo test -p twodrive-peer --locked native_process_install_health_and_start_failure_rollback -- --ignored
+          if ($LASTEXITCODE) { throw "Native update test failed" }
       - run: cargo clippy -p twodrive-peer --all-targets --locked -- -D warnings
       - run: cargo build -p twodrive-peer --bin twodrive-peer --release --locked --target x86_64-pc-windows-msvc
       - shell: pwsh
@@ -50,6 +56,8 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
+      - run: cargo build -p twodrive-peer --features test-fixture --bin peer-health-fixture --locked
+      - run: TWODRIVE_TEST_UPDATE_EXE="$PWD/target/debug/peer-health-fixture" cargo test -p twodrive-peer --locked native_process_install_health_and_start_failure_rollback -- --ignored
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: python3 -m unittest discover -s packaging/nautilus -p 'test_*.py'
       - run: cargo build -p twodrive-peer --bin twodrive-peer --release --locked
