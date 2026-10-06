@@ -47,7 +47,7 @@
 ## TD-20261006-04：dev Windows 原生编译检查失败
 
 - 日期：2026-10-06
-- 状态：已修复待 Windows 原生验证。
+- 状态：已验证（原生 Linux/Windows 编译、协议测试与双进程 CLI）。
 - 影响版本与环境：dev 提交 `0222663`，GitHub windows-latest，静态 CRT 编译参数。
 - 关联历史故障：TD-20261006-02/03 属于 Linux 协议/文件适配问题；当前未认定同源。
 
@@ -69,15 +69,19 @@ Windows fmt 通过，Clippy/编译步骤失败，后续测试与产物构建被�
 
 ### 验证结果与边界
 
-旧 Windows CI 明确失败，未运行协议测试或构建产物。修正后本机 Linux 新增元数据兼容性测试与 9 项协议集成测试全部通过，fmt/Clippy 警告视错误通过；`cargo tree --target x86_64-pc-windows-msvc --locked` 核对无稳定核心/后端/FUSE/SQLite 依赖。Windows 原生重新编译、测试、双进程冒烟与产物仍待 CI，不把依赖图检查当作执行验证；Linux/本机其他范围见 TD-20261006-03。
+旧 Windows CI 明确失败，未运行协议测试或构建产物。修正后本机 Linux 新增元数据兼容性测试与 9 项协议集成测试全部通过，fmt/Clippy 警告视错误通过；`cargo tree --target x86_64-pc-windows-msvc --locked` 核对无稳定核心/后端/FUSE/SQLite 依赖。
+
+[a15be05 原生 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37471312984) 已全部成功：Linux 1 项元数据兼容性测试 + 9 项协议测试，Windows 8 项协议测试；两平台 fmt、Clippy 警告视错误、release 构建、双 CLI 进程 GET/PUT/MOVE/DELETE 与 2,097,105 字节比对、产物上传通过。Windows 使用静态 CRT。原失败分支不能编译，修正后同一原生流程成功，验证了依赖隔离机制。
+
+**边界**：Windows 未执行 Unix 权限、软链接与 FIFO 的专用测试，也未验证用户特定 ACL、Explorer WebDAV 客户端或 Windows FUSE 挂载。CI 冒烟各自在单个 runner 内启动两进程，不能据此声称两台异地 NAT 验证。Linux/公共中继与稳定基线范围见 TD-20261006-03。
 
 ### 防复发措施与后续
 
-保留原生 Windows 编译、协议测试、release 构建与双 CLI 进程 GET/PUT/MOVE/DELETE 冒烟；保留 `portable_metadata_matches_the_linux_contract`，不通过修改稳定代码绕过隔离边界。修正后核对实际 CI 结果。
+保留原生 Windows 编译、协议测试、release 构建与双 CLI 进程 GET/PUT/MOVE/DELETE 冒烟；保留 `portable_metadata_matches_the_linux_contract`，不通过修改稳定代码绕过隔离边界。保留平台矩阵，源码改动后实际核对 CI 结果。
 
 ### 交付记录
 
-源码 [0222663](https://github.com/LumiaBlack51/twodrive/commit/022266391500e1293f722bccb9d333479c7c3cbf)，草稿 [PR #8](https://github.com/LumiaBlack51/twodrive/pull/8)；修复提交待补充。
+源码 [0222663](https://github.com/LumiaBlack51/twodrive/commit/022266391500e1293f722bccb9d333479c7c3cbf)，草稿 [PR #8](https://github.com/LumiaBlack51/twodrive/pull/8)；隔离修复 [a15be05](https://github.com/LumiaBlack51/twodrive/commit/a15be05fe8c038f4ac4556a72a2b0a649c5ec38f)；[成功 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37471312984)，资产 [Linux](https://github.com/LumiaBlack51/twodrive/actions/runs/37471312984/artifacts/11416947772) / [Windows](https://github.com/LumiaBlack51/twodrive/actions/runs/37471312984/artifacts/11417581314)。资产对应已验证源码，不作为稳定 Release。
 
 ## TD-20261006-03：dev 条件覆盖与根目录文件 PUT 被错误拒绝
 
@@ -110,7 +114,7 @@ Windows fmt 通过，Clippy/编译步骤失败，后续测试与产物构建被�
 - 最终 9 项实验集成测试全部通过，fmt、Clippy 警告视错误通过。两独立 CLI 进程的 LAN、公网基础设施默认模式和强制公共中继模式均通过 GET/PUT/MOVE/DELETE，2,097,105 字节比对一致；强制中继输出已核实为 relay。
 - 隔离真实 FUSE + QUIC 测试通过读取、持久保存/后台上传、目录移动和删除；另验证默认只读挂载返回 EROFS、服务器拒绝 PUT。
 - 稳定工作区 101 项 Rust 默认测试、19 项 Nautilus 和 4 项 Settings 测试通过；原有 6 项环境相关 FUSE 测试仍默认忽略，本次新实验挂载冒烟与它们是不同验证。
-- **边界**：两端进程均在本机，公共中继是实际外部基础设施，但未证明两台异地 NAT 机器打洞；未测试全部 WebDAV 厂商、真实 OneDrive 端到端、完整桌面 GUI、断点上传或双向目录镜像。Windows 原生结果在交付后补充，未将 CI 配置当作验证成功。
+- **边界**：两端进程均在本机，公共中继是实际外部基础设施，但未证明两台异地 NAT 机器打洞；未测试全部 WebDAV 厂商、真实 OneDrive 端到端、完整桌面 GUI、断点上传或双向目录镜像。Windows 原生编译、协议与产物结果另见 TD-20261006-04，未将 CI 配置当作验证成功。
 
 ### 防复发措施与后续
 
