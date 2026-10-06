@@ -3,6 +3,7 @@ mod config;
 mod credentials;
 mod database;
 mod domain;
+mod known_folders;
 mod paths;
 mod time;
 
@@ -15,6 +16,10 @@ pub use database::Database;
 pub use domain::{
     CoreError, FileRecord, FileState, MetadataEntry, PendingDelete, PendingMetadataKind,
     PendingMetadataOperation,
+};
+pub use known_folders::{
+    KnownFolderDiagnostic, KnownFolderSourceState, expand_known_folder_home,
+    inspect_known_folder_source, known_folder_diagnostics,
 };
 pub use paths::{AppPaths, join_cloud_path, normalize_cloud_path};
 pub use time::{now_unix, parse_duration_seconds};

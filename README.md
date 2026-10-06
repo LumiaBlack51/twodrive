@@ -27,7 +27,7 @@ TwoDrive is an **experimental Rust OneDrive client for GNOME/Linux**. Browse you
 | --- | --- |
 | **Browse first, download on demand.** Cloud placeholders expose names, sizes, and folders; reading a file fetches its content. | **Save locally, sync in the background.** Create, edit, rename, move, and delete through the mount. Pending changes are recorded locally for retry. |
 | **Choose what stays.** Use **Always keep on this device** and **Release space** from the right-click menu. | **Keep transfers visible.** Nautilus emblems show file state; the tray lists active uploads/downloads and byte progress. |
-| **Use familiar desktop entry points.** Open the mount from the tray and inspect paths and cache usage in the read-only Settings window. | **Recover interrupted work.** Durable queues and resumable large-file uploads separate a successful local save from cloud completion. |
+| **Use familiar desktop entry points.** Open the mount from the tray and inspect paths and cache usage in Settings. | **Recover interrupted work.** Durable queues and resumable large-file uploads separate a successful local save from cloud completion. |
 
 The default mount is `~/TwoDrive/OneDrive`. [Everyday use and desktop controls →](doc/usage.md)
 
@@ -87,7 +87,7 @@ Since 0.2.8, TwoDrive includes its public Microsoft application ID: **no app reg
 
 Tokens are stored in a local JSON file with mode `0600`, not an encrypted keyring; Secret Service is not integrated. File and directory rwx permissions are stored locally and enforced on this mount, including executable files and `chmod`; they survive remounts but do not sync to OneDrive. Cloud-only imports and existing entries default to 0644 (files) or 0755 (directories). Full POSIX ownership, special mode bits, and directory timestamp semantics are not preserved; the mount root mode remains fixed.
 
-The desktop helpers are still limited: **Settings is read-only**, and **Pause sync currently changes the tray display only**, not the daemon. See [current limitations and safety](doc/usage.md#current-limitations-and-safety) before use.
+The desktop helpers are still limited: **Settings can change upload sources; other settings remain read-only**, and **Pause sync currently changes the tray display only**, not the daemon. See [current limitations and safety](doc/usage.md#current-limitations-and-safety) before use.
 
 ## Development
 

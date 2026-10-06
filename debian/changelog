@@ -1,3 +1,13 @@
+twodrive (0.2.11-1) unstable; urgency=medium
+
+  * Diagnose missing upload sources, skipped symlinks and XDG directory mismatches.
+  * Add a Settings source chooser with atomic configuration updates.
+  * Preserve explicit mappings after language changes; require a daemon restart.
+  * Reject home/root and mounted cloud folders as upload sources.
+  * Add source diagnostics, configuration and Settings regressions.
+
+ -- TwoDrive Developers <noreply@localhost>  Tue, 06 Oct 2026 20:00:00 +0800
+
 twodrive (0.2.10-2) unstable; urgency=medium
 
   * Refactor domain, persistence, provider, filesystem and service responsibilities.

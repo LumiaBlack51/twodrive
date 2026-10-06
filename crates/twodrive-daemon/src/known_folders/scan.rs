@@ -1,26 +1,44 @@
 use super::state::{FileSnapshot, KnownFolderRoot, KnownFolderState, KnownFolderUploadJob};
 use super::uploads::process_known_folder_uploads;
 use std::collections::HashSet;
-use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use twodrive_backend::CloudBackend;
 use twodrive_core::{
-    AppPaths, Config, Database, KnownFolderConfig, join_cloud_path, normalize_cloud_path,
+    AppPaths, Config, Database, KnownFolderSourceState, inspect_known_folder_source,
+    join_cloud_path, known_folder_diagnostics, normalize_cloud_path,
 };
 
 pub(super) fn configured_known_folders(
-    folders: &[KnownFolderConfig],
+    config: &Config,
+    paths: &AppPaths,
 ) -> anyhow::Result<Vec<KnownFolderRoot>> {
     let mut roots = Vec::new();
-    for folder in folders {
-        if folder.local.trim().is_empty() || folder.remote.trim().is_empty() {
+    for diagnostic in known_folder_diagnostics(config, paths)? {
+        for warning in &diagnostic.warnings {
+            eprintln!("twodrive: known folder {}: {warning}", diagnostic.remote);
+        }
+        if diagnostic.state != KnownFolderSourceState::Ready {
+            eprintln!(
+                "twodrive: known folder {} source {}: {}",
+                diagnostic.remote,
+                diagnostic.state.as_str(),
+                diagnostic.message
+            );
             continue;
         }
-        let local = expand_home(&folder.local)?;
-        let remote = normalize_cloud_path(&folder.remote);
-        roots.push(KnownFolderRoot { local, remote });
+        if config.known_folders.folders[diagnostic.index]
+            .remote
+            .trim()
+            .is_empty()
+        {
+            continue;
+        }
+        roots.push(KnownFolderRoot {
+            local: diagnostic.local,
+            remote: diagnostic.remote,
+        });
     }
     Ok(roots)
 }
@@ -56,10 +74,16 @@ pub(super) fn sync_known_folder_root<B: CloudBackend>(
     root: &KnownFolderRoot,
     state: &mut KnownFolderState,
 ) -> anyhow::Result<()> {
-    if !root.local.exists() {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+    let source_state = inspect_known_folder_source(&root.local, &home, &paths.mount_dir);
+    if source_state != KnownFolderSourceState::Ready {
         eprintln!(
-            "twodrive: known folder source does not exist: {}",
-            root.local.display()
+            "twodrive: known folder {} source {}: {}",
+            root.remote,
+            source_state.as_str(),
+            source_state.message()
         );
         return Ok(());
     }
@@ -187,17 +211,4 @@ pub(super) fn should_skip(path: &Path, config: &Config) -> bool {
         .exclude_suffixes
         .iter()
         .any(|suffix| name.ends_with(suffix))
-}
-
-pub(super) fn expand_home(value: &str) -> anyhow::Result<PathBuf> {
-    if value == "~" || value.starts_with("~/") {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-        if value == "~" {
-            return Ok(home);
-        }
-        return Ok(home.join(value.trim_start_matches("~/")));
-    }
-    Ok(PathBuf::from(value))
 }

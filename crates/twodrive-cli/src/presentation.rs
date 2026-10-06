@@ -1,5 +1,5 @@
 use std::process::Command;
-use twodrive_core::{AppPaths, Config, Database, FileState};
+use twodrive_core::{AppPaths, Config, Database, FileState, known_folder_diagnostics};
 
 use crate::arguments::cloud_path_from_arg;
 
@@ -46,6 +46,18 @@ pub(crate) fn print_status(paths: &AppPaths) -> anyhow::Result<()> {
     );
     for folder in &config.known_folders.folders {
         println!("known folder: {} -> {}", folder.local, folder.remote);
+    }
+    for diagnostic in known_folder_diagnostics(&config, paths)? {
+        println!(
+            "known folder source: {} ({}) -> {}: {}",
+            diagnostic.state.as_str(),
+            diagnostic.local.display(),
+            diagnostic.remote,
+            diagnostic.message
+        );
+        for warning in diagnostic.warnings {
+            println!("known folder warning: {warning}");
+        }
     }
     println!(
         "delta_link: {}",
@@ -147,6 +159,6 @@ pub(crate) fn emblem_for_state(state: FileState) -> &'static str {
 
 pub(crate) fn print_help() {
     println!(
-        "twodrive\n\nCommands:\n  login              Sign in to OneDrive with OAuth2 authorization code + PKCE\n  logout             Remove the local token fallback file\n  status             Show paths, token state, and delta_link state\n  sync               Run OneDrive delta sync and hydrate inherited pinned files\n  mount              Mount the OneDrive FUSE filesystem\n  pin <path>         Persist an always-keep policy and download existing files\n  unpin <path>       Remove this item's explicit policy without deleting cache\n  release <path>     Cancel pin policy and safely release selected local cache\n  cache prune        Remove expired cached files, preserving pinned files\n  status-path <path> Show local SQLite state for Nautilus/tray integration\n  open-folder        Open the TwoDrive folder with xdg-open\n  settings           Open the GTK settings helper\n  init-mock          Initialize SQLite with mock metadata\n  mount-mock         Mount the mock OneDrive filesystem\n  version            Show the installed version"
+        "twodrive\n\nCommands:\n  login              Sign in to OneDrive with OAuth2 authorization code + PKCE\n  logout             Remove the local token fallback file\n  status             Show paths, token state, and delta_link state\n  sync               Run OneDrive delta sync and hydrate inherited pinned files\n  mount              Mount the OneDrive FUSE filesystem\n  pin <path>         Persist an always-keep policy and download existing files\n  unpin <path>       Remove this item's explicit policy without deleting cache\n  release <path>     Cancel pin policy and safely release selected local cache\n  cache prune        Remove expired cached files, preserving pinned files\n  known-folders status  Diagnose upload sources as JSON\n  known-folders set-source <index> <directory>  Choose an upload source\n  status-path <path> Show local SQLite state for Nautilus/tray integration\n  open-folder        Open the TwoDrive folder with xdg-open\n  settings           Open the GTK settings helper\n  init-mock          Initialize SQLite with mock metadata\n  mount-mock         Mount the mock OneDrive filesystem\n  version            Show the installed version"
     );
 }
