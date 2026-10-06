@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tokio::net::TcpListener;
-use twodrive_backend::CloudBackend;
+use twodrive_dev::model::CloudBackend;
 use twodrive_dev::{
     peer::{self, Network, PeerClient},
     state::{Credentials, Invitation, State},

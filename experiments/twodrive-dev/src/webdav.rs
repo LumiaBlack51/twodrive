@@ -1,3 +1,4 @@
+use crate::model::{CloudBackend, DeltaResult, MetadataEntry};
 use crate::state::Credentials;
 use anyhow::{Context, ensure};
 use percent_encoding::percent_decode_str;
@@ -13,8 +14,6 @@ use std::{
     path::Path,
     time::Duration,
 };
-use twodrive_backend::{CloudBackend, DeltaResult};
-use twodrive_core::MetadataEntry;
 use url::{Host, Url};
 
 const MAX_XML: u64 = 16 * 1024 * 1024;

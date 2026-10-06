@@ -44,6 +44,41 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20261006-04：dev Windows 原生编译检查失败
+
+- 日期：2026-10-06
+- 状态：已修复待 Windows 原生验证。
+- 影响版本与环境：dev 提交 `0222663`，GitHub windows-latest，静态 CRT 编译参数。
+- 关联历史故障：TD-20261006-02/03 属于 Linux 协议/文件适配问题；当前未认定同源。
+
+### 症状与影响
+
+Windows fmt 通过，Clippy/编译步骤失败，后续测试与产物构建被跳过；尚未交付 Windows 可用性。
+
+### 触发条件与复现
+
+[原生 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37469772524/job/112289915114) 首次编译。同次 Linux CI fmt/Clippy/测试、release 构建、双 CLI 进程传输与资产上传全部通过。
+
+### 根因与证据
+
+`twodrive-core/src/credentials.rs:2` 无条件导入 `std::os::unix::fs::PermissionsExt`，Windows 原生编译报 E0433；第 34 行 `Permissions::from_mode` 报 E0599。实验模块无条件依赖稳定核心/后端，导致本来仅用于 Linux 的凭据代码也参与 Windows 编译。错误发生在实验协议代码编译前，与 QUIC/NAT/加密不属同一机制。
+
+### 解决办法与恢复操作
+
+稳定核心、后端及 FUSE 依赖仅在 Linux 启用；实验内新增可移植元数据和最小存储接口，WebDAV 客户端与协议测试通过统一 `model` 引用。Linux 仍重导出原接口，Windows 不引入稳定 OAuth/数据库实现。未改动稳定源码、用户安装或真实目录，无额外本地恢复。
+
+### 验证结果与边界
+
+旧 Windows CI 明确失败，未运行协议测试或构建产物。修正后本机 Linux 新增元数据兼容性测试与 9 项协议集成测试全部通过，fmt/Clippy 警告视错误通过；`cargo tree --target x86_64-pc-windows-msvc --locked` 核对无稳定核心/后端/FUSE/SQLite 依赖。Windows 原生重新编译、测试、双进程冒烟与产物仍待 CI，不把依赖图检查当作执行验证；Linux/本机其他范围见 TD-20261006-03。
+
+### 防复发措施与后续
+
+保留原生 Windows 编译、协议测试、release 构建与双 CLI 进程 GET/PUT/MOVE/DELETE 冒烟；保留 `portable_metadata_matches_the_linux_contract`，不通过修改稳定代码绕过隔离边界。修正后核对实际 CI 结果。
+
+### 交付记录
+
+源码 [0222663](https://github.com/LumiaBlack51/twodrive/commit/022266391500e1293f722bccb9d333479c7c3cbf)，草稿 [PR #8](https://github.com/LumiaBlack51/twodrive/pull/8)；修复提交待补充。
+
 ## TD-20261006-03：dev 条件覆盖与根目录文件 PUT 被错误拒绝
 
 - 日期：2026-10-06
@@ -83,7 +118,7 @@
 
 ### 交付记录
 
-提交、PR 和 Windows CI 待补充；不合并或发布到稳定 main。
+实现与修复已提交 [0222663](https://github.com/LumiaBlack51/twodrive/commit/022266391500e1293f722bccb9d333479c7c3cbf)，草稿 [PR #8](https://github.com/LumiaBlack51/twodrive/pull/8)。Windows 原生结果见 TD-20261006-04；不合并或发布到稳定 main。
 
 ## TD-20261006-02：dev WebDAV 适配器首轮端到端读写失败
 
@@ -122,7 +157,7 @@
 
 ### 交付记录
 
-提交与 PR 待补充；[dev 设计](dev-webdav-peer-design.md)。
+实现与修复已提交 [0222663](https://github.com/LumiaBlack51/twodrive/commit/022266391500e1293f722bccb9d333479c7c3cbf)，草稿 [PR #8](https://github.com/LumiaBlack51/twodrive/pull/8)；[dev 设计](dev-webdav-peer-design.md)。
 
 ## TD-20261006-01：系统语言切换后特殊目录与上传来源错位
 

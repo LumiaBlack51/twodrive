@@ -21,9 +21,11 @@ jobs:
           - os: ubuntu-latest
             args: '--features mount'
             rustflags: ''
+            binary: target/release/twodrive-dev
           - os: windows-latest
             args: ''
             rustflags: '-C target-feature=+crt-static'
+            binary: target/release/twodrive-dev.exe
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
@@ -41,8 +43,7 @@ jobs:
       - run: cargo test --locked ${{ matrix.args }}
       - run: cargo build --release --locked ${{ matrix.args }}
       - name: Two CLI processes without public infrastructure
-        if: runner.os == 'Linux'
-        run: python3 scripts/smoke.py --binary target/release/twodrive-dev --network lan
+        run: python scripts/smoke.py --binary ${{ matrix.binary }} --network lan
       - uses: actions/upload-artifact@v4
         with:
           name: twodrive-dev-${{ runner.os }}

@@ -2,6 +2,8 @@
 
 日期：2026-10-06。实现位于 `experiments/twodrive-dev`，独立 Cargo workspace、锁文件、状态目录和二进制 `twodrive-dev`。稳定 `twodrive` CLI、daemon、OneDrive 数据库、服务、打包入口不变，不自动安装或启动。
 
+Linux 通过类型重导出复用已有存储与 FUSE 接口；Windows 使用实验模块自己的元数据与存储接口，不引入稳定核心库的 Unix 权限、OAuth 或数据库实现。元数据构造兼容性由 Linux 回归测试核对，Windows WebDAV/设备共享由原生 CI 编译、协议测试与双进程冒烟验证；这不代表稳定 TwoDrive 已移植到 Windows。
+
 ## 数据与传输
 
 1. `WebDavBackend` 实现已有 `CloudBackend`：HTTPS + Basic 身份验证、Depth:1 PROPFIND 递归枚举、GET 流式下载、PUT 流式上传与 If-Match、MKCOL、MOVE、DELETE。禁止重定向，不把凭据发送到其他站点；只允许 HTTPS 或本机数字回环 HTTP。URL 编码与 XML DAV 命名空间严格处理。

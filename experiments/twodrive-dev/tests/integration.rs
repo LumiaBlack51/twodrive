@@ -11,7 +11,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{net::TcpListener, task::JoinHandle};
-use twodrive_backend::CloudBackend;
+use twodrive_dev::model::CloudBackend;
 use twodrive_dev::{
     peer::{self, Network, PeerClient},
     state::{Credentials, Invitation, Share, State, now},
