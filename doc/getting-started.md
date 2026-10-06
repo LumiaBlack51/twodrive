@@ -9,11 +9,11 @@
 
 The published `.deb` targets **amd64 Ubuntu/Zorin OS with GNOME**. It includes the CLI, daemon, user service, Nautilus extension, status emblems, GTK 3 tray, and GTK 4 Settings helper. FUSE is required; the extension targets Nautilus 4. Other distributions and desktop combinations are not covered by this package target.
 
-Download the `.deb` and matching `.deb.sha256` from [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest). In the download directory, verify and install. This example uses `0.2.10-1`; substitute the filenames you downloaded:
+Download the `.deb` and matching `.deb.sha256` from [Releases](https://github.com/LumiaBlack51/twodrive/releases/latest). In the download directory, verify and install. This example uses `0.2.11-1`; substitute the filenames you downloaded:
 
 ```bash
-sha256sum -c twodrive_0.2.10-1_amd64.deb.sha256 && \
-  sudo apt install ./twodrive_0.2.10-1_amd64.deb
+sha256sum -c twodrive_0.2.11-1_amd64.deb.sha256 && \
+  sudo apt install ./twodrive_0.2.11-1_amd64.deb
 ```
 
 Tray visibility depends on the desktop's AppIndicator/StatusNotifier support; its Python library alone does not guarantee GNOME Shell will display it. For source installation, see [CONTRIBUTING](../CONTRIBUTING.md#build-and-check).
@@ -43,7 +43,7 @@ twodrive open-folder
 
 The default location is `~/TwoDrive/OneDrive`. Local metadata is mounted before the network refresh, so first-time browsing may initially show an empty folder. Refreshing metadata does not download the whole drive.
 
-The tray has an autostart entry for subsequent desktop logins. Run `twodrive-tray` in a terminal to start it in this session. Open the read-only Settings window with `twodrive settings` or the tray's **Settings** item.
+The tray has an autostart entry for subsequent desktop logins. Run `twodrive-tray` in a terminal to start it in this session. Open Settings to inspect status and choose upload sources with `twodrive settings` or the tray's **Settings** item.
 
 ```bash
 twodrive status

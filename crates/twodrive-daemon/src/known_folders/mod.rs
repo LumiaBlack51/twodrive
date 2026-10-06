@@ -49,7 +49,7 @@ fn run_known_folder_sync(paths: AppPaths, config: Config) -> anyhow::Result<()> 
         0 => None,
         seconds => Some(Duration::from_secs(seconds)),
     };
-    let roots = configured_known_folders(&config.known_folders.folders)?;
+    let roots = configured_known_folders(&config, &paths)?;
     if roots.is_empty() {
         return Ok(());
     }

@@ -54,7 +54,7 @@ twodrive cache prune
 
 **Pause sync 目前只改变显示。** 它修改托盘文字和图标，不暂停服务或传输。真正停止需先关闭挂载文件，再执行 `systemctl --user stop twodrive-daemon.service`，用 `systemctl --user start twodrive-daemon.service` 恢复。停止服务也会使挂载不可用，不是保留挂载的离线暂停模式。
 
-Settings 是**只读 GTK 4 信息窗口**，展示令牌文件状态、路径、实际缓存占用和配置值，不能编辑配置。“Pinned used”和“Recent errors”仍是占位项，不是实时统计或错误历史。显示令牌路径也不等于已验证登录有效。
+Settings 是 **GTK 4 信息窗口**，展示令牌文件状态、路径、实际缓存占用、配置值和上传来源诊断。可用 **Choose source…** 重新选择上传来源，其他配置仍只读。“Pinned used”仍是占位项；来源检查也不代表完整错误历史。显示令牌路径不等于已验证登录有效。
 
 ## 当前限制与安全边界
 
@@ -73,6 +73,10 @@ TwoDrive 是实验性软件，不是备份系统。重要数据应另有独立�
 常用文件夹处理**默认关闭**，独立于可读写挂载，支持 `upload_only`。配置的本地目录直接上传，不额外生成一份 TwoDrive 内容缓存。本地删除源文件不会删除云端副本，即使配置要求传播删除也会忽略。
 
 启用前请阅读 [config.example.toml](../config.example.toml)。示例关闭启动扫描和重扫（`startup_scan = false`、`rescan_interval = "0s"`），自动生成的默认配置却分别为 `true` 和 `"15m"`。监视器先记录已有文件基线，再处理新增、移入/重命名和配置的扫描。它不是双向备份，也不保证立即上传全部旧文件。临时文件、隐藏文件和符号链接会跳过，上传成功前应保留源文件。
+
+本地上传来源是显式路径：切换系统语言或手动改名后，映射不会自动改变。用 `twodrive settings` 查看缺失来源、被跳过的软链接及 XDG 系统特殊目录与来源的差异，并选择当前本地目录；自定义映射的差异也可能是有意配置。`twodrive known-folders status` 提供 JSON 诊断。系统特殊目录若被重置为 `$HOME`，需另行修复 XDG 设置；TwoDrive 不自动改写系统目录、移动本地内容或迁移其他 OneDrive 客户端的软链接。
+
+也可按诊断中的从 0 开始的索引更新单项，例如 `twodrive known-folders set-source 1 ~/Downloads`。命令验证目录并原子保存，保留云端目标、其他映射及配置。保存后需重启 TwoDrive 才会生效；先关闭挂载文件，再用 `systemctl --user restart twodrive-daemon.service` 重启服务。重启前后台仍使用旧映射；启动时缺失的来源恢复后也需重启。禁止以主目录、文件系统根目录、挂载内部或包含挂载的目录作为上传来源，避免上传整个主目录或把云端挂载反馈到上传。已有配置只诊断，不自动改名。调查与验证边界见 [TD-20261006-01](incidents.md#td-20261006-01系统语言切换后特殊目录与上传来源错位)。
 
 ## 路径与诊断
 

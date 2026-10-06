@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import shutil
 import subprocess
@@ -40,6 +41,35 @@ def run_status():
         return f"status error: {exc}"
 
 
+def run_known_folder_status():
+    try:
+        result = subprocess.run(
+            [twodrive_bin(), "known-folders", "status"], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or "Upload source checks failed")
+        data = json.loads(result.stdout)
+        if not isinstance(data.get("folders"), list):
+            raise ValueError("Invalid upload source status")
+        return data
+    except Exception as exc:
+        return {"folders": [], "error": str(exc)}
+
+
+def save_known_folder_source(folder, path):
+    try:
+        result = subprocess.run(
+            [twodrive_bin(), "known-folders", "set-source", str(folder["index"]),
+             path, "--expected-local", folder["configured_local"]],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=5, check=False,
+        )
+        return result.returncode == 0, (result.stdout if result.returncode == 0 else result.stderr).strip()
+    except Exception as exc:
+        return False, str(exc)
+
+
 def cache_size(path):
     total = 0
     for root, _, files in os.walk(os.path.expanduser(path)):
@@ -69,7 +99,7 @@ class SettingsApp(Gtk.Application):
             Adw.init()
         window = Gtk.ApplicationWindow(application=self)
         window.set_title("TwoDrive Settings")
-        window.set_default_size(620, 520)
+        window.set_default_size(720, 700)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.set_margin_top(18)
@@ -94,7 +124,6 @@ class SettingsApp(Gtk.Application):
             ("Cache max size", fields.get("cache max", "20GiB")),
             ("Battery sync interval", fields.get("sync interval battery", "60m")),
             ("AC sync interval", fields.get("sync interval ac", "15m")),
-            ("Recent errors", "None recorded locally"),
         ]
 
         title = Gtk.Label(label="TwoDrive Settings")
@@ -114,12 +143,84 @@ class SettingsApp(Gtk.Application):
             row.append(right)
             box.append(row)
 
-        refresh = Gtk.Button(label="Refresh")
-        refresh.connect("clicked", lambda *_: self.do_activate())
+        sources_title = Gtk.Label(label="Upload sources")
+        sources_title.add_css_class("title-3")
+        sources_title.set_xalign(0)
+        box.append(sources_title)
+        sources = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.append(sources)
+        self.refresh_sources(sources, window)
+
+        refresh = Gtk.Button(label="Refresh upload sources")
+        refresh.connect("clicked", lambda *_: self.refresh_sources(sources, window))
         box.append(refresh)
 
-        window.set_child(box)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_child(box)
+        window.set_child(scroll)
         window.present()
+
+    def refresh_sources(self, box, window, notice=None):
+        while box.get_first_child():
+            box.remove(box.get_first_child())
+        data = run_known_folder_status()
+        if "error" in data:
+            self.source_label(box, "Cannot check upload sources: " + data["error"])
+            return
+        self.source_label(box, "Uploads enabled" if data.get("enabled") else "Uploads disabled")
+        if data.get("mode") != "upload_only":
+            self.source_label(box, "Configured upload mode is unsupported; uploads are inactive.")
+        self.source_label(box, "After saving a source, restart TwoDrive to apply it. System special directories are configured separately.")
+        if notice:
+            self.source_label(box, notice)
+        if not data["folders"]:
+            self.source_label(box, "No upload sources configured.")
+        for folder in data["folders"]:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            details.set_hexpand(True)
+            self.source_label(details, folder["local"] + " → " + folder["remote"])
+            self.source_label(details, folder["message"])
+            if folder.get("system_directory"):
+                self.source_label(details, "System directory: " + folder["system_directory"])
+            for warning in folder.get("warnings", []):
+                self.source_label(details, warning)
+            row.append(details)
+            choose = Gtk.Button(label="Choose source…")
+            choose.connect("clicked", lambda _, item=folder: self.choose_source(item, box, window))
+            row.append(choose)
+            box.append(row)
+
+    @staticmethod
+    def source_label(box, text):
+        label = Gtk.Label(label=text)
+        label.set_xalign(0)
+        label.set_wrap(True)
+        label.set_selectable(True)
+        box.append(label)
+
+    def choose_source(self, folder, box, window):
+        chooser = Gtk.FileChooserNative.new(
+            "Choose local upload source", window, Gtk.FileChooserAction.SELECT_FOLDER,
+            "Save source", "Cancel",
+        )
+        # Keep the native chooser alive until its response is handled.
+        window.source_chooser = chooser
+
+        def selected(dialog, response):
+            if response == Gtk.ResponseType.ACCEPT:
+                selected_file = dialog.get_file()
+                path = selected_file.get_path() if selected_file else None
+                if path:
+                    success, message = save_known_folder_source(folder, path)
+                    self.refresh_sources(box, window, ("Saved. " if success else "Unable to save. ") + message)
+                else:
+                    self.refresh_sources(box, window, "Choose a local filesystem directory.")
+            dialog.destroy()
+            window.source_chooser = None
+
+        chooser.connect("response", selected)
+        chooser.show()
 
 
 if __name__ == "__main__":

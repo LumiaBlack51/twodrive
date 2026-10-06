@@ -1,6 +1,6 @@
 [package]
 name = "twodrive-cli"
-version = "0.2.10"
+version = "0.2.11"
 edition.workspace = true
 
 [[bin]]
@@ -9,6 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+serde_json.workspace = true
+toml.workspace = true
 twodrive-backend.workspace = true
 twodrive-core.workspace = true
 twodrive-fs.workspace = true
