@@ -5,7 +5,7 @@
 2026-10-07：按用户要求整理当前完整 Windows 预览、登录、浏览、持久索引与下载缓存改动提交 PR。
 提交前重新运行 Linux workspace 测试（127 passed、6 ignored）和 Clippy/fmt/diff 检查通过；
 此前 Windows/Flutter/真实账户验收为 2026-09-17 记录，本次未将其表述为重新执行。
-真实大文件续传缺口仍保留。原 PR #6 已关闭，新 PR 地址待创建后补记。
+真实大文件续传缺口仍保留。原 PR #6 已关闭；新草稿 [PR #9](https://github.com/LumiaBlack51/twodrive/pull/9) 已创建并推送分支。
 
 
 2026-09-17 更新：**持久 delta 索引、真实可续传下载缓存、Full/Lite 共享状态已实现。**
@@ -375,3 +375,5 @@ Range 续传，4 MiB 取消后新 worker 续传，Range 返回 200，错误 Cont
 - 此前 2026-09-17 的 Windows 构建及真实账户测试仍作为历史证据；本次合并后重新验证 Linux，不能将旧 Windows 包当作最新 main 整合树的构建。
 
 整合 main 后重新验证：Rust 133 passed、6 ignored（未执行）；Linux workspace Clippy -D warnings、fmt、暂存 diff 检查通过，Nautilus 19 项通过。新证据位于 windows-evidence/pr-20261007。Windows/Flutter 本次没有重建；新 PR 保持 draft，等待当前提交 CI 和真实大文件验收。
+
+PR 交付：草稿 [#9](https://github.com/LumiaBlack51/twodrive/pull/9)，目标 main；功能提交 6f2c0e3，整合 main 与验证为 174a12b。没有合并 PR、推 main 或发布。历史结果 JSON 中 uncommitted/pushed=false 为当时快照，以本节为当前状态。创建后查询显示无合并冲突，Windows/Linux CI 已启动，尚未通过。

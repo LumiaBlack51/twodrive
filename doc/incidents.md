@@ -586,3 +586,5 @@ results and remaining large-file acceptance blockage. No failures/skips count as
 - 边界/后续：不归因为 TwoDrive 缺陷；保留超时事实，网络操作继续使用有界等待。
 
 提交检查补记：git diff --cached --check 发现此前未跟踪证据中的 CRLF、终端尾部空格及 EOF 空行；仅规范文本空白后重跑，保留日志内容与所有成功/失败结论。旧 git diff --check 未包含未跟踪文件，不能代表这些文件此前已通过暂存检查。
+
+TD-20261007-PR-WSL 补记：创建 PR 后一次新 WSL 调用再次在启动阶段超时；后续核对工作树干净、HEAD 174a12b，确认该次没有文档写入或提交。重试读取 PR 状态成功；宿主间歇启动超时根因仍未定位，不影响已创建 PR。
