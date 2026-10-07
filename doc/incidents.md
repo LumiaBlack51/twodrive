@@ -46,6 +46,42 @@
 
 
 
+## TD-20261007-03：整合树 Windows 原生 peer 测试失败
+
+- 日期：2026-10-07
+- 状态：已修复并通过 Linux 回归；Windows 原生重跑待验证。
+- 影响版本与环境：dev 805ceba；GitHub windows-latest，Peer native builds 37593664900。
+- 关联历史故障：与 TD-20260916-WIN-AUTH-TEST 同为测试缺少平台限定；本次是较新 main 新增的 known-folder 夹具，不是旧 OAuth 修复回归。TD-20261006-04 是生产依赖隔离，与本次编译目标不同。
+
+### 症状与影响
+
+Windows 的 cargo test -p twodrive-peer -p twodrive-core -p twodrive-backend --locked 在测试编译阶段失败；Linux 全工作区测试通过。该 job 未交付 Windows peer 资产；并行 Windows Full/Lite 构建仍在执行。未改动用户安装、配置或真实云端。
+
+### 触发条件与复现
+
+合并 Windows PR #9 和 peer-control 后首次原生 CI；运行包含 core 单元测试的 Windows 命令即可触发。Windows 预览历史流程只测试 Windows 引擎/后端，没有编译 core 的 cfg(test) 目标；peer-control 历史基线尚无该夹具。
+
+### 根因与证据
+
+known_folders.rs:229 的 tests 模块无条件导入 std::os::unix::fs::symlink；Windows 报 E0433 cannot find unix in os。该夹具由 main 的 6f3c40a 加入，检查 Unix/XDG 根目录和符号链接。生产 core 可编译；不是 P2P 握手或 QUIC 加密机制故障。
+
+### 解决办法与恢复操作
+
+仅为该 Unix 夹具及其 symlink 导入添加 cfg(unix)。保留不依赖 Unix 系统调用的 XDG 解析测试和所有其他 core/后端/peer Windows 测试，不绕过整套原生验证。生产路径未改动；没有执行用户环境恢复操作。
+
+### 验证结果与边界
+
+旧树 805ceba 在原生 CI 明确编译失败。修正后本地 backend/core/peer 94 项默认测试通过，原 Unix 夹具仍在 Linux 执行；fmt 和严格 Clippy 通过。Windows 原生重跑待验证；不能以本地 Linux 结果代替。
+
+### 防复发措施与后续
+
+保留 Windows core 单元测试编译与执行在 peer CI 中；这是此次可复现构建缺陷的回归门槛。新增平台夹具必须使用对应 cfg，不能只验证生产 library 或上层引擎测试。
+
+### 交付记录
+
+[整合提交 805ceba](https://github.com/LumiaBlack51/twodrive/commit/805ceba6616efd6d77014736881ad1e9d74a6528)，[失败 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37593664900/job/112700935062)。修复提交与后续 CI 待补充。
+
+
 ## TD-20261007-02：dev 合并后的隔离 FUSE 上传冒烟超时
 
 - 日期：2026-10-07
