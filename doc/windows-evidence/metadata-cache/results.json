@@ -1,0 +1,75 @@
+{
+  "rust-final": {
+    "passed": 85,
+    "failed": 0,
+    "ignored_unexecuted": 0
+  },
+  "linux-tests": {
+    "passed": 127,
+    "failed": 0,
+    "ignored_unexecuted": 6
+  },
+  "flutter": {
+    "passed": 12,
+    "analyze": "no issues",
+    "windows_release": "passed"
+  },
+  "nautilus": {
+    "passed": 19
+  },
+  "real_account": {
+    "initial_delta": "passed",
+    "incremental_delta": "passed",
+    "indexed_items": 56,
+    "files": 46,
+    "small_downloads": 2,
+    "download_bytes_each": 1132,
+    "cached_bytes": 2264,
+    "restart_retains_index_and_cache": true,
+    "cancel_before_payload_then_restart_retry": "passed",
+    "refresh_cancel_retains_index": "passed",
+    "lite_shared_ipc_state": "passed",
+    "native_full_shared_view": "passed",
+    "reveal_cached_copy": "passed",
+    "cloud_writes": 0,
+    "largest_available_file_bytes": 1140,
+    "real_large_resume": "blocked: no larger file in the authenticated account",
+    "real_rename_move_delete": "not performed; read-only constraint",
+    "real_version_change_logout_or_cursor_expiry": "not induced; deterministic tests only"
+  },
+  "deterministic": [
+    "initial and incremental delta with pagination",
+    "rename/move/delete and duplicate latest item",
+    "pending folder tombstone across refreshes: old fails, fixed passes",
+    "expired delta reenumberation",
+    "interrupted refresh preserves committed index",
+    "cursor write failure rolls back item changes",
+    "interrupted HTTP body resumes actual partial bytes",
+    "4 MiB cancellation then resumable worker restart",
+    "Range 200 restarts from zero",
+    "invalid Content-Range rejected",
+    "version change rejects completion",
+    "no bearer on signed content URL",
+    "logout/account generation/cancel rejects publication",
+    "partial/missing/stale cache never cached"
+  ],
+  "artifact_path": "E:/software/twodrive/artifacts-metadata-cache-delivery-20260917",
+  "native_ui_controls_verified": {
+    "persistent_index": true,
+    "cached_and_online_only": true,
+    "download_resume": true,
+    "open_reveal": true,
+    "refresh": true,
+    "previous_directory_browser_preserved": true
+  },
+  "cfapi": "not implemented; native hydration acceptance remains a separate phase",
+  "git": {
+    "repository": "/root/workspaces/twodrive-windows",
+    "branch": "codex/windows-dual-preview-20260916",
+    "head": "77ef808",
+    "changes": "uncommitted; previous login/browse work retained",
+    "pushed": false,
+    "pr_created": false,
+    "published": false
+  }
+}

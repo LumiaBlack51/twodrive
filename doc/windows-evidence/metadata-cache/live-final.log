@@ -1,0 +1,4 @@
+{"restart_index_count": 56, "restart_cached_count": 1}
+PASS Lite CLI persisted index/cache after final-engine restart
+PASS final-engine real incremental delta
+{"real_cancel": "passed", "bytes_before_cancel": 0}

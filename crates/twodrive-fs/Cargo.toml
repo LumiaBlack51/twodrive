@@ -5,8 +5,10 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-fuser.workspace = true
 libc.workspace = true
 serde_json.workspace = true
 twodrive-backend.workspace = true
 twodrive-core.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+fuser.workspace = true

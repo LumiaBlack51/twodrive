@@ -1,0 +1,11 @@
+cargo :     Checking twodrive-core v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-core)
+At line:2 char:161
++ ... TEXITCODE}; cargo clippy -p twodrive-windows -p twodrive-core -p twod ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking tw...\twodrive-core):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+    Checking twodrive-backend v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-backend)
+    Checking twodrive-fs v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-fs)
+    Checking twodrive-windows v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-windows)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.09s

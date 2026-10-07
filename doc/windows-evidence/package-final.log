@@ -1,0 +1,61 @@
+    Finished `release` profile [optimized] target(s) in 5.65s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running unittests src\lib.rs (target\debug\deps\twodrive_windows-b3b3ed03fd6aff77.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\twodrive_engine-eab641d04b9c725b.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\tray.rs (target\debug\deps\twodrive_tray-cc586a76144959be.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\engine.rs (target\debug\deps\engine-859c00a97dfb638e.exe)
+
+running 5 tests
+test framed_protocol_rejects_oversized_and_truncated_frames ... ok
+test engine_and_tray_locks_are_shared_between_editions ... ok
+test listing_does_not_hydrate_and_default_has_no_mock_data ... ok
+test pause_blocks_real_scheduler_and_upload_confirmations ... ok
+test version_idempotency_and_persistence ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+   Doc-tests twodrive_windows
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Resolving dependencies...
+Downloading packages...
+  clock 1.1.2 (1.1.3 available)
+  fluent_ui 4.12.0 (4.16.1 available)
+  intl 0.20.2 (0.20.3 available)
+  matcher 0.12.19 (0.12.20 available)
+  math_expressions 2.7.0 (3.2.0 available)
+  meta 1.17.0 (1.19.0 available)
+  petitparser 6.1.0 (7.0.2 available)
+  stack_trace 1.12.1 (1.12.2 available)
+  test_api 0.7.10 (0.7.12 available)
+  vector_math 2.2.0 (2.4.2 available)
+Got dependencies!
+10 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Analyzing lib...
+No issues found! (ran in 6.5s)
+00:00 +0: loading E:/software/twodrive/native-build/apps/full/test/engine_client_test.dart
+00:00 +0: disconnect discards stale success; reconnect clears transport error
+00:00 +1: pause remains pending until matching backend acknowledgement
+00:00 +2: mismatched protocol or response id cannot supply UI state
+00:00 +3: All tests passed!
+Building Windows application...                                    20.7s
+√ Built build\windows\x64\runner\Release\twodrive_full.exe

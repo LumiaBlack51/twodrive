@@ -1,0 +1,27 @@
+   Compiling once_cell v1.21.4
+   Compiling smallvec v1.15.2
+   Compiling memchr v2.8.2
+   Compiling windows-sys v0.61.2
+   Compiling syn v2.0.118
+   Compiling ahash v0.8.12
+   Compiling hashbrown v0.14.5
+   Compiling serde_json v1.0.150
+   Compiling hashlink v0.9.1
+   Compiling rusqlite v0.32.1
+   Compiling serde_derive v1.0.228
+   Compiling thiserror-impl v2.0.18
+   Compiling tempfile v3.27.0
+   Compiling thiserror v2.0.18
+   Compiling serde v1.0.228
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling twodrive-core v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.97s
+     Running unittests src\lib.rs (target\debug\deps\twodrive_core-06bbdc2c865a24c8.exe)
+
+running 1 test
+test private_file::tests::secret_roundtrip_and_replacement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.03s

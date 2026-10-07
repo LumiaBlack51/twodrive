@@ -1,0 +1,198 @@
+   Compiling twodrive-windows v0.2.10 (/root/workspaces/twodrive-windows/crates/twodrive-windows)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.07s
+     Running unittests src/lib.rs (target/debug/deps/twodrive_backend-715748dd354ffa33)
+
+running 21 tests
+test onedrive::tests::delta_accepts_negative_folder_sizes_without_corrupting_file_sizes ... ok
+test onedrive::tests::existing_upload_session_uses_remote_item_id ... ok
+test onedrive::auth::tests::pkce_s256_and_verifier_format_remain_compatible ... ok
+test onedrive::tests::large_files_use_graph_upload_sessions_with_valid_fragment_sizes ... ok
+test onedrive::tests::graph_move_resolves_the_parent_item_instead_of_sending_a_path ... ok
+test onedrive::tests::graph_paths_encode_each_segment_without_encoding_separators ... ok
+test onedrive::auth::tests::authorization_code_form_preserves_pkce_and_redirect ... ok
+test onedrive::tests::new_upload_session_uses_parent_item_id_and_encoded_file_name ... ok
+test onedrive::tests::mock_upload_with_matching_etag_replaces_existing_file ... ok
+test onedrive::tests::retry_after_seconds_are_honored_with_a_small_cap ... ok
+test onedrive::tests::simple_upload_keeps_cloud_identity_after_local_rename ... ok
+test onedrive::tests::unsupported_graph_names_fail_before_network_io ... ok
+test onedrive::tests::mock_upload_with_stale_etag_fails_precondition ... ok
+test onedrive::tests::upload_session_body_uses_graph_compatible_minimal_properties ... ok
+test onedrive::tests::cancellation_interrupts_retry_backoff ... ok
+test onedrive::tests::upload_session_store_is_shared_for_the_same_data_path ... ok
+test onedrive::tests::upload_session_resumes_from_a_persisted_offset ... ok
+test onedrive::auth::tests::token_response_preserves_expiry_defaults_and_optional_refresh_token ... ok
+test onedrive::tests::upload_session_store_round_trips_with_private_permissions ... ok
+test onedrive::tests::upload_session_status_distinguishes_expiry_from_temporary_failure ... ok
+test onedrive::tests::upload_session_sends_sequential_ranges_and_finishes_with_metadata ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/contract.rs (target/debug/deps/contract-b60f3641ed6b5928)
+
+running 2 tests
+test legacy_conflict_classification_keeps_existing_backend_compatibility ... ok
+test default_lookup_delta_and_download_contract ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/twodrive-c0f80add1d5bcccd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/compatibility.rs (target/debug/deps/compatibility-fa3d188fa3340687)
+
+running 2 tests
+test help_version_and_errors_keep_their_exit_contract ... ok
+test mock_commands_preserve_desktop_protocol_and_persistent_pin_state ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running unittests src/lib.rs (target/debug/deps/twodrive_core-6f1f4b29a896b406)
+
+running 31 tests
+test tests::graph_login_defaults_and_legacy_configs_use_shared_app ... ok
+test tests::graph_custom_registration_survives_config_round_trip ... ok
+test tests::normalizes_cloud_paths ... ok
+test private_file::tests::secret_roundtrip_and_replacement ... ok
+test tests::delta_metadata_does_not_undo_a_pending_local_move ... ok
+test tests::explicit_release_overrides_pin_but_prune_preserves_it ... ok
+test tests::local_create_is_atomic_and_can_reuse_a_pending_delete_path ... ok
+test tests::folder_release_cancels_nested_pins_and_downloads_but_keeps_dirty_data ... ok
+test tests::locally_added_items_inherit_an_explicitly_pinned_ancestor ... ok
+test tests::moving_a_subtree_recomputes_inherited_pin_policy ... ok
+test tests::newly_discovered_cloud_items_stay_online_only ... ok
+test tests::pending_delete_hides_item_and_blocks_delta_reappearance_until_recovered ... ok
+test tests::pin_ancestry_uses_exact_case_and_path_boundaries ... ok
+test tests::remote_metadata_does_not_replace_a_dirty_local_generation ... ok
+test tests::release_rechecks_state_and_preserves_open_or_pinned_cache ... ok
+test tests::remote_metadata_for_same_id_does_not_mutate_a_dirty_generation ... ok
+test tests::concurrent_database_initialization_is_idempotent ... ok
+test tests::deferred_release_survives_restart_and_waits_for_latest_upload ... ok
+test tests::renaming_failed_local_upload_requeues_without_losing_release_request ... ok
+test tests::local_permissions_survive_cloud_updates_release_and_replacement ... ok
+test tests::stale_temp_upload_is_discarded_after_replacement ... ok
+test tests::replacement_preserves_target_identity_during_inflight_upload ... ok
+test tests::metadata_operations_are_durable_and_moves_coalesce ... ok
+test tests::unpinning_parent_preserves_nested_explicit_pin ... ok
+test tests::concurrent_metadata_writers_wait_instead_of_failing_snapshot_upgrade ... ok
+test tests::upload_binding_preserves_the_local_identity ... ok
+test tests::legacy_pinned_states_migrate_to_a_single_explicit_root ... ok
+test tests::upload_completion_after_a_local_move_queues_the_remote_move ... ok
+test tests::release_invalidates_downloads_and_wins_the_completion_race ... ok
+test tests::upload_claim_and_acknowledgement_reject_replaced_cache ... ok
+test tests::parent_move_retargets_jobs_and_protects_children_from_delta ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.80s
+
+     Running unittests src/main.rs (target/debug/deps/twodrive_daemon-81aa4276c45b2f31)
+
+running 6 tests
+test known_folders::tests::missing_pending_known_folder_file_is_pruned ... ok
+test known_folders::tests::first_start_baseline_preserves_tracked_snapshots_and_adds_history ... ok
+test known_folders::tests::known_folder_state_persists_pending_uploads ... ok
+test known_folders::tests::known_folder_small_files_upload_concurrently ... ok
+test known_folders::tests::restart_retries_changed_backup_without_caching_or_propagating_deletion ... ok
+test known_folders::tests::completed_known_folder_job_is_persisted_while_slower_job_runs ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+
+     Running unittests src/lib.rs (target/debug/deps/twodrive_fs-40e535d33a03f7b8)
+
+running 40 tests
+test filesystem::tests::compiled_program_and_chmod_survive_remount ... ignored, requires /dev/fuse, fusermount3, python3 and cc; uses an isolated temporary mount
+test filesystem::tests::deferred_reader_rechecks_indexer_before_downloading ... ignored, requires /dev/fuse, fusermount3 and python3; uses an isolated temporary mount
+test filesystem::tests::gio_directory_metadata_does_not_download_unknown_large_files ... ignored, requires /dev/fuse, fusermount3 and gio; uses an isolated temporary mount
+test filesystem::tests::gio_probe_detection_does_not_block_normal_reads_or_other_tools ... ok
+test filesystem::tests::filesystem_stats_report_real_backing_store_capacity ... ok
+test filesystem::tests::mounted_large_listing_and_copy_remain_responsive_during_download ... ignored, requires /dev/fuse and fusermount3; uses an isolated temporary mount
+test filesystem::tests::mounted_release_cancels_download_and_old_handles ... ignored, requires FUSE and TWODRIVE_TEST_CLI pointing to the newly built CLI
+test filesystem::tests::archive_files_in_pending_nested_folders_survive_until_upload ... ok
+test filesystem::tests::child_sync_waits_for_parent_move_and_rejects_stale_jobs ... ok
+test filesystem::tests::closed_write_publishes_mtime_before_reopen_and_directory_refresh ... ok
+test filesystem::tests::recovery_queue_coalesces_repeated_scans_and_retains_work ... ok
+test filesystem::tests::dirty_cache_is_replayed_after_a_simulated_restart ... ok
+test filesystem::tests::closed_small_files_upload_concurrently ... ok
+test filesystem::tests::conflict_state_is_preserved_as_a_copy_after_restart ... ok
+test filesystem::tests::large_directory_refresh_preserves_inodes_and_removes_stale_names ... ok
+test filesystem::tests::running_upload_coalesces_retries_without_occupying_other_workers ... ok
+test filesystem::tests::legacy_pending_delete_for_local_placeholder_is_cleaned_without_cloud_call ... ok
+test filesystem::tests::local_fsync_preserves_random_offset_writes_before_upload ... ok
+test filesystem::tests::editor_style_temp_file_can_replace_an_existing_remote_file ... ok
+test filesystem::tests::local_move_into_a_pinned_directory_hydrates_the_file ... ok
+test filesystem::tests::zip_extraction_into_pending_folder_on_mount ... ignored, requires /dev/fuse, fusermount3 and python3; uses an isolated temporary mount
+test filesystem::tests::failed_backend_delete_is_hidden_locally_and_retried_later ... ok
+test filesystem::tests::cloud_file_discovered_later_stays_online_only_under_a_pinned_directory ... ok
+test filesystem::tests::failed_upload_on_release_leaves_a_dirty_retry_record ... ok
+test filesystem::tests::folder_create_recovery_rebinds_after_a_lost_remote_acknowledgement ... ok
+test filesystem::tests::incomplete_writing_cache_is_not_uploaded_after_restart ... ok
+test filesystem::tests::path_truncate_is_local_and_queues_an_upload ... ok
+test filesystem::tests::immediate_reopen_during_upload_keeps_the_local_record ... ok
+test filesystem::tests::interrupted_open_write_is_recovered_with_actual_cache_size ... ok
+test filesystem::tests::pending_delete_is_replayed_after_a_simulated_restart ... ok
+test filesystem::tests::read_only_handle_survives_unlink_until_the_last_release ... ok
+test filesystem::tests::backup_save_waits_for_cloud_move_or_delete_before_reusing_path ... ok
+test filesystem::tests::release_requested_during_upload_finishes_after_last_open_handle ... ok
+test filesystem::tests::stale_empty_upload_cannot_replace_completed_download ... ok
+test filesystem::tests::stale_local_upload_placeholder_can_be_deleted_and_recreated ... ok
+test filesystem::tests::stale_etag_upload_preserves_local_content_as_a_conflict_copy ... ok
+test filesystem::tests::repeated_atomic_replacements_during_initial_upload_keep_latest_generation ... ok
+test filesystem::tests::uploading_state_is_replayed_after_a_simulated_restart ... ok
+test filesystem::tests::release_stops_pinned_streaming_download ... ok
+test filesystem::tests::release_stops_streaming_download_cleans_partial_and_allows_new_open ... ok
+
+test result: ok. 34 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 4.86s
+
+     Running unittests src/lib.rs (target/debug/deps/twodrive_windows-cb42e9e9dfe9c5ea)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/twodrive_engine-634702487a4d4d13)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/tray.rs (target/debug/deps/twodrive_tray-dd1928288c55c8b7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/engine.rs (target/debug/deps/engine-33e9444f21120b3e)
+
+running 5 tests
+test framed_protocol_rejects_oversized_and_truncated_frames ... ok
+test engine_and_tray_locks_are_shared_between_editions ... ok
+test listing_does_not_hydrate_and_default_has_no_mock_data ... ok
+test pause_blocks_real_scheduler_and_upload_confirmations ... ok
+test version_idempotency_and_persistence ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+   Doc-tests twodrive_backend
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests twodrive_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests twodrive_fs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests twodrive_windows
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

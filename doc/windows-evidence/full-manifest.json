@@ -1,0 +1,121 @@
+{
+  "edition": "Full",
+  "architecture": "x64",
+  "ipc_version": 1,
+  "native_sync_accepted": false,
+  "files": [
+    {
+      "sha256": "5be3708146a52d988f6c98e9d3f3bab3d8e2e9999cca0dca73715373aa3d296b",
+      "bytes": 6,
+      "path": "edition.txt"
+    },
+    {
+      "sha256": "d94ba6c2e419fe9ba5e3854a32492ccbda7bea2f1faa841746b535035bd95d10",
+      "bytes": 1078,
+      "path": "LICENSE"
+    },
+    {
+      "sha256": "5c15742b078fdfea50dbf90081afb0fb883b6ed6c184216737420f7f5ec94832",
+      "bytes": 2801,
+      "path": "README.md"
+    },
+    {
+      "sha256": "2cdee91c6d792a428a9639569ec7b19cb3454e8e2689de14393c9f59cf38d94a",
+      "bytes": 573,
+      "path": "Start.ps1"
+    },
+    {
+      "sha256": "ed485be54a767bc4f4e66e702ed0097d490af0b5ca212896809252c8f6ea494a",
+      "bytes": 3310592,
+      "path": "twodrive-engine.exe"
+    },
+    {
+      "sha256": "57db0bafbee8d00516391b1b870168520b03cbeb11c16db3b811f3cd4b6ac7c8",
+      "bytes": 2793472,
+      "path": "twodrive-tray.exe"
+    },
+    {
+      "sha256": "c0304beba5fe98477177e151c673adad98d0442f50efa25d03ff5f207cc21056",
+      "bytes": 20803584,
+      "path": "ui\\flutter_windows.dll"
+    },
+    {
+      "sha256": "9548a31e4a048135c1d94f919328bfb62ae2c7bb3cab96557c7941daa97776cb",
+      "bytes": 45,
+      "path": "ui\\native_assets.json"
+    },
+    {
+      "sha256": "45e751af6b8b62876075e9829dc909eb6eef1d8ed2a1af9c3409b6c09c8ff54e",
+      "bytes": 120320,
+      "path": "ui\\screen_retriever_windows_plugin.dll"
+    },
+    {
+      "sha256": "8d98a7080f6a0164d69e0505e21302debff561f685200f9cc0fe608579cc18f0",
+      "bytes": 91136,
+      "path": "ui\\twodrive_full.exe"
+    },
+    {
+      "sha256": "a0cba631a1c268925cc8703816f61d528689866ac104a29d765ef008bc1b20c6",
+      "bytes": 130560,
+      "path": "ui\\window_manager_plugin.dll"
+    },
+    {
+      "sha256": "69933277f39f0b5b136a943561db83eb16795539c4036c39d65e5bcfd3e057b0",
+      "bytes": 3752880,
+      "path": "ui\\data\\app.so"
+    },
+    {
+      "sha256": "998367809a821d595928089c197b3f7959f0420f81f79d4d0daee53378492ed5",
+      "bytes": 862304,
+      "path": "ui\\data\\icudtl.dat"
+    },
+    {
+      "sha256": "465b400ba2f75885cb7c72ec8db18fcb7f0f84da710dc7097fdf04adb7138f7b",
+      "bytes": 196,
+      "path": "ui\\data\\flutter_assets\\AssetManifest.bin"
+    },
+    {
+      "sha256": "0f22e430aa6c127c70f16f33d4b263c3bb841c62d2a0051b0b89337d61d2c69b",
+      "bytes": 189,
+      "path": "ui\\data\\flutter_assets\\FontManifest.json"
+    },
+    {
+      "sha256": "9548a31e4a048135c1d94f919328bfb62ae2c7bb3cab96557c7941daa97776cb",
+      "bytes": 45,
+      "path": "ui\\data\\flutter_assets\\NativeAssetsManifest.json"
+    },
+    {
+      "sha256": "c0258c59e73be728b737c1a4cbf8c4dfceb390265af3fa48f6bb95b881293c5f",
+      "bytes": 105125,
+      "path": "ui\\data\\flutter_assets\\NOTICES.Z"
+    },
+    {
+      "sha256": "d9865b671a09d683d13a863089d8825e0f61a37696ce5d7d448bc8023aa62453",
+      "bytes": 1645184,
+      "path": "ui\\data\\flutter_assets\\fonts\\MaterialIcons-Regular.otf"
+    },
+    {
+      "sha256": "4f2aa94a2e345a32dae689176b86c644bef87081ff9daef8c77417731862031b",
+      "bytes": 3241,
+      "path": "ui\\data\\flutter_assets\\packages\\fluent_ui\\assets\\AcrylicNoise.png"
+    },
+    {
+      "sha256": "0af1385fa65e3a1f14e62adbce4f2149abc6b5d7d77fd5502b007c937fdb8e87",
+      "bytes": 501796,
+      "path": "ui\\data\\flutter_assets\\packages\\fluent_ui\\fonts\\FluentIcons.ttf"
+    },
+    {
+      "sha256": "0ddb6dd1d060d863b453c26aaae72d539d5dbc5443e086ef618280da73d71380",
+      "bytes": 21328,
+      "path": "ui\\data\\flutter_assets\\shaders\\ink_sparkle.frag"
+    },
+    {
+      "sha256": "0ed3145e5e380355d92f9ccc66dba1c00d1b5001b1efa0dbeb6398dd56910486",
+      "bytes": 17368,
+      "path": "ui\\data\\flutter_assets\\shaders\\stretch_effect.frag"
+    }
+  ],
+  "signed": false,
+  "channel": "preview",
+  "version": "0.2.10"
+}

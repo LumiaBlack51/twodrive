@@ -13,6 +13,7 @@ pub use config::{
 };
 pub use credentials::{TokenData, TokenStore};
 pub use database::Database;
+pub use database::cloud::{CloudIdentity, DownloadTask, IndexedItem};
 pub use domain::{
     CoreError, FileRecord, FileState, MetadataEntry, PendingDelete, PendingMetadataKind,
     PendingMetadataOperation,
@@ -26,3 +27,5 @@ pub use time::{now_unix, parse_duration_seconds};
 
 #[cfg(test)]
 mod tests;
+
+pub mod private_file;

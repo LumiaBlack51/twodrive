@@ -1,0 +1,15 @@
+00:00 +0: loading E:/software/twodrive/native-build/apps/full/test/cloud_browse_test.dart
+00:00 +0: E:/software/twodrive/native-build/apps/full/test/cloud_browse_test.dart: rapid directory change ignores late old query and queues latest navigation
+00:00 +1: E:/software/twodrive/native-build/apps/full/test/cloud_browse_test.dart: pagination accumulates once and does not mistake a pending page for empty
+00:00 +2: E:/software/twodrive/native-build/apps/full/test/cloud_browse_test.dart: logout and cancellation cannot restore a late directory response
+00:00 +3: E:/software/twodrive/native-build/apps/full/test/engine_client_test.dart: disconnect discards stale success; reconnect clears transport error
+00:00 +4: E:/software/twodrive/native-build/apps/full/test/engine_client_test.dart: pause remains pending until matching backend acknowledgement
+00:00 +5: E:/software/twodrive/native-build/apps/full/test/engine_client_test.dart: mismatched protocol or response id cannot supply UI state
+00:02 +6: E:/software/twodrive/native-build/apps/full/test/widget_test.dart: (setUpAll)
+00:03 +6: E:/software/twodrive/native-build/apps/full/test/widget_test.dart: real cloud view distinguishes loading, empty, failure and unsupported items
+00:04 +7: E:/software/twodrive/native-build/apps/full/test/widget_test.dart: account login submits IPC and displays pending authorization
+00:05 +8: E:/software/twodrive/native-build/apps/full/test/widget_test.dart: tray layout, navigation and pause
+00:05 +9: E:/software/twodrive/native-build/apps/full/test/widget_test.dart: management layout, navigation and pause
+00:06 +10: E:/software/twodrive/native-build/apps/full/test/widget_test.dart: disconnected tray never presents confirmed sync
+00:06 +11: E:/software/twodrive/native-build/apps/full/test/widget_test.dart: (tearDownAll)
+00:06 +11: All tests passed!

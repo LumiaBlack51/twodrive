@@ -31,3 +31,19 @@ TwoDrive/
 # Python extension test bytecode
 __pycache__/
 *.pyc
+
+# Windows build mirrors/artifacts and Flutter generated state
+/apps/full/.dart_tool/
+/apps/full/build/
+/apps/full/windows/flutter/ephemeral/
+/apps/full/*.log
+/dist-windows/
+
+# Peer local state / offline publisher secrets
+identity.dat
+release-key.dat
+selected-roots.json
+trusted.json
+
+# Cargo build settings are not runtime account configuration.
+!/.cargo/config.toml

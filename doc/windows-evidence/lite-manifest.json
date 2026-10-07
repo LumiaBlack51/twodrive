@@ -1,0 +1,41 @@
+{
+  "edition": "Lite",
+  "architecture": "x64",
+  "ipc_version": 1,
+  "native_sync_accepted": false,
+  "files": [
+    {
+      "sha256": "81b69f3ab51e4079bd8bb5ec6697dbb3816e98d60525684bfc8b885b83ba0989",
+      "bytes": 6,
+      "path": "edition.txt"
+    },
+    {
+      "sha256": "d94ba6c2e419fe9ba5e3854a32492ccbda7bea2f1faa841746b535035bd95d10",
+      "bytes": 1078,
+      "path": "LICENSE"
+    },
+    {
+      "sha256": "5c15742b078fdfea50dbf90081afb0fb883b6ed6c184216737420f7f5ec94832",
+      "bytes": 2801,
+      "path": "README.md"
+    },
+    {
+      "sha256": "2cdee91c6d792a428a9639569ec7b19cb3454e8e2689de14393c9f59cf38d94a",
+      "bytes": 573,
+      "path": "Start.ps1"
+    },
+    {
+      "sha256": "ed485be54a767bc4f4e66e702ed0097d490af0b5ca212896809252c8f6ea494a",
+      "bytes": 3310592,
+      "path": "twodrive-engine.exe"
+    },
+    {
+      "sha256": "57db0bafbee8d00516391b1b870168520b03cbeb11c16db3b811f3cd4b6ac7c8",
+      "bytes": 2793472,
+      "path": "twodrive-tray.exe"
+    }
+  ],
+  "signed": false,
+  "channel": "preview",
+  "version": "0.2.10"
+}

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -66,15 +67,16 @@ impl UploadSessionStore {
             random_string(8)
         ));
         let result = (|| -> anyhow::Result<()> {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(&tmp_path)?;
+            let mut options = OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options.open(&tmp_path)?;
             file.write_all(&serde_json::to_vec_pretty(self)?)?;
             file.sync_all()?;
             drop(file);
             fs::rename(&tmp_path, path)?;
+            #[cfg(unix)]
             if let Some(parent) = path.parent() {
                 fs::File::open(parent)?.sync_all()?;
             }

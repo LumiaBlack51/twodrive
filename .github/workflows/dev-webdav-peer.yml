@@ -1,0 +1,53 @@
+name: Dev WebDAV and QUIC peer
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    paths:
+      - 'experiments/twodrive-dev/**'
+      - 'crates/**'
+      - '.github/workflows/dev-webdav-peer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            args: '--features mount'
+            rustflags: ''
+            binary: target/release/twodrive-dev
+          - os: windows-latest
+            args: ''
+            rustflags: '-C target-feature=+crt-static'
+            binary: target/release/twodrive-dev.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        working-directory: experiments/twodrive-dev
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --locked ${{ matrix.args }} -- -D warnings
+      - run: cargo test --locked ${{ matrix.args }}
+      - run: cargo build --release --locked ${{ matrix.args }}
+      - name: Two CLI processes without public infrastructure
+        run: python scripts/smoke.py --binary ${{ matrix.binary }} --network lan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twodrive-dev-${{ runner.os }}
+          path: |
+            experiments/twodrive-dev/target/release/twodrive-dev
+            experiments/twodrive-dev/target/release/twodrive-dev.exe
+          if-no-files-found: error

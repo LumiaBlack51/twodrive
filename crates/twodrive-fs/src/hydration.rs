@@ -81,7 +81,7 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
     }
 
     if !db.begin_hydration(&record.metadata.remote_id, generation)? {
-        return Err(io::Error::from_raw_os_error(libc::ECANCELED).into());
+        return Err(hydration_cancelled().into());
     }
     fs::create_dir_all(cache_dir)?;
 
@@ -128,7 +128,7 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         )? {
             Ok(cache_path)
         } else {
-            Err(io::Error::from_raw_os_error(libc::ECANCELED).into())
+            Err(hydration_cancelled().into())
         }
     });
     if result.is_err() {
@@ -144,7 +144,7 @@ pub(crate) fn check_download_generation(
     generation: i64,
 ) -> anyhow::Result<()> {
     if db.download_generation(id)? != generation {
-        return Err(io::Error::from_raw_os_error(libc::ECANCELED).into());
+        return Err(hydration_cancelled().into());
     }
     Ok(())
 }
@@ -198,4 +198,15 @@ pub fn unpin_path(db: &Database, path: &str) -> anyhow::Result<usize> {
     }
 
     Ok(db.list_descendants(&record.metadata.path)?.len())
+}
+
+fn hydration_cancelled() -> io::Error {
+    #[cfg(unix)]
+    {
+        io::Error::from_raw_os_error(libc::ECANCELED)
+    }
+    #[cfg(windows)]
+    {
+        io::Error::from_raw_os_error(995)
+    }
 }

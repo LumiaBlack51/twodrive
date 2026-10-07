@@ -18,9 +18,11 @@ use upload::{
     upload_session_file, upload_session_request_body, uses_upload_session,
 };
 mod auth;
+pub mod browse;
 mod http;
 mod model;
 mod paths;
+pub mod readonly;
 mod upload;
 
 #[derive(Debug)]
@@ -29,8 +31,14 @@ pub struct GraphBackend {
     token_store: TokenStore,
     token: Mutex<TokenData>,
     client: Client,
+    browse_client: Client,
+    browse_retry_until: Mutex<Option<Instant>>,
+    #[cfg(test)]
+    test_endpoint: Option<String>,
     upload_sessions_path: PathBuf,
     upload_sessions: Arc<Mutex<UploadSessionStore>>,
+    control_permanent_delete_unavailable: std::sync::atomic::AtomicBool,
+    control_folders: Mutex<std::collections::HashMap<String, (Instant, String)>>,
 }
 
 impl GraphBackend {
@@ -45,9 +53,18 @@ impl GraphBackend {
         let upload_sessions = shared_upload_session_store(&upload_sessions_path)?;
 
         Ok(Self {
+            #[cfg(test)]
+            test_endpoint: None,
             config,
             token_store,
             token: Mutex::new(token),
+            browse_retry_until: Mutex::new(None),
+            browse_client: Client::builder()
+                .user_agent("twodrive/0.2.10")
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(20))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?,
             client: Client::builder()
                 .user_agent("twodrive/0.1")
                 .connect_timeout(Duration::from_secs(10))
@@ -56,6 +73,8 @@ impl GraphBackend {
                 .build()?,
             upload_sessions_path,
             upload_sessions,
+            control_permanent_delete_unavailable: std::sync::atomic::AtomicBool::new(false),
+            control_folders: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -490,3 +509,5 @@ pub(crate) fn is_conflict_error(err: &anyhow::Error) -> bool {
     let text = err.to_string();
     text.contains("HTTP 412") || text.contains("Precondition Failed")
 }
+
+mod control;

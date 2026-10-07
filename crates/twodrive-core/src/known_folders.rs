@@ -226,8 +226,11 @@ fn parse_system_directory(data: &str, key: &str, home: &Path) -> Option<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
+    // This fixture checks Unix/XDG roots and links; Windows cannot use its APIs.
+    #[cfg(unix)]
     #[test]
     fn sources_distinguish_missing_links_files_and_unsafe_fallbacks() {
         let root = env::temp_dir().join(format!(
