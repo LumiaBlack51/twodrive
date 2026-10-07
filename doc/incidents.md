@@ -90,9 +90,9 @@
 
 ### 交付记录
 
-- 用户授权将修复与 deb 提交到新分支 `codex/pin-download-feedback`，明确不更新本机。修复源码提交已核实为 `a749e430acde26a4364c5ee2671b472281b17f9a`；远端推送验证待补充。
+- 用户授权将修复与 deb 提交到新分支，明确不更新本机。已推送 [codex/pin-download-feedback](https://github.com/LumiaBlack51/twodrive/tree/codex/pin-download-feedback)；修复源码提交为 [a749e43](https://github.com/LumiaBlack51/twodrive/commit/a749e430acde26a4364c5ee2671b472281b17f9a)，软件包及验证记录提交为 [18120fc](https://github.com/LumiaBlack51/twodrive/commit/18120fc6286e797f57e487c58b5c57a019b54d1d)。远端分支提交及 deb/校验文件的 Git blob 与本地一致；未合并或修改 main。
 - 已构建并验证 [0.2.11-2 amd64 deb](../dist/twodrive_0.2.11-2_amd64.deb) 与 [SHA-256 校验文件](../dist/twodrive_0.2.11-2_amd64.deb.sha256)，随本分支提交，不创建 Release，也不安装本机。deb 为 6,419,576 字节，SHA-256：`e2da4946333cdecdd7f67cb7b1481acb8de93a0675c807cd0a682f7c412a230f`。
-- 包内故障记录为源码构建时快照；本次包验证与交付补记不更改发布二进制或扩展。原有未提交调查记录和无关文件保留在工作区，不纳入本次提交或软件包。
+- 包内故障记录为源码构建时快照；本次包验证与交付补记不更改包内二进制或扩展。原有未提交调查记录和无关文件保留在工作区，不纳入本次提交或软件包。
 
 ## TD-20261006-01：系统语言切换后特殊目录与上传来源错位
 
