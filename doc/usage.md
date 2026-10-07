@@ -54,7 +54,7 @@ The homepage's [real screenshot](../README.md) shows the tray **at idle**, not d
 
 **Pause sync is currently display-only.** It changes the tray label/icon, not the daemon or transfers. To actually stop after closing mounted files, use `systemctl --user stop twodrive-daemon.service`; restart with `systemctl --user start twodrive-daemon.service`. Stopping the daemon also makes the mount unavailable; it is not an offline pause mode.
 
-Settings is a **read-only GTK 4 overview** of token-file state, paths, measured cache usage, and configured values. It cannot edit configuration. “Pinned used” and “Recent errors” are placeholders, not live accounting/error history. A displayed token path is not a live authentication check.
+Settings is a **GTK 4 overview with an upload source chooser** for token-file state, paths, measured cache usage, configured values and source diagnostics. It can change upload sources; other configuration remains read-only. “Pinned used” remains a placeholder, and source checks are not a complete error history. A displayed token path is not a live authentication check.
 
 ## Current limitations and safety
 
@@ -73,6 +73,10 @@ File and directory rwx permissions are stored locally and enforced on this mount
 Known-folder handling is **disabled by default**, separate from the read/write mount, and supports `upload_only`. Configured local folders upload directly without an extra TwoDrive content cache. Local source deletion does not delete the cloud copy; deletion propagation is ignored even if requested in config.
 
 Read [config.example.toml](../config.example.toml) before enabling it. The example disables startup/rescans (`startup_scan = false`, `rescan_interval = "0s"`); generated defaults use `true` and `"15m"`. The watcher baselines existing files, then handles additions/renames and configured scans. It is not bidirectional backup or a promise to upload all existing files immediately. Temporary/hidden files and symlinks are skipped. Keep sources until uploads succeed.
+
+Local sources are explicit paths: changing the desktop language or renaming a directory does not change an upload mapping. Open `twodrive settings` to inspect sources and choose a replacement, or use `twodrive known-folders status` for JSON diagnostics. Missing sources and skipped symbolic links are reported alongside differences from the system's XDG special directories. These differences can also be intentional custom mappings. A system special directory reset to `$HOME` must be repaired separately; TwoDrive does not rewrite `user-dirs.dirs`, move local contents, or migrate links from another OneDrive client.
+
+Use the zero-based mapping index from the diagnostics to update one source, for example `twodrive known-folders set-source 1 ~/Downloads`. The command validates the directory, preserves cloud destinations and other settings, and saves atomically. Restart TwoDrive after saving (close files on the mount first; a service installation can use `systemctl --user restart twodrive-daemon.service`). Until restart the daemon retains its previous mapping. Sources missing at startup also require a restart after being restored. The home directory, filesystem root, and sources inside or containing the TwoDrive mount are rejected to avoid uploading the whole home or feeding the cloud mount back into uploads. Existing configuration files are diagnosed without automatically changing paths. See [TD-20261006-01](incidents.md#td-20261006-01系统语言切换后特殊目录与上传来源错位) for evidence and verification limits.
 
 ## Paths and diagnostics
 

@@ -8,6 +8,7 @@ use presentation::{open_folder, open_settings, print_help, print_status, status_
 mod commands;
 use commands::{init_mock, logout, mount, pin, prune_cache, release, sync, unpin};
 mod arguments;
+mod known_folders;
 use arguments::required_path;
 
 fn main() -> anyhow::Result<()> {
@@ -22,6 +23,7 @@ fn main() -> anyhow::Result<()> {
         "login" => GraphBackend::login(&paths),
         "logout" => logout(&paths),
         "status" => print_status(&paths),
+        "known-folders" => known_folders::command(&paths, &args),
         "sync" => sync(&paths),
         "mount" => mount(paths),
         "pin" => pin(&paths, required_path(&args)?),

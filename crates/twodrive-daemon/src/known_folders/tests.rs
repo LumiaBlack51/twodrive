@@ -183,6 +183,42 @@ fn known_folder_state_persists_pending_uploads() {
 }
 
 #[test]
+fn mount_source_is_not_uploaded_into_itself() {
+    let (root, paths) = test_paths("mount-source");
+    paths.ensure().unwrap();
+    fs::write(
+        paths.mount_dir.join("photo.bin"),
+        b"do not upload a mounted copy",
+    )
+    .unwrap();
+    let db = Database::new(paths.db_path.clone());
+    db.init().unwrap();
+    let backend = MockBackend::new();
+    let mut state = KnownFolderState::default();
+    sync_known_folder_root(
+        &paths,
+        &backend,
+        &db,
+        &Config::default(),
+        &KnownFolderRoot {
+            local: paths.mount_dir.clone(),
+            remote: "/Pictures".into(),
+        },
+        &mut state,
+    )
+    .unwrap();
+    assert!(
+        backend
+            .get_metadata_by_path("/Pictures/photo.bin")
+            .unwrap()
+            .is_none()
+    );
+    assert!(state.files.is_empty());
+    assert!(state.pending.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn missing_pending_known_folder_file_is_pruned() {
     let (root, paths) = test_paths("missing-pending");
     let missing = root.join("no-longer-present.txt");

@@ -365,3 +365,13 @@ Range 续传，4 MiB 取消后新 worker 续传，Range 返回 200，错误 Cont
   管道编码、PowerShell 5.1 打包、跨批次删除。首次 WSL diff 检查因复制文本 CRLF
   失败，规范为 LF 后重跑通过；不把失败运行计为通过。原生 UI 自动刷新使旧 accessibility
   索引失效，重新截图定位后验证成功；一次导航即时检查尚未渲染，随后重读确认。
+
+
+## 2026-10-07 PR 提交准备
+
+- 当前登录、目录浏览、持久索引/下载缓存完整工作树已保存为本地提交 6f2c0e3。
+- 整合 origin/main bdacfb9 的已发布来源诊断更新；唯一冲突为 incidents.md 并行新增记录，保留两边全部内容。未向 main 推送或执行 PR 合并。
+- 未跟踪历史证据暂存后发现的文本空白已规范；PNG 不改动，证据内容与验收边界不变。
+- 此前 2026-09-17 的 Windows 构建及真实账户测试仍作为历史证据；本次合并后重新验证 Linux，不能将旧 Windows 包当作最新 main 整合树的构建。
+
+整合 main 后重新验证：Rust 133 passed、6 ignored（未执行）；Linux workspace Clippy -D warnings、fmt、暂存 diff 检查通过，Nautilus 19 项通过。新证据位于 windows-evidence/pr-20261007。Windows/Flutter 本次没有重建；新 PR 保持 draft，等待当前提交 CI 和真实大文件验收。

@@ -30,6 +30,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python3 -m unittest discover -s packaging/nautilus -p 'test_*.py'
+python3 -m unittest discover -s scripts -p 'test_twodrive_settings.py'
 ```
 
 Environment-dependent mounted tests are ignored by default; a normal test run does not establish that they passed. Inspect their requirements and use isolated FUSE mounts. Mock tests are not evidence of live Graph behavior.
