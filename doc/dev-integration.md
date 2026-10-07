@@ -66,3 +66,17 @@ From another terminal, run `peers` with the same `--state-dir`, verify the other
 Use temporary states, synthetic credentials and disposable files. Integration CI builds the current combined tree on native Windows and Linux, including Full Flutter analysis/tests/build, Rust tests, native IPC, peer update-process tests and encrypted two-process WebDAV transfer. Results are recorded in the [incident log](https://github.com/LumiaBlack51/twodrive/blob/dev/doc/incidents.md).
 
 Historical source-branch live Graph evidence remains historical. This integration does not log in to a real account, modify cloud files, exercise the user's installed Windows machine, or validate two geographically separated NAT devices. Existing default-ignored FUSE tests and separately executed dev mount smoke are different verification scopes. A successful build or mock cloud test is not live OneDrive end-to-end evidence.
+
+## Verified builds, 2026-10-07
+
+The final tested runtime source is [c73fece](https://github.com/LumiaBlack51/twodrive/commit/c73fece6b8e9215b562ea88317a31f9f5723cf7e). Record updates after that build change no runtime code, dependency locks or build scripts; package documentation is the snapshot from its build revision.
+
+| Check | Verified result |
+| --- | --- |
+| [Windows Full/Lite CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594661999) | 11 engine tests, 12 Flutter tests, analyze/release, native IPC, identical tools across editions, packaged QUIC byte comparison passed |
+| [Peer native CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594656006) | Windows 93 default tests, Linux 151 default workspace tests, explicit update-process/rollback tests and both release builds passed |
+| [WebDAV/QUIC CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594655979) | Linux 10 / Windows 8 tests, strict formatting/Clippy, both release builds and two-process LAN GET/PUT/MOVE/DELETE with 2,097,105 bytes compared passed |
+| Independent downloaded package check | Full 25 / Lite 9 files matched their manifests; inner ZIP hashes/contents and all four tool binaries matched across editions |
+| Local Linux FUSE/QUIC | Writable and read-only real mount smoke passed; 6 older default-ignored FUSE tests were not run |
+
+Download the [verified Full/Lite artifact](https://github.com/LumiaBlack51/twodrive/actions/runs/37594661999/artifacts/11469933545), then extract the desired inner ZIP to a new directory. Both packages include `twodrive-peer.exe` and `twodrive-dev.exe`. Compare the inner ZIP with the included `SHA256SUMS.txt` and use a dedicated preview state directory. These are development builds, with Windows engine/UI version 0.2.10, peer 0.1.1 and WebDAV/QUIC tool 0.1.0.

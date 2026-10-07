@@ -377,3 +377,35 @@ Range 续传，4 MiB 取消后新 worker 续传，Range 返回 200，错误 Cont
 整合 main 后重新验证：Rust 133 passed、6 ignored（未执行）；Linux workspace Clippy -D warnings、fmt、暂存 diff 检查通过，Nautilus 19 项通过。新证据位于 windows-evidence/pr-20261007。Windows/Flutter 本次没有重建；新 PR 保持 draft，等待当前提交 CI 和真实大文件验收。
 
 PR 交付：草稿 [#9](https://github.com/LumiaBlack51/twodrive/pull/9)，目标 main；功能提交 6f2c0e3，整合 main 与验证为 174a12b。没有合并 PR、推 main 或发布。历史结果 JSON 中 uncommitted/pushed=false 为当时快照，以本节为当前状态。创建后查询显示无合并冲突，Windows/Linux CI 已启动，尚未通过。
+
+## 2026-10-07 合并到 dev（后续状态）
+
+- 按用户要求，将 PR #9 改为目标 dev，并合并其最新 5120cf7；GitHub 已确认
+  PR 状态 MERGED，合并提交 d3c9e329c8008d188995fb6e5dc67ba0ef16ad0d。
+  上一节的“目标 main / 未合并”为当时历史快照。main 未更新。
+- 另以合并提交 805ceba6616efd6d77014736881ad1e9d74a6528 纳入
+  codex/peer-control 的 dd0686b；[PR #8](https://github.com/LumiaBlack51/twodrive/pull/8)
+  保持 dev → main 的 draft，供整合测试。
+- 保留 Windows 新版登录取消、OAuth 回调校验、刷新协调、持久索引/下载实现；
+  同一 Graph provider 加入 peer 控制对象能力，保留全部源分支故障记录。
+- build-windows.ps1 的 -IncludeDevTools 让 Full/Lite 同时包含
+  twodrive-peer.exe 与 twodrive-dev.exe。GUI 仍控制 OneDrive 引擎，另两工具独立使用；
+  没有云控制信任到 QUIC 分享的自动转换，也没有加入 CFAPI 或 Windows 双向同步。
+- 本地整合验证：151 项默认 Rust、10 项实验协议/兼容、19 Nautilus、4 Settings、
+  严格 Clippy/fmt、引擎 IPC、更新进程夹具通过。真实隔离 FUSE/QUIC LAN
+  可写和只读冒烟通过；新目录子文件可能等待已有 60 秒恢复扫描，不承诺即时上传。
+- 首轮 Windows core 测试编译发现旧 main 新增的 Unix/XDG 夹具缺少平台条件；
+  c73fece6b8e9215b562ea88317a31f9f5723cf7e 仅限定 Unix 夹具，不修改生产路径。
+  最终原生 core/backend/peer 93 项及额外更新进程、Windows 引擎 11 项、Flutter 12 项、
+  analyze/release、命名管道 IPC 与打包 QUIC 字节比对均通过；Linux 151 项默认测试通过。
+  [Windows 组合包 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594661999)、
+  [peer CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594656006)、
+  [WebDAV/QUIC CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594655979) 全部成功。
+  下载并独立核验最终[Full/Lite 资产](https://github.com/LumiaBlack51/twodrive/actions/runs/37594661999/artifacts/11469933545)：
+  Full 25 / Lite 9 文件长度/哈希、两个 ZIP 内容/校验值和四工具跨版一致性通过。
+  资产的源码为 c73fece；本节后补记录不改变已构建可执行文件输入。
+- 本轮没有真实登录、云端修改、Windows 用户设备操作或异地 NAT 双机验证。
+  原本的本地 main、安装、服务与账户均未改动。
+
+[整合指南](dev-integration.md)；本轮机制与验证边界见
+[TD-20261007-01/02/03](incidents.md#td-20261007-03整合树-windows-原生-peer-测试失败)。

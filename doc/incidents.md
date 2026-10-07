@@ -49,7 +49,7 @@
 ## TD-20261007-03：整合树 Windows 原生 peer 测试失败
 
 - 日期：2026-10-07
-- 状态：已修复并通过 Linux 回归；Windows 原生重跑待验证。
+- 状态：已验证 Windows 原生测试编译与执行修复；Linux/Windows peer 全流程通过。
 - 影响版本与环境：dev 805ceba；GitHub windows-latest，Peer native builds 37593664900。
 - 关联历史故障：与 TD-20260916-WIN-AUTH-TEST 同为测试缺少平台限定；本次是较新 main 新增的 known-folder 夹具，不是旧 OAuth 修复回归。TD-20261006-04 是生产依赖隔离，与本次编译目标不同。
 
@@ -71,7 +71,7 @@ known_folders.rs:229 的 tests 模块无条件导入 std::os::unix::fs::symlink�
 
 ### 验证结果与边界
 
-旧树 805ceba 在原生 CI 明确编译失败。修正后本地 backend/core/peer 94 项默认测试通过，原 Unix 夹具仍在 Linux 执行；fmt 和严格 Clippy 通过。Windows 原生重跑待验证；不能以本地 Linux 结果代替。
+旧树 805ceba 在原生 CI 明确编译失败。修正后本地 backend/core/peer 94 项默认测试通过，原 Unix 夹具仍在 Linux 执行；fmt 和严格 Clippy 通过。c73fece 原生 Windows 93 项默认测试通过（仅该 Unix 夹具未编译），额外更新进程测试通过；Linux 151 项默认工作区测试和额外更新进程测试通过。两平台 peer release、自检和资产上传均通过；Windows DPAPI 往返、私有身份持久化及系统 DLL 检查通过。均使用合成状态，未验证真实 OneDrive 或异地设备握手。
 
 ### 防复发措施与后续
 
@@ -79,7 +79,7 @@ known_folders.rs:229 的 tests 模块无条件导入 std::os::unix::fs::symlink�
 
 ### 交付记录
 
-[整合提交 805ceba](https://github.com/LumiaBlack51/twodrive/commit/805ceba6616efd6d77014736881ad1e9d74a6528)，[失败 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37593664900/job/112700935062)。修复提交与后续 CI 待补充。
+[整合提交 805ceba](https://github.com/LumiaBlack51/twodrive/commit/805ceba6616efd6d77014736881ad1e9d74a6528)，[失败 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37593664900/job/112700935062)；[修复 c73fece](https://github.com/LumiaBlack51/twodrive/commit/c73fece6b8e9215b562ea88317a31f9f5723cf7e)，[成功原生 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594656006)。peer 资产 [Windows](https://github.com/LumiaBlack51/twodrive/actions/runs/37594656006/artifacts/11469772936) / [Linux](https://github.com/LumiaBlack51/twodrive/actions/runs/37594656006/artifacts/11470636670)。未发布 Release 或替换用户安装。
 
 
 ## TD-20261007-02：dev 合并后的隔离 FUSE 上传冒烟超时
@@ -115,13 +115,13 @@ cargo build 实验 --features mount 后，scripts/smoke.py --network lan --mount
 
 ### 交付记录
 
-本轮整合未推送，提交/CI 待补充。
+[整合提交 805ceba](https://github.com/LumiaBlack51/twodrive/commit/805ceba6616efd6d77014736881ad1e9d74a6528)，最终运行代码 [c73fece](https://github.com/LumiaBlack51/twodrive/commit/c73fece6b8e9215b562ea88317a31f9f5723cf7e)。[WebDAV/QUIC 原生 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594655979) Linux/Windows 全部成功：Linux 10、Windows 8 项测试及 2,097,105 字节双进程 LAN 比对通过；CI 不运行 FUSE，实际挂载结果为本条所述本地验证。未发布 Release 或替换用户安装。
 
 
 ## TD-20261007-01：dev 多分支合并工具截断工作区 manifest
 
 - 日期：2026-10-07
-- 状态：已验证 Linux 合并 manifest/编译与协议回归；Windows 原生整合 CI 待执行。
+- 状态：已验证 Linux/Windows 合并 manifest、编译、协议与组合包回归。
 - 影响版本与环境：未提交的 dev + Windows PR #9 + peer-control 合并树；仅隔离 worktree。
 - 关联历史故障：TD-20261006-04 是 Unix 平台依赖问题；本次是合并工具机制，不属同源。
 
@@ -143,7 +143,9 @@ cargo build 实验 --features mount 后，scripts/smoke.py --network lan --mount
 
 ### 验证结果与边界
 
-恢复后 cargo metadata --no-deps --offline 成功解析；离线更新合并依赖图后 --locked 编译通过。主工作区 151 项默认 Rust 测试通过（6 项 FUSE 和 1 项更新进程默认忽略），另显式执行更新进程测试通过；dev 的 1 项兼容性 + 9 项协议测试、两工作区 fmt/严格 Clippy、19 Nautilus、4 Settings 通过。Linux 独立引擎进程的 IPC/单实例/重启/字节比对通过。Windows 原生最终整合 CI 待执行，不能以历史单分支 CI 代替。
+恢复后 cargo metadata --no-deps --offline 成功解析；离线更新合并依赖图后 --locked 编译通过。主工作区 151 项默认 Rust 测试通过（6 项 FUSE 和 1 项更新进程默认忽略），另显式执行更新进程测试通过；dev 的 1 项兼容性 + 9 项协议测试、两工作区 fmt/严格 Clippy、19 Nautilus、4 Settings 通过。Linux 独立引擎进程的 IPC/单实例/重启/字节比对通过。
+
+最终 c73fece 原生 Linux/Windows 的三条整合 CI 全部成功：Windows core/backend/peer 93 项、额外更新进程、Windows 引擎 11 项、Flutter 12 项、analyze/release、命名管道 IPC、Full/Lite 中同一工具哈希及实际打包 QUIC 双进程传输通过。Windows dev 8 项协议测试通过。下载最终组合资产后，独立验证 Full 25 / Lite 9 文件的 manifest 长度/哈希、两 ZIP 校验值与内容、四个工具跨版一致。真实云端、异地 NAT、用户设备和 CFAPI 未验证，6 项既有 FUSE ignored 未在本轮执行。
 
 ### 防复发措施与后续
 
@@ -151,7 +153,7 @@ cargo build 实验 --features mount 后，scripts/smoke.py --network lan --mount
 
 ### 交付记录
 
-Windows 来源 5120cf7（PR #9），peer 来源 dd0686b，原 dev 71c31e0；本轮合并提交与 CI 待补充。
+Windows 来源 5120cf7（[PR #9，已合并到 dev](https://github.com/LumiaBlack51/twodrive/pull/9)），peer 来源 dd0686b，原 dev 71c31e0；Windows 合并 d3c9e32，peer/包整合 [805ceba](https://github.com/LumiaBlack51/twodrive/commit/805ceba6616efd6d77014736881ad1e9d74a6528)，平台测试限定 [c73fece](https://github.com/LumiaBlack51/twodrive/commit/c73fece6b8e9215b562ea88317a31f9f5723cf7e)。[Windows 组合包 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594661999)、[peer CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594656006)、[WebDAV/QUIC CI](https://github.com/LumiaBlack51/twodrive/actions/runs/37594655979) 均成功。已核验[组合资产](https://github.com/LumiaBlack51/twodrive/actions/runs/37594661999/artifacts/11469933545)来源为 c73fece；Full ZIP SHA-256 `49c2ab6540228984745233bbed51b9235f38a1148c880c12566318d0c68b6552`，Lite ZIP `0b4663b87ab01e72c23836350e11df4263c170139cb44d3ad541ded7c992835e`。仅记录更新在构建后提交，不改变可执行文件的源码/锁文件/构建脚本；资产内文档是该构建的快照。未合并 main、发布 Release 或替换用户安装。
 
 
 ## TD-20261007-PR-WSL：提交前 fetch 的宿主调用超时
