@@ -1,0 +1,6 @@
+PASS delivery restart retains index, verified cache and cancelled task
+{"delivery_lite_download": "cached", "bytes": 1132, "cancellation_restart_retry": "passed", "actual_range_resume": "not claimed; cancelled before payload"}
+PASS delivery incremental delta
+PASS real refresh cancellation retains committed index
+{"full_ipc_lite_same_persisted_items": true, "cached_count": 2, "cached_bytes": 2264}
+PASS cached reveal IPC accepted by Windows

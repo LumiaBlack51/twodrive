@@ -1,0 +1,2 @@
+Isolated sandbox: /tmp/twodrive-isolated-mock-ib_5lc9o
+PASS: isolated daemon hydration/write/upload/move/delete/pin/release

@@ -12,6 +12,7 @@ pub use config::{
 };
 pub use credentials::{TokenData, TokenStore};
 pub use database::Database;
+pub use database::cloud::{CloudIdentity, DownloadTask, IndexedItem};
 pub use domain::{
     CoreError, FileRecord, FileState, MetadataEntry, PendingDelete, PendingMetadataKind,
     PendingMetadataOperation,

@@ -1,5 +1,24 @@
 # TwoDrive 故障记录
 
+## TD-20260917-DELTA-PENDING-DELETE：跨刷新删除非空目录可能遗留目录
+
+- 日期：2026-09-17；状态：已修复并完成确定性回归；影响本轮未发布的索引实现。
+- 关联：folder-move-sync-2026-09-11.md 涉及目录顺序，但不是本次只读索引根因。
+### 症状与触发条件
+目录删除标记先到，子项在后续 delta 才删除；首次刷新为保护子项保留目录。
+### 根因与证据
+审阅发现首次提交后清除了暂存删除标记，后续子项删除时无法识别待删目录。
+没有证据表明真实账户发生过这种顺序。
+### 解决办法与恢复操作
+在持久条目中保留删除标记，每次提交所有移动/删除后清理无子项的已删除条目。
+无真实云端修改，无本地账户恢复操作。
+### 验证结果与边界
+跨两次 delta 的目录/子项删除回归已验证旧代码失败（exit 101）、修复后通过（exit 0）。
+游标写入失败事务回滚也通过；证据见 windows-evidence/metadata-cache。
+真实 rename/move/delete 未执行，遵守只读验证约束。
+### 防复发与交付
+保留跨批次删除回归及事务回滚测试；未提交、未发布。
+
 从 2026-09-15 起持续维护。每次故障新增条目，最近的条目放在前面；复发也单独记录并关联历史条目。维护流程见 [AGENTS.md](../AGENTS.md)。更早的调查保留在[文档索引](README.md#engineering-notes)，不追溯标记为已按本流程验证。
 
 ## 记录模板
@@ -294,3 +313,225 @@ Windows Python 默认编码为 GBK。并非管道消息截断或同步成功丢�
 - 解决办法：替换为真实界面的托盘/管理中心布局、导航、暂停确认与断连禁用测试，测试使用注入的隔离数据。
 - 本地恢复：无。验证边界：不涉及真实 OneDrive、原生托盘窗口行为或 CFAPI。
 - 防复发：后续前端修改运行完整 `flutter test` 与 `flutter analyze`。
+
+## TD-20260916-WIN-AUTH-TEST：后端测试无条件引用 Unix 权限 API
+
+- 日期：2026-09-16
+- 状态：已定位，修复验证中。
+- 影响版本与环境：0.2.10 Windows 原生后端测试编译；不影响已有运行程序。
+- 关联历史故障：与 Flutter 默认测试故障无相同根因。
+- 症状与复现：执行 cargo test -p twodrive-windows -p twodrive-backend --locked，报 std::os::unix 不存在和 Permissions.mode 不存在。
+- 根因与证据：onedrive/tests.rs 无条件导入 PermissionsExt 并检查 Unix mode。
+- 解决办法：仅在 Unix 上编译 mode 检查，Windows 继续执行实际加密存储和读取往返测试。
+- 本地恢复：无；未删除账户或数据。
+- 验证边界：测试结果待补；模拟令牌不代表真实 Microsoft 登录成功。
+- 防复发：Windows 后端测试加入本次验证命令。
+
+验证补记：Windows 后端 24 项与 Windows 引擎 6 项测试均通过；Clippy 无警告。Unix 权限断言仅在 Unix 编译，Windows 加密存储往返通过。真实 Microsoft 登录与云端同步不属于本条测试结论。
+
+## TD-20260916-BROWSE-DEV：浏览开发验证受文件占用和编码影响
+
+- 状态：原因确认，验证重跑中。
+- 触发：真实目录探测从 target/debug 启动引擎后运行 cargo test；另一个编辑辅助脚本使用 Python 默认文本编码。
+- 症状/证据：Windows 无法删除正在运行的 twodrive-engine.exe（os error 5）；Python read_text 报 GBK UnicodeDecodeError。
+- 根因：验证程序占用重建目标；中文源码与 Windows 默认编码不匹配。编码机制与 TD-20260916-W02 相邻，但此次是编辑辅助脚本，不是 IPC 输出。
+- 处理：运行引擎移到独立 browse-development-runtime 副本；编辑脚本显式 UTF-8。保留既有产物/登录凭据，不修改云端。
+- 验证边界：失败运行不计通过；随后结果见 windows-progress.md。新增构建验证都从独立产物运行，不再占用 target。
+
+## TD-20260916-BROWSE-CANCEL：空查询身份仍被客户端接收
+
+- 状态：确定性回归发现并修复，完整重跑中。
+- 触发：取消查询/注销立即清除 queryId 后，传输返回 query_id=null 的目录对象。
+- 根因/证据：原客户端仅判断 incoming.query_id != queryId，null == null 时仍接收；新增 cloud_browse_test 的取消/注销测试首次失败，出现不该恢复的条目。
+- 修复：没有非空活动 queryId 时不接收任何目录数据。引擎另以取消标记、登录状态、查询 ID 三重检查阻止迟到 worker 发布。
+- 验证：新增快速切换、取消、注销、分页去重测试；结果补入 windows-progress.md。测试用合成目录，未退出当前真实账户。
+- 恢复操作：无。防复发：保留该回归；完整 Flutter 测试与 Rust 迟到完成测试纳入本阶段检查。
+
+验证补记（2026-09-17）：取消空查询修复后客户端回归通过。新增 widget 测试首次因测试 fixture 的 Map.addAll 泛型不匹配失败，改为显式 Map<String,dynamic> 后完整 11 项通过；这不是生产 JSON 解析故障。Dart format 暴露三个缺花括号的 lint（两处新代码、一处已有测试），首轮构建因此被静态检查拦截；已加花括号，重新打包，首次失败日志独立保留。
+
+## TD-20260917-RETRY-AFTER：共用 HTTP 重试器提前重试长限流
+
+- 状态：代码审阅确认机制，修复后验证中。
+- 触发：Graph/OAuth 返回 Retry-After 大于 30 秒；既有辅助函数将其截为 30 秒。
+- 证据：原 `retry_after_seconds_are_honored_with_a_small_cap` 明确断言 120 秒变为 30 秒。没有声称当前真实账户发生过限流。
+- 影响：现有刷新复用该重试器，可能早于服务端允许的时间重试；与登录增量无凭据丢失关系。
+- 修复：保留完整秒数及 HTTP 日期；超出单次重试预算时停止自动重试而非缩短等待。保留结构化 HTTP 状态/延迟，不包含响应正文；浏览端持有共享等待截止时间，后续查询也不能绕过刷新限流。授权网络故障保持网络/超时分类。
+- 测试：合成 HTTP 刷新返回 429/120 秒，两次查询只发出一次刷新请求，保存的凭据仍在；HTTP 日期解析、原 120 秒断言已更新。完整平台结果见 windows-progress.md。
+- 本地恢复：无；未改真实权限、云端文件或既有登录。
+
+最终补记：TD-20260916-BROWSE-DEV、TD-20260916-BROWSE-CANCEL、TD-20260917-RETRY-AFTER 已完成本轮修复后重跑；Windows Rust 42、Linux Rust 115、Flutter 11 通过，静态检查通过，6 项 FUSE ignored 未执行。当前真实账户只读根/子目录实测通过；真实异常注入及真实多页未执行。构建与证据见 windows-progress.md 2026-09-17 交付节，不将 mock HTTP 结果称为真实异常恢复验证。
+
+
+## TD-20260917-INDEX-DOWNLOAD-DEV: Native milestone compilation and verification
+
+- Date: 2026-09-17.
+- Status: development checks being rerun; no released or running account data affected.
+- Environment: uncommitted Windows 0.2.10 metadata/cache milestone.
+- Related history: TD-20260916-BROWSE-DEV (verification workflow only).
+
+### Symptoms and reproduction
+
+Initial cargo check rejected four methods private to the new engine child module.
+The first warnings-denied Clippy run rejected two cloned single-element slices in new tests.
+
+### Root cause and evidence
+
+Rust child-module method visibility does not expose private methods to the parent;
+compiler E0624 identified the four calls. Clippy identified cloned_ref_to_slice_refs.
+
+### Fix and recovery
+
+Use pub(super) for the four engine entry points and std::slice::from_ref in tests.
+No local account recovery, cloud mutation, or existing preview replacement occurred.
+
+### Verification and limits
+
+Native cargo check passed after visibility fixes; deterministic readonly HTTP tests passed.
+Full final verification remains in progress and will be recorded in windows-progress.md.
+These are development failures, not evidence of real Graph failure or recovery.
+
+### Prevention and delivery
+
+Keep native check, all-target Clippy and deterministic tests in milestone validation.
+Uncommitted; no release or remote publication.
+
+
+## TD-20260917-INDEX-UI-ENCODING: New UI strings lost in PowerShell stdin
+
+- Date: 2026-09-17; status: fixed, widget verification passed.
+- Affected environment: uncommitted new index UI only; no cloud data impact.
+- Related incident: TD-20260916-W02; a different encoding boundary (PowerShell to Python stdin).
+
+### Symptoms and reproduction
+
+Reading newly generated Dart source showed question marks replacing Chinese labels;
+Flutter analyze could not detect this semantic text loss.
+
+### Root cause and evidence
+
+PowerShell's default pipe encoding replaced non-ASCII Python source before execution.
+The Dart source itself contained literal question marks.
+
+### Fix and local recovery
+
+Replaced only the new affected strings with UTF-8 patches. Added a widget test asserting
+real labels and IPC refresh/download/open commands. No account recovery was needed.
+
+### Verification and limits
+
+The index widget and full Flutter suite passed after correction. Native UI verification
+is tracked in windows-progress.md. No real Graph fault is inferred from this issue.
+
+### Prevention and delivery
+
+Use direct UTF-8 patches or ASCII-only helper scripts; inspect visible UI labels.
+Uncommitted, no release. Development Clippy also found collapsible_if and test-module
+ordering; both were corrected and warnings-denied native Clippy passed.
+
+
+## TD-20260917-PACKAGING-PS51: Release packaging requires unavailable Path API
+
+- Date: 2026-09-17; status: fixed, new-directory package rerun pending.
+- Environment: Windows PowerShell 5.1, native Windows build mirror script.
+- Related: TD-20260916-W01; different root cause, packaging after successful compilation.
+
+### Symptoms and reproduction
+
+Full Rust/Flutter release compilation succeeded; manifest generation failed because
+System.IO.Path.GetRelativePath does not exist in this PowerShell/.NET Framework.
+The failed artifact directory is retained and is not a delivered package.
+
+### Root cause and evidence
+
+build-windows.ps1 called a newer .NET API under the system PowerShell runtime.
+
+### Fix and recovery
+
+Derive each enumerated child file path relative to the known package prefix using
+Substring; no external paths are enumerated. Expand packaging verification to full
+Flutter analyze/test. Build again in a new output directory, preserving known-good previews.
+
+### Verification, prevention and delivery
+
+Rerun status and per-file manifest/hash verification are recorded in windows-progress.md.
+No installer, cloud mutation or publication. Keep native packaging in release validation.
+Uncommitted; release link not applicable.
+
+
+## TD-20260917-INDEX-SIZE: Invalid file size could be treated as zero
+
+- Date: 2026-09-17; status: corrected and deterministic regression passed.
+- Environment: new uncommitted read-only metadata parser.
+- Related history: folder-move-sync-2026-09-11.md negative size handling; same input
+  class in a newly introduced parser, not a regression in the Linux parser.
+
+### Symptoms, trigger and root cause
+
+Code review found as_u64().unwrap_or(0) accepted missing/negative file sizes as zero.
+This could create an empty cache candidate. No real account occurrence was observed.
+
+### Fix and recovery
+
+Require a nonnegative integer size for supported live file items; folder aggregate sizes
+remain non-authoritative. No local recovery or real cloud operation was needed.
+
+### Verification and prevention
+
+invalid_file_size_is_never_an_empty_cache_candidate passes; final native/Linux suites
+pass. Real invalid Graph responses were not induced. Preserve strict file-size checks.
+
+### Delivery
+
+Uncommitted; evidence and limits in windows-progress.md.
+
+## TD-20260917-INDEX-SUMMARY: Full overview used obsolete cache counters
+
+- Date: 2026-09-17; status: fixed and native UI verified.
+- Environment: initial new index/cache preview; previous browsing architecture retained.
+- Related history: TD-20260916-W03 concerned disconnected state, not these counters.
+
+### Symptoms and trigger
+
+After a real small file reached cached in the index, Full overview still showed 0 B
+because it read the legacy mock files collection rather than the new persisted cloud view.
+
+### Root cause and fix
+
+The new file page used cloud state, while overview retained its previous data source.
+Add engine-computed file_count/cached_bytes to CloudView and use these for real-mode
+summary. Account status explicitly describes read-only indexing/download cache.
+
+### Verification and boundary
+
+Native Full first showed 46 files and 1.1 KiB, then 2.2 KiB after the second 1,132-byte
+real download; Lite/IPC returned 46 files and 2,264 cached bytes. Final Full UI bytes match
+the inspected build; full Flutter suite/analyze and final release build pass.
+No cloud metadata/content mutation, no local account repair, no CFAPI claim.
+
+### Prevention and delivery
+
+Keep summary and file-page state sourced from CloudView; maintain native shared-state
+acceptance and widget tests. Uncommitted; no release.
+
+### 2026-09-17 final development verification addendum
+
+INDEX-DOWNLOAD-DEV, INDEX-UI-ENCODING, PACKAGING-PS51 and DELTA-PENDING-DELETE
+fixes passed final verification: Windows Rust 85, Linux Rust 127, Flutter 12, Nautilus 19;
+Clippy warnings denied, fmt, analyze, Full/Lite release and artifact hash verification pass.
+Six ignored FUSE tests remain unexecuted. CRLF copied into WSL initially failed diff
+whitespace checks; changed text was normalized to LF and checks rerun successfully.
+A helper UNC path inspection failed (WinError 64); no files were changed by that failed
+inspection, and subsequent comparison/copy used WSL-local Python with explicit paths.
+See windows-progress.md and windows-evidence/metadata-cache/results.json for real-account
+results and remaining large-file acceptance blockage. No failures/skips count as passes.
+
+
+## TD-20261007-PR-WSL：提交前 fetch 的宿主调用超时
+
+- 状态：重试成功；一次 WSL 调用返回 Wsl/Service/WSAETIMEDOUT，根因未确认。
+- 影响：首次远端基线检查未完成，不计通过；无应用/凭据/云端数据变化。
+- 处理：重新通过 WSL 执行有界 git fetch，仅更新远端跟踪引用，成功取得 main bdacfb9。
+- 验证：随后 Git 查询、workspace 测试 127 passed/6 ignored、Clippy 均成功。
+- 边界/后续：不归因为 TwoDrive 缺陷；保留超时事实，网络操作继续使用有界等待。
+
+提交检查补记：git diff --cached --check 发现此前未跟踪证据中的 CRLF、终端尾部空格及 EOF 空行；仅规范文本空白后重跑，保留日志内容与所有成功/失败结论。旧 git diff --check 未包含未跟踪文件，不能代表这些文件此前已通过暂存检查。

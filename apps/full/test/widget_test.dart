@@ -54,6 +54,125 @@ Map<String, dynamic> fixture() => {
   ],
 };
 void main() {
+  testWidgets(
+    'real cloud view distinguishes loading, empty, failure and unsupported items',
+    (tester) async {
+      tester.view.physicalSize = const Size(1020, 740);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final state = fixture()
+        ..['mode'] = 'authenticated_preview'
+        ..['status'] = 'signed_in'
+        ..['auth_status'] = 'signed_in'
+        ..['files'] = []
+        ..['recent'] = []
+        ..['active'] = null
+        ..['capabilities'] = ['cloud_browse'];
+      final client = EngineClient(
+        '',
+        '',
+        transport: (r) async => {
+          'version': 1,
+          'id': r['id'],
+          'ok': true,
+          'snapshot': state,
+        },
+      )..snapshot = state;
+      await tester.pumpWidget(TwoDrive(client: client, compact: false));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('文件').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('正在读取云端目录…'), findsOneWidget);
+      expect(find.text('此云端目录为空'), findsNothing);
+      expect(find.text('云端浏览，尚未启用本地同步'), findsOneWidget);
+      state['directory'] = {
+        'query_id': client.queryId,
+        'status': 'complete',
+        'page_number': 1,
+        'page': {'drive_id': 'drive', 'items': [], 'has_more': false},
+      };
+      await client.send({'type': 'snapshot'});
+      await tester.pumpAndSettle();
+      expect(find.text('此云端目录为空'), findsOneWidget);
+      (state['directory'] as Map)['status'] = 'failed';
+      (state['directory'] as Map)['error'] = 'permission_denied';
+      await client.send({'type': 'snapshot'});
+      await tester.pumpAndSettle();
+      expect(find.text('无权访问此目录。'), findsOneWidget);
+      expect(find.text('此云端目录为空'), findsNothing);
+      (state['directory'] as Map).addAll(<String, dynamic>{
+        'status': 'complete',
+        'error': null,
+        'page_number': 2,
+        'page': {
+          'drive_id': 'drive',
+          'has_more': false,
+          'items': [
+            {
+              'id': 'shortcut',
+              'name': '共享中文 # %',
+              'kind': 'unsupported',
+              'size': null,
+              'modified': null,
+            },
+          ],
+        },
+      });
+      await client.send({'type': 'snapshot'});
+      await tester.pumpAndSettle();
+      expect(find.text('共享中文 # %'), findsOneWidget);
+      expect(find.text('打开'), findsNothing);
+      expect(find.text('下载'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      client.dispose();
+    },
+  );
+  testWidgets('account login submits IPC and displays pending authorization', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1020, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final state = fixture()
+      ..['mode'] = 'unconfigured'
+      ..['status'] = 'signed_out'
+      ..['auth_status'] = 'signed_out'
+      ..['capabilities'] = ['pause', 'browser_login'];
+    final commands = <String>[];
+    final client = EngineClient(
+      '',
+      '',
+      transport: (request) async {
+        final command = (request['command'] as Map)['type'] as String;
+        commands.add(command);
+        state['auth_status'] = command == 'login' ? 'signing_in' : 'signed_out';
+        return {
+          'version': 1,
+          'id': request['id'],
+          'ok': true,
+          'snapshot': state,
+        };
+      },
+    )..snapshot = state;
+    await tester.pumpWidget(TwoDrive(client: client, compact: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('账户'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('登录 Microsoft'));
+    await tester.pumpAndSettle();
+    expect(commands, ['login']);
+    expect(find.text('等待浏览器登录…'), findsOneWidget);
+    await tester.tap(find.text('取消登录'));
+    await tester.pumpAndSettle();
+    expect(commands, ['login', 'cancel_login']);
+    expect(find.text('登录 Microsoft'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   setUpAll(() async {
     final icons = FontLoader('packages/fluent_ui/FluentIcons')
       ..addFont(rootBundle.load('packages/fluent_ui/fonts/FluentIcons.ttf'));

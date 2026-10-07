@@ -1,0 +1,25 @@
+{
+  "windows_rust": {
+    "passed": 42,
+    "ignored": 0
+  },
+  "linux_rust": {
+    "passed": 115,
+    "ignored": 6
+  },
+  "flutter": {
+    "passed": 11
+  },
+  "nautilus": {
+    "passed": 19
+  },
+  "native_ipc": "PASS",
+  "native_editions": "PASS",
+  "linux_ipc": "PASS",
+  "live_metadata_only": "PASS",
+  "graph_live_pagination": "NOT EXERCISED",
+  "live_fault_injection": "NOT EXERCISED",
+  "live_logout": "NOT EXECUTED",
+  "artifacts": "E:\\software\\twodrive\\artifacts-cloud-browse-final-20260917",
+  "screenshots": "Native captures with opaque privacy masks; no mock data or regenerated UI"
+}

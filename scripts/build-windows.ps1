@@ -46,7 +46,7 @@ foreach ($name in $editions) {
         if ($unexpected) { throw "Lite unexpectedly contains a runtime/DLL" }
     }
     $files = @(Get-ChildItem -LiteralPath $package -File -Recurse | ForEach-Object {
-        @{ path=[IO.Path]::GetRelativePath($package,$_.FullName); bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower() }
+        @{ path=$_.FullName.Substring($package.TrimEnd('\').Length + 1); bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower() }
     })
     @{ version=$version; edition=$name; channel="preview"; architecture="x64"; signed=$false;
        native_sync_accepted=$false; ipc_version=1; files=$files } |

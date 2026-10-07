@@ -1,0 +1,6 @@
+    Checking twodrive-backend v0.2.10 (/root/workspaces/twodrive-windows/crates/twodrive-backend)
+    Checking twodrive-fs v0.2.10 (/root/workspaces/twodrive-windows/crates/twodrive-fs)
+    Checking twodrive-windows v0.2.10 (/root/workspaces/twodrive-windows/crates/twodrive-windows)
+    Checking twodrive-cli v0.2.10 (/root/workspaces/twodrive-windows/crates/twodrive-cli)
+    Checking twodrive-daemon v0.2.10 (/root/workspaces/twodrive-windows/crates/twodrive-daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.12s

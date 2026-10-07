@@ -12,11 +12,49 @@ pub struct Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    RefreshIndex,
+    CancelRefresh,
+    IndexPage {
+        offset: usize,
+    },
+    DownloadCloud {
+        id: String,
+    },
+    CancelDownload {
+        id: String,
+    },
+    OpenCached {
+        id: String,
+        reveal: bool,
+    },
     Snapshot,
-    SetPaused { paused: bool },
-    Download { id: String },
-    Release { id: String },
-    MockImport { name: String, content: String },
+    Login,
+    CancelLogin,
+    Logout,
+    Browse {
+        query_id: String,
+        drive_id: Option<String>,
+        item_id: Option<String>,
+    },
+    BrowseNext {
+        query_id: String,
+    },
+    CancelBrowse {
+        query_id: String,
+    },
+    SetPaused {
+        paused: bool,
+    },
+    Download {
+        id: String,
+    },
+    Release {
+        id: String,
+    },
+    MockImport {
+        name: String,
+        content: String,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reply {
@@ -44,6 +82,12 @@ pub struct Transfer {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub cloud: Option<CloudView>,
+    #[serde(default)]
+    pub directory: Option<DirectoryView>,
+    pub auth_status: String,
+    pub auth_error: Option<String>,
     pub engine_version: String,
     pub engine_pid: u32,
     pub revision: u64,
@@ -57,4 +101,32 @@ pub struct Snapshot {
     pub file_count: usize,
     pub capabilities: Vec<String>,
     pub unsupported: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudView {
+    pub file_count: usize,
+    pub cached_bytes: u64,
+    pub status: String,
+    pub error: Option<String>,
+    pub offset: usize,
+    pub count: usize,
+    pub items: Vec<CloudFile>,
+    pub tasks: Vec<twodrive_core::DownloadTask>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudFile {
+    #[serde(flatten)]
+    pub item: twodrive_core::IndexedItem,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryView {
+    pub page_number: usize,
+    pub query_id: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub page: Option<twodrive_backend::onedrive::browse::DirectoryPage>,
+    pub fetched_at: Option<i64>,
 }

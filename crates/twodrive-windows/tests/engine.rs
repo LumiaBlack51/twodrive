@@ -6,6 +6,31 @@ fn call(engine: &Engine, id: &str, command: Command) -> Reply {
         command,
     })
 }
+
+#[test]
+fn login_is_isolated_from_mock_and_saved_credentials_restore_without_sync() {
+    let mock = tempfile::tempdir().unwrap();
+    let engine = Engine::open(mock.path(), true).unwrap();
+    assert!(!call(&engine, "login", Command::Login).ok);
+    let root = tempfile::tempdir().unwrap();
+    drop(Engine::open(root.path(), false).unwrap());
+    let paths = twodrive_windows::engine::auth_paths(root.path());
+    twodrive_core::TokenStore::new(paths.token_path)
+        .save(&twodrive_core::TokenData {
+            access_token: "synthetic-only".into(),
+            refresh_token: None,
+            expires_at_unix: 1,
+        })
+        .unwrap();
+    let engine = Engine::open(root.path(), false).unwrap();
+    let snapshot = engine.snapshot().unwrap();
+    assert_eq!(snapshot.auth_status, "signed_in");
+    assert!(snapshot.files.is_empty());
+    assert!(!snapshot.capabilities.contains(&"download".into()));
+    assert!(!call(&engine, "second-account", Command::Login).ok);
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    assert!(!serialized.contains("synthetic-only"));
+}
 #[test]
 fn pause_blocks_real_scheduler_and_upload_confirmations() {
     let root = tempfile::tempdir().unwrap();

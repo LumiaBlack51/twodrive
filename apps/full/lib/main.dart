@@ -49,6 +49,7 @@ class TwoDrive extends StatefulWidget {
 class _TwoDriveState extends State<TwoDrive> with WindowListener {
   late bool compact = widget.compact;
   int page = 0;
+  bool liveDirectory = false;
   EngineClient get client => widget.client;
   Map<String, dynamic>? get data => client.snapshot;
   @override
@@ -239,7 +240,7 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
                 child: Text(
                   data?['mode'] == 'isolated_mock'
                       ? '隔离测试账户\nFull · 预览版'
-                      : '尚未登录\nFull · 预览版',
+                      : '${data?['auth_status'] == 'signed_in' ? '已登录 Microsoft' : '尚未登录'}\nFull · 预览版',
                   style: const TextStyle(fontSize: 11, color: muted),
                 ),
               ),
@@ -250,6 +251,7 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
     ),
   );
   Widget overview() {
+    final cloud = data?['cloud'] as Map<String, dynamic>?;
     final recent = data?['recent'] as List? ?? [];
     final entries = data?['files'] as List? ?? [];
     final cached = entries
@@ -268,8 +270,12 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
           children: [
             Expanded(
               child: metric(
-                '待同步项目',
-                data == null ? '—' : '${data!['queued'] ?? 0}',
+                cloud == null ? '待同步项目' : '下载任务',
+                data == null
+                    ? '—'
+                    : cloud != null
+                    ? '${(cloud['tasks'] as List).where((t) => t['state'] == 'downloading').length}'
+                    : '${data!['queued'] ?? 0}',
                 '后台队列',
               ),
             ),
@@ -277,16 +283,20 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
             Expanded(
               child: metric(
                 '文件',
-                data == null ? '—' : '${data!['file_count'] ?? entries.length}',
-                '当前同步范围',
+                cloud != null
+                    ? '${cloud['file_count'] ?? 0}'
+                    : data == null || data?['mode'] != 'isolated_mock'
+                    ? '—'
+                    : '${data!['file_count'] ?? entries.length}',
+                cloud == null ? '当前同步范围' : '持久索引中的文件',
               ),
             ),
             const SizedBox(width: 11),
             Expanded(
               child: metric(
                 '本地缓存',
-                data == null ? '—' : bytes(cached),
-                '当前列表中的已缓存文件',
+                data == null ? '—' : bytes(cloud?['cached_bytes'] ?? cached),
+                cloud == null ? '当前列表中的已缓存文件' : '已验证的本地缓存',
               ),
             ),
           ],
@@ -369,6 +379,9 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
       'queued' => '等待同步',
       'mock_idle' => '隔离测试 · 当前无传输',
       'signed_out' => '尚未登录',
+      'signing_in' => '请在浏览器中完成登录',
+      'signed_in' =>
+        data?['cloud'] != null ? 'OneDrive · 只读索引与下载缓存' : '账户已授权 · 文件同步尚未接入',
       _ => '后台状态未知',
     };
   }
@@ -710,10 +723,7 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
           child: switch (page) {
             0 => overview(),
             1 || 4 => files(),
-            2 => unavailable(
-              '浏览器登录与账户切换尚未接入',
-              '当前没有真实账户。安全令牌存储已有平台适配；完整 OAuth 和账户隔离验收前，登录入口保持禁用。',
-            ),
+            2 => account(),
             3 => ListView(
               children: [
                 Card(
@@ -757,6 +767,63 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
     );
   }
 
+  Widget account() {
+    final signingIn = data?['auth_status'] == 'signing_in';
+    final signedIn = data?['auth_status'] == 'signed_in';
+    return ListView(
+      children: [
+        Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                signedIn ? '已登录 Microsoft' : '连接 Microsoft OneDrive',
+                style: const TextStyle(fontSize: 20),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                signedIn
+                    ? '账户授权已保存，重新打开应用可继续使用。当前预览版尚未接入文件同步。'
+                    : '在系统浏览器中登录 Microsoft 账户并授权 TwoDrive。',
+              ),
+              const SizedBox(height: 16),
+              if (!signedIn)
+                FilledButton(
+                  onPressed:
+                      client.can('browser_login') &&
+                          !signingIn &&
+                          data?['auth_status'] != 'signing_out'
+                      ? () => client.send({'type': 'login'})
+                      : null,
+                  child: Text(signingIn ? '等待浏览器登录…' : '登录 Microsoft'),
+                ),
+              if (signedIn)
+                Button(
+                  onPressed: client.busy ? null : client.logout,
+                  child: const Text('退出登录'),
+                ),
+              if (signingIn)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Button(
+                    onPressed: client.busy
+                        ? null
+                        : () => client.send({'type': 'cancel_login'}),
+                    child: const Text('取消登录'),
+                  ),
+                ),
+              if (data?['auth_error'] != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(data!['auth_error'] as String),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget unavailable(String title, String detail) => Card(
     child: Padding(
       padding: const EdgeInsets.all(24),
@@ -776,12 +843,31 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
     ),
   );
   Widget files() {
+    if (data != null && data?['mode'] != 'isolated_mock') {
+      if (!(data?['capabilities'] as List).contains('cloud_index')) {
+        return cloudFiles();
+      }
+      if (liveDirectory) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Button(
+              onPressed: () => setState(() => liveDirectory = false),
+              child: const Text('返回持久索引'),
+            ),
+            const SizedBox(height: 12),
+            Expanded(child: cloudFiles()),
+          ],
+        );
+      }
+      return indexedFiles();
+    }
     final entries = data?['files'] as List? ?? [];
     if (data == null) {
       return unavailable('后台连接中断', '无法读取文件状态，操作已禁用。重新连接后从后台重新获取状态。');
     }
     if (entries.isEmpty) {
-      return unavailable('没有可显示的文件', '正式模式不会填入设计样例。登录和原生同步根尚未接入。');
+      return unavailable('没有可显示的文件', '原生文件同步尚未接入。可在账户页面登录 Microsoft。');
     }
     return ListView(
       children: [
@@ -835,5 +921,299 @@ class _TwoDriveState extends State<TwoDrive> with WindowListener {
           ),
       ],
     );
+  }
+
+  Widget indexedFiles() {
+    final cloud = data?['cloud'] as Map<String, dynamic>?;
+    final entries = (cloud?['items'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
+    final tasks = (cloud?['tasks'] as List? ?? []).cast<Map<String, dynamic>>();
+    final offset = cloud?['offset'] as int? ?? 0;
+    final count = cloud?['count'] as int? ?? 0;
+    final refreshing = cloud?['status'] == 'refreshing';
+    return ListView(
+      children: [
+        const Text('OneDrive · 持久索引与本地缓存', style: TextStyle(fontSize: 24)),
+        const SizedBox(height: 12),
+        const Text('只读下载 · cached 表示本地缓存；尚未启用上传或原生文件同步。'),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          children: [
+            Button(
+              onPressed: () => setState(() => liveDirectory = true),
+              child: const Text('按目录浏览'),
+            ),
+            Button(
+              onPressed: client.can('cloud_index') && !refreshing
+                  ? () => client.send({'type': 'refresh_index'})
+                  : null,
+              child: const Text('刷新索引'),
+            ),
+            Button(
+              onPressed: refreshing
+                  ? () => client.send({'type': 'cancel_refresh'})
+                  : null,
+              child: const Text('取消刷新'),
+            ),
+            Button(
+              onPressed: offset > 0
+                  ? () => client.send({
+                      'type': 'index_page',
+                      'offset': (offset - 100).clamp(0, count),
+                    })
+                  : null,
+              child: const Text('上一页'),
+            ),
+            Button(
+              onPressed: offset + entries.length < count
+                  ? () => client.send({
+                      'type': 'index_page',
+                      'offset': offset + 100,
+                    })
+                  : null,
+              child: const Text('下一页'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          '${cloud?['status'] ?? '未加载'} · $count 项 · ${offset + (entries.isEmpty ? 0 : 1)}–${offset + entries.length}',
+        ),
+        if (cloud?['error'] != null) Text('${cloud!['error']}'),
+        if (cloud == null) const Text('请先登录，再刷新索引。'),
+        if (cloud != null && entries.isEmpty)
+          const Text('当前持久索引没有条目；刷新完成后显示云端结果。'),
+        for (final item in entries)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                item['kind'] == 'folder'
+                    ? const Icon(FluentIcons.folder)
+                    : fileIcon(item['name'] as String),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '${item['name']} · ${item['kind']} · ${bytes(item['size'])} · ${item['state']}',
+                  ),
+                ),
+                if (item['kind'] == 'file')
+                  Button(
+                    onPressed:
+                        client.can('cloud_download') &&
+                            item['state'] != 'downloading' &&
+                            item['state'] != 'cached'
+                        ? () => client.send({
+                            'type': 'download_cloud',
+                            'id': item['id'],
+                          })
+                        : null,
+                    child: const Text('下载 / 续传'),
+                  ),
+                if (item['state'] == 'cached') ...[
+                  Button(
+                    onPressed: () => client.send({
+                      'type': 'open_cached',
+                      'id': item['id'],
+                      'reveal': false,
+                    }),
+                    child: const Text('打开'),
+                  ),
+                  Button(
+                    onPressed: () => client.send({
+                      'type': 'open_cached',
+                      'id': item['id'],
+                      'reveal': true,
+                    }),
+                    child: const Text('显示位置'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        for (final task in tasks) ...[
+          const SizedBox(height: 8),
+          Text(
+            '${task['item']['name']} · ${bytes(task['done'])} / ${bytes(task['item']['size'])} · ${task['state']} · ${bytes(client.downloadSpeed[task['item']['id']] ?? 0)}/s',
+          ),
+          if (task['error'] != null) Text('${task['error']}'),
+          if (task['state'] == 'downloading')
+            Button(
+              onPressed: () => client.send({
+                'type': 'cancel_download',
+                'id': task['item']['id'],
+              }),
+              child: const Text('取消下载'),
+            ),
+        ],
+      ],
+    );
+  }
+
+  Widget cloudFiles() {
+    if (data?['auth_status'] != 'signed_in') {
+      return unavailable('尚未登录', '请在账户页面登录 Microsoft 后浏览云端文件。');
+    }
+    if (client.directory == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            client.directory == null &&
+            data?['auth_status'] == 'signed_in') {
+          client.browse();
+        }
+      });
+    }
+    final directory = client.directory;
+    final status = directory?['status'] as String? ?? 'loading';
+    final page = directory?['page'] as Map<String, dynamic>?;
+    final loading = status == 'loading';
+    final entries = client.cloudItems;
+    String statusText = switch (status) {
+      'loading' =>
+        entries.isEmpty ? '正在读取云端目录…' : '已显示 ${entries.length} 项，正在读取下一页…',
+      'partial' => '已显示 ${entries.length} 项 · 目录尚未加载完整',
+      'complete' => entries.isEmpty ? '此云端目录为空' : '当前目录 ${entries.length} 项',
+      'stale' => '缓存已过期，请刷新 · 当前显示 ${entries.length} 项',
+      'cancelled' => '查询已取消',
+      _ =>
+        entries.isEmpty
+            ? '目录加载失败'
+            : '后续页面加载失败 · 已显示 ${entries.length} 项（非完整目录）',
+    };
+    final error = directory?['error'];
+    final errorText = switch (error) {
+      'permission_denied' => '无权访问此目录。',
+      'reauthentication_required' => '授权已失效，请退出登录后重新登录。',
+      'network_unavailable' => '网络不可用，请检查连接后重试。',
+      'browse_timeout' => '请求超时，请重试。',
+      'rate_limited_retry_later' => '云端限流，请稍后重试。',
+      'item_not_found' => '目录不存在或已移动，请返回上级刷新。',
+      'unsupported_shared_or_package_item' => '暂不支持共享快捷方式或特殊项目。',
+      null => '',
+      _ => '云端请求未完成，请刷新重试。',
+    };
+    return ListView(
+      children: [
+        const InfoBar(
+          title: Text('云端浏览，尚未启用本地同步'),
+          content: Text('仅按需读取目录元数据。上传、删除、固定和释放暂不可用。'),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            Button(
+              onPressed: client.breadcrumbs.isEmpty
+                  ? null
+                  : () {
+                      final index = client.breadcrumbs.length - 2;
+                      if (index < 0) {
+                        client.browse();
+                      } else {
+                        final parent = client.breadcrumbs[index];
+                        client.browse(
+                          driveId: parent['drive_id'],
+                          itemId: parent['id'],
+                          ancestor: index,
+                        );
+                      }
+                    },
+              child: const Text('返回'),
+            ),
+            Button(
+              onPressed: () => client.browse(),
+              child: const Text('OneDrive 根目录'),
+            ),
+            for (int i = 0; i < client.breadcrumbs.length; i++)
+              Button(
+                onPressed: () => client.browse(
+                  driveId: client.breadcrumbs[i]['drive_id'],
+                  itemId: client.breadcrumbs[i]['id'],
+                  ancestor: i,
+                ),
+                child: Text(client.breadcrumbs[i]['name'] as String),
+              ),
+            Button(onPressed: client.refreshDirectory, child: const Text('刷新')),
+            if (loading)
+              Button(onPressed: client.cancelBrowse, child: const Text('取消查询')),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(statusText),
+        if (errorText.isNotEmpty)
+          Text(errorText, style: const TextStyle(color: Color(0xffa52a2a))),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: ProgressBar(),
+          ),
+        const SizedBox(height: 12),
+        for (final item in entries)
+          Card(
+            child: Row(
+              children: [
+                item['kind'] == 'folder'
+                    ? const Icon(
+                        FluentIcons.folder,
+                        color: Color(0xffb88b26),
+                        size: 28,
+                      )
+                    : item['kind'] == 'unsupported'
+                    ? const Icon(FluentIcons.link, size: 28)
+                    : fileIcon(item['name'] as String),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item['name'] as String,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        '${item['kind'] == 'folder'
+                            ? '文件夹'
+                            : item['kind'] == 'file'
+                            ? '文件'
+                            : '暂不支持的快捷方式或特殊项目'} · ${bytes(item['size'])} · ${formatModified(item['modified'])}',
+                        style: const TextStyle(fontSize: 11, color: muted),
+                      ),
+                    ],
+                  ),
+                ),
+                if (item['kind'] == 'folder')
+                  Button(
+                    onPressed: () => client.browse(
+                      driveId: page?['drive_id'],
+                      itemId: item['id'],
+                      name: item['name'],
+                    ),
+                    child: const Text('打开'),
+                  ),
+              ],
+            ),
+          ),
+        if (!loading && page?['has_more'] == true && status != 'stale')
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Button(
+              onPressed: client.busy
+                  ? null
+                  : () => client.send({
+                      'type': 'browse_next',
+                      'query_id': client.queryId,
+                    }),
+              child: Text(status == 'failed' ? '重试下一页' : '加载下一页'),
+            ),
+          ),
+      ],
+    );
+  }
+
+  String formatModified(dynamic value) {
+    final time = value is String ? DateTime.tryParse(value)?.toLocal() : null;
+    return time == null ? '修改时间未知' : time.toString().split('.').first;
   }
 }

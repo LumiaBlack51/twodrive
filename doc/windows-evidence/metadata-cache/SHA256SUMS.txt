@@ -1,0 +1,2 @@
+58d041b56ec62052bc103ce0792abf80fb1554b63e15f94049774c73761eac48  TwoDrive-0.2.10-Full-preview-win-x64.zip
+4ac8c1acc6badc161accbf3388ecce43953a7fd6179e7852b2bf6415301c0c94  TwoDrive-0.2.10-Lite-preview-win-x64.zip
