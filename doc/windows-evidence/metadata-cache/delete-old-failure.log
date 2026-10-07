@@ -1,0 +1,24 @@
+   Compiling twodrive-core v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s
+     Running unittests src\lib.rs (target\debug\deps\twodrive_core-06bbdc2c865a24c8.exe)
+
+running 1 test
+test database::cloud::tests::duplicate_delta_last_occurrence_wins_and_nonempty_folder_is_retained ... FAILED
+
+failures:
+
+---- database::cloud::tests::duplicate_delta_last_occurrence_wins_and_nonempty_folder_is_retained stdout ----
+
+thread 'database::cloud::tests::duplicate_delta_last_occurrence_wins_and_nonempty_folder_is_retained' (53024) panicked at crates\twodrive-core\src\database\cloud.rs:113:9:
+assertion `left == right` failed
+  left: [IndexedItem { id: "child", parent: None, name: "child", kind: "file", size: 10, etag: "v1", modified: None, deleted: false }, IndexedItem { id: "folder", parent: None, name: "folder", kind: "folder", size: 10, etag: "v1", modified: None, deleted: false }]
+ right: [IndexedItem { id: "child", parent: None, name: "child", kind: "file", size: 10, etag: "v1", modified: None, deleted: false }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    database::cloud::tests::duplicate_delta_last_occurrence_wins_and_nonempty_folder_is_retained
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p twodrive-core --lib`

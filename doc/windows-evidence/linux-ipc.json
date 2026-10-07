@@ -1,0 +1,16 @@
+{
+  "result": "PASS",
+  "transport": "native named pipe on Windows; Unix socket on Linux",
+  "root": "/tmp/twodrive-ipc-zcbf6v9j/state",
+  "checks": [
+    "no implicit hydration",
+    "single engine",
+    "protocol rejection",
+    "scheduler pause",
+    "dirty protection",
+    "upload acknowledgement",
+    "download byte equality",
+    "disconnect",
+    "restart retains settings"
+  ]
+}

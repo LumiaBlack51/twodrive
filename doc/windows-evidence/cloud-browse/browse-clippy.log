@@ -1,0 +1,4 @@
+    Checking twodrive-backend v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-backend)
+    Checking twodrive-fs v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-fs)
+    Checking twodrive-windows v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-windows)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.49s

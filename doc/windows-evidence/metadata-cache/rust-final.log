@@ -1,0 +1,153 @@
+cargo :    Compiling twodrive-core v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-core)
+At line:2 char:1
++ cargo test -p twodrive-windows -p twodrive-core -p twodrive-backend - ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling tw...\twodrive-core):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+   Compiling twodrive-backend v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.45s
+     Running unittests src\lib.rs (target\debug\deps\twodrive_backend-c88a1335bb039c48.exe)
+
+running 38 tests
+test onedrive::readonly::tests::invalid_file_size_is_never_an_empty_cache_candidate ... ok
+test onedrive::auth::tests::pkce_s256_and_verifier_format_remain_compatible ... ok
+test onedrive::browse::tests::rejects_untrusted_targets_and_path_injection ... ok
+test onedrive::auth::tests::callback_requires_matching_state_path_method_and_one_result ... ok
+test onedrive::tests::existing_upload_session_uses_remote_item_id ... ok
+test onedrive::tests::graph_move_resolves_the_parent_item_instead_of_sending_a_path ... ok
+test onedrive::tests::delta_accepts_negative_folder_sizes_without_corrupting_file_sizes ... ok
+test onedrive::tests::graph_paths_encode_each_segment_without_encoding_separators ... ok
+test onedrive::tests::large_files_use_graph_upload_sessions_with_valid_fragment_sizes ... ok
+test onedrive::auth::tests::authorization_code_form_preserves_pkce_and_redirect ... ok
+test onedrive::tests::mock_upload_with_matching_etag_replaces_existing_file ... ok
+test onedrive::tests::new_upload_session_uses_parent_item_id_and_encoded_file_name ... ok
+test onedrive::tests::mock_upload_with_stale_etag_fails_precondition ... ok
+test onedrive::tests::cancellation_interrupts_retry_backoff ... ok
+test onedrive::tests::simple_upload_keeps_cloud_identity_after_local_rename ... ok
+test onedrive::tests::retry_after_seconds_are_not_shortened ... ok
+test onedrive::tests::unsupported_graph_names_fail_before_network_io ... ok
+test onedrive::tests::upload_session_body_uses_graph_compatible_minimal_properties ... ok
+test onedrive::auth::tests::token_response_preserves_expiry_defaults_and_optional_refresh_token ... ok
+test onedrive::tests::upload_session_store_is_shared_for_the_same_data_path ... ok
+test onedrive::tests::upload_session_resumes_from_a_persisted_offset ... ok
+test onedrive::tests::upload_session_store_round_trips_with_private_permissions ... ok
+test onedrive::browse::tests::pagination_unicode_empty_and_unsupported_are_metadata_only ... ok
+test onedrive::tests::upload_session_status_distinguishes_expiry_from_temporary_failure ... ok
+test onedrive::browse::tests::rejected_token_refresh_is_single_flight_and_persisted ... ok
+test onedrive::tests::upload_session_sends_sequential_ranges_and_finishes_with_metadata ... ok
+test onedrive::readonly::tests::interrupted_delta_keeps_committed_generation ... ok
+test onedrive::readonly::tests::delta_pages_incremental_and_expired_cursor_rebuild ... ok
+test onedrive::readonly::tests::large_cancelled_transfer_resumes_across_worker_restart ... ok
+test onedrive::readonly::tests::range_resume_200_restart_version_change_and_no_bearer ... ok
+test onedrive::readonly::tests::cancelled_download_preserves_partial_without_request ... ok
+test onedrive::browse::tests::a_second_401_requires_login_instead_of_refresh_loop ... ok
+test onedrive::browse::tests::cancellation_stops_retry_without_a_second_request ... ok
+test onedrive::browse::tests::refresh_throttling_retains_full_cooldown_across_queries ... ok
+test onedrive::browse::tests::expired_token_refresh_is_coordinated_across_concurrent_queries ... ok
+test onedrive::browse::tests::permission_and_redirect_errors_are_sanitized ... ok
+test onedrive::readonly::tests::interrupted_http_body_resumes_from_actual_partial_length ... ok
+test onedrive::browse::tests::throttling_honors_retry_after_and_is_bounded ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s
+
+     Running tests\contract.rs (target\debug\deps\contract-9c258a46b6dbf432.exe)
+
+running 2 tests
+test legacy_conflict_classification_keeps_existing_backend_compatibility ... ok
+test default_lookup_delta_and_download_contract ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\debug\deps\twodrive_core-b25781656bd4ec40.exe)
+
+running 34 tests
+test tests::graph_login_defaults_and_legacy_configs_use_shared_app ... ok
+test tests::graph_custom_registration_survives_config_round_trip ... ok
+test tests::normalizes_cloud_paths ... ok
+test private_file::tests::secret_roundtrip_and_replacement ... ok
+test database::cloud::tests::cursor_write_failure_rolls_back_corresponding_item_changes ... ok
+test database::cloud::tests::duplicate_delta_last_occurrence_wins_and_nonempty_folder_is_retained ... ok
+test database::cloud::tests::atomic_delta_identity_moves_deletes_and_interrupted_rebuild ... ok
+test tests::local_create_is_atomic_and_can_reuse_a_pending_delete_path ... ok
+test tests::delta_metadata_does_not_undo_a_pending_local_move ... ok
+test tests::explicit_release_overrides_pin_but_prune_preserves_it ... ok
+test tests::locally_added_items_inherit_an_explicitly_pinned_ancestor ... ok
+test tests::newly_discovered_cloud_items_stay_online_only ... ok
+test tests::pending_delete_hides_item_and_blocks_delta_reappearance_until_recovered ... ok
+test tests::folder_release_cancels_nested_pins_and_downloads_but_keeps_dirty_data ... ok
+test tests::concurrent_database_initialization_is_idempotent ... ok
+test tests::moving_a_subtree_recomputes_inherited_pin_policy ... ok
+test tests::remote_metadata_does_not_replace_a_dirty_local_generation ... ok
+test tests::remote_metadata_for_same_id_does_not_mutate_a_dirty_generation ... ok
+test tests::metadata_operations_are_durable_and_moves_coalesce ... ok
+test tests::deferred_release_survives_restart_and_waits_for_latest_upload ... ok
+test tests::pin_ancestry_uses_exact_case_and_path_boundaries ... ok
+test tests::release_rechecks_state_and_preserves_open_or_pinned_cache ... ok
+test tests::renaming_failed_local_upload_requeues_without_losing_release_request ... ok
+test tests::local_permissions_survive_cloud_updates_release_and_replacement ... ok
+test tests::stale_temp_upload_is_discarded_after_replacement ... ok
+test tests::replacement_preserves_target_identity_during_inflight_upload ... ok
+test tests::legacy_pinned_states_migrate_to_a_single_explicit_root ... ok
+test tests::release_invalidates_downloads_and_wins_the_completion_race ... ok
+test tests::upload_binding_preserves_the_local_identity ... ok
+test tests::unpinning_parent_preserves_nested_explicit_pin ... ok
+test tests::upload_completion_after_a_local_move_queues_the_remote_move ... ok
+test tests::upload_claim_and_acknowledgement_reject_replaced_cache ... ok
+test tests::parent_move_retargets_jobs_and_protects_children_from_delta ... ok
+test tests::concurrent_metadata_writers_wait_instead_of_failing_snapshot_upgrade ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s
+
+     Running unittests src\lib.rs (target\debug\deps\twodrive_windows-b3b3ed03fd6aff77.exe)
+
+running 5 tests
+test engine::cloud::tests::logout_account_change_and_cancel_reject_late_publication ... ok
+test engine::browse_tests::continuation_cycles_are_rejected ... ok
+test engine::browse_tests::empty_is_confirmed_only_on_success_and_page_failure_preserves_partial ... ok
+test engine::browse_tests::late_completion_after_switch_cancel_or_logout_cannot_publish ... ok
+test engine::cloud::tests::restart_partial_stale_and_missing_cache_never_report_cached ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running unittests src\main.rs (target\debug\deps\twodrive_engine-eab641d04b9c725b.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\tray.rs (target\debug\deps\twodrive_tray-cc586a76144959be.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\engine.rs (target\debug\deps\engine-859c00a97dfb638e.exe)
+
+running 6 tests
+test framed_protocol_rejects_oversized_and_truncated_frames ... ok
+test engine_and_tray_locks_are_shared_between_editions ... ok
+test listing_does_not_hydrate_and_default_has_no_mock_data ... ok
+test login_is_isolated_from_mock_and_saved_credentials_restore_without_sync ... ok
+test pause_blocks_real_scheduler_and_upload_confirmations ... ok
+test version_idempotency_and_persistence ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+   Doc-tests twodrive_backend
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests twodrive_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests twodrive_windows
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

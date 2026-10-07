@@ -1,0 +1,8 @@
+   Compiling twodrive-core v0.2.10 (E:\software\twodrive\native-build\crates\twodrive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s
+     Running unittests src\lib.rs (target\debug\deps\twodrive_core-06bbdc2c865a24c8.exe)
+
+running 1 test
+test database::cloud::tests::duplicate_delta_last_occurrence_wins_and_nonempty_folder_is_retained ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.03s

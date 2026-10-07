@@ -1,0 +1,4 @@
+{"initial_delta": "passed", "indexed_count": 56}
+{"incremental_delta": "passed", "indexed_count": 56}
+{"file_count": 46, "small_candidate": true, "larger_candidate": false}
+{"small_download": "cached", "bytes": 1132}

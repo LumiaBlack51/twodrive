@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::{FileRecord, FileState, MetadataEntry};
 
 mod cache;
+pub mod cloud;
 mod metadata;
 mod mutations;
 mod pins;

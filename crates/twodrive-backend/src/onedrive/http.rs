@@ -3,6 +3,18 @@ use reqwest::header::RETRY_AFTER;
 use std::thread::sleep;
 use std::time::Duration;
 
+#[derive(Debug)]
+pub(super) struct HttpFailure {
+    pub status: u16,
+    pub retry_after: Duration,
+}
+impl std::fmt::Display for HttpFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HTTP {}", self.status)
+    }
+}
+impl std::error::Error for HttpFailure {}
+
 pub(super) fn retry_request<F>(build: F) -> anyhow::Result<reqwest::blocking::Response>
 where
     F: FnMut() -> RequestBuilder,
@@ -43,16 +55,27 @@ where
             {
                 let status = response.status();
                 let delay = retry_after_delay(response.headers(), attempt);
-                let body = response.text().unwrap_or_default();
-                last_error = Some(anyhow::anyhow!("HTTP {status}: {body}"));
+                last_error = Some(
+                    HttpFailure {
+                        status: status.as_u16(),
+                        retry_after: delay,
+                    }
+                    .into(),
+                );
+                if attempt == 3 || delay > Duration::from_secs(30) {
+                    break;
+                }
                 eprintln!("twodrive: Graph request attempt {attempt} failed; retrying");
                 checked_delay(delay, check)?;
                 continue;
             }
             Ok(response) => {
                 let status = response.status();
-                let body = response.text().unwrap_or_default();
-                anyhow::bail!("Graph request failed with HTTP {status}: {body}");
+                return Err(HttpFailure {
+                    status: status.as_u16(),
+                    retry_after: Duration::ZERO,
+                }
+                .into());
             }
             Err(err) => last_error = Some(err.into()),
         }
@@ -79,16 +102,27 @@ where
             {
                 let status = response.status();
                 let delay = retry_after_delay(response.headers(), attempt);
-                let body = response.text().unwrap_or_default();
-                last_error = Some(anyhow::anyhow!("HTTP {status}: {body}"));
+                last_error = Some(
+                    HttpFailure {
+                        status: status.as_u16(),
+                        retry_after: delay,
+                    }
+                    .into(),
+                );
+                if attempt == 3 || delay > Duration::from_secs(30) {
+                    break;
+                }
                 eprintln!("twodrive: Graph request attempt {attempt} failed; retrying");
                 sleep(delay);
                 continue;
             }
             Ok(response) => {
                 let status = response.status();
-                let body = response.text().unwrap_or_default();
-                anyhow::bail!("Graph request failed with HTTP {status}: {body}");
+                return Err(HttpFailure {
+                    status: status.as_u16(),
+                    retry_after: Duration::ZERO,
+                }
+                .into());
             }
             Err(err) => last_error = Some(err),
         }
@@ -108,6 +142,12 @@ pub(super) fn retry_after_delay(headers: &reqwest::header::HeaderMap, attempt: u
 }
 
 pub(super) fn parse_retry_after_seconds(value: &str) -> Option<Duration> {
-    let seconds = value.trim().parse::<u64>().ok()?;
-    Some(Duration::from_secs(seconds.clamp(1, 30)))
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let date =
+        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc2822).ok()?;
+    Some(Duration::from_secs(
+        (date.unix_timestamp() - twodrive_core::now_unix()).max(0) as u64,
+    ))
 }
