@@ -132,11 +132,13 @@ def resolve_pending_paths():
     return False
 
 
-def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local, has_pending_release=False):
+def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local, has_pending_release=False, has_pending_pin=False):
     if directory_state in {"conflict", "error"} or has_error:
         return "error"
     if has_syncing:
         return "uploading_release_pending" if has_pending_release else "uploading"
+    if has_pending_pin:
+        return "pin_pending"
     if directory_state == "pinned":
         return "pinned"
     if has_local:
@@ -146,7 +148,7 @@ def aggregate_directory_flags(directory_state, has_error, has_syncing, has_local
 
 def directory_state_for(conn, path, state):
     prefix = path.rstrip("/") + "/"
-    has_error, has_syncing, has_local, has_pending_release = conn.execute(
+    has_error, has_syncing, has_local, has_pending_release, has_pending_pin = conn.execute(
         """
         SELECT
             EXISTS(
@@ -157,7 +159,8 @@ def directory_state_for(conn, path, state):
             EXISTS(
                 SELECT 1 FROM files
                 WHERE is_dir = 0 AND path >= ? AND path < ?
-                  AND state IN ('hydrating', 'writing', 'dirty', 'uploading')
+                  AND (state IN ('writing', 'dirty', 'uploading')
+                       OR (state = 'hydrating' AND pin_explicit = 0 AND pin_origin_remote_id IS NULL))
             ),
             EXISTS(
                 SELECT 1 FROM files
@@ -171,20 +174,33 @@ def directory_state_for(conn, path, state):
                 SELECT 1 FROM files
                 WHERE is_dir = 0 AND path >= ? AND path < ?
                   AND release_pending = 1 AND state IN ('writing', 'dirty', 'uploading')
+            ),
+            EXISTS(
+                SELECT 1 FROM files
+                WHERE is_dir = 0 AND path >= ? AND path < ?
+                  AND (pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL OR state = 'pinned')
+                  AND coalesce(cache_path, '') = ''
+                  AND state IN ('online_only', 'hydrating', 'pinned')
             )
         """,
-        (prefix, path.rstrip("/") + "0") * 4,
+        (prefix, path.rstrip("/") + "0") * 5,
     ).fetchone()
-    return aggregate_directory_flags(state, has_error, has_syncing, has_local, has_pending_release)
+    return aggregate_directory_flags(state, has_error, has_syncing, has_local, has_pending_release, has_pending_pin)
 
 
-def file_display_state(state, release_pending):
+def file_display_state(state, release_pending, effective_pinned=False, cache_path=None):
     if release_pending and state in {"writing", "dirty", "uploading"}:
         return "uploading_release_pending"
+    # begin_hydration can already set state=pinned before it publishes cache.
+    # Policy alone is not proof that the content is available offline.
+    if (effective_pinned or state == "pinned") and not cache_path and state in {"online_only", "hydrating", "pinned"}:
+        return "pin_pending"
     return state
 
 
 def emblems_for_state(state):
+    if state == "pin_pending":
+        return ["emblem-twodrive-cloud", "emblem-twodrive-pinned"]
     if state == "uploading_release_pending":
         return ["emblem-twodrive-cloud", "emblem-twodrive-syncing"]
     emblem = {
@@ -202,19 +218,44 @@ def emblems_for_state(state):
     return [emblem] if emblem else []
 
 
-def run_local(*args):
+def run_local_async(args, callback):
     command = [twodrive_bin(), *args]
     try:
-        return subprocess.run(
+        process = Gio.Subprocess.new(
             command,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=3600,
-            check=False,
+            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE,
         )
     except Exception as exc:
-        return subprocess.CompletedProcess(command, 1, f"{type(exc).__name__}: {exc}")
+        GLib.idle_add(callback, subprocess.CompletedProcess(command, 1, f"{type(exc).__name__}: {exc}"))
+        return
+
+    timed_out = False
+
+    def timeout():
+        nonlocal timer, timed_out
+        timer = 0
+        timed_out = True
+        process.force_exit()
+        return False
+
+    timer = GLib.timeout_add_seconds(3600, timeout)
+
+    def finished(source, result):
+        nonlocal timer
+        if timer:
+            GLib.source_remove(timer)
+            timer = 0
+        try:
+            _ok, output, _error = source.communicate_utf8_finish(result)
+            if timed_out:
+                output += "\nCommand timed out after 3600 seconds"
+            rc = source.get_exit_status() if source.get_if_exited() and not timed_out else 1
+            completed = subprocess.CompletedProcess(command, rc, output)
+        except Exception as exc:
+            completed = subprocess.CompletedProcess(command, 1, f"{type(exc).__name__}: {exc}")
+        callback(completed)
+
+    process.communicate_utf8_async(None, None, finished)
 
 
 def selected_paths(files):
@@ -288,12 +329,12 @@ def status_for(path):
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.2)
         row = conn.execute(
-            "select state, coalesce(cache_path, ''), is_dir, size, release_pending from files where path = ?",
+            "select state, coalesce(cache_path, ''), is_dir, size, release_pending, pin_explicit, pin_origin_remote_id from files where path = ?",
             (path,),
         ).fetchone()
         if row:
             data = {
-                "state": file_display_state(row[0], row[4]),
+                "state": file_display_state(row[0], row[4], bool(row[5]) or row[6] is not None, row[1]),
                 "cache_path": row[1],
                 "is_dir": str(bool(row[2])).lower(),
                 "size": str(row[3]),
@@ -320,12 +361,12 @@ def db_states_for(paths):
             chunk = paths[index : index + 200]
             placeholders = ",".join("?" for _path in chunk)
             rows = conn.execute(
-                f"select path, state, is_dir, release_pending from files where path in ({placeholders})",
+                f"select path, state, is_dir, release_pending, pin_explicit, pin_origin_remote_id, cache_path from files where path in ({placeholders})",
                 chunk,
             ).fetchall()
-            for path, state, is_dir, release_pending in rows:
+            for path, state, is_dir, release_pending, pin_explicit, pin_origin, cache_path in rows:
                 states[path] = (directory_state_for(conn, path, state) if is_dir
-                                else file_display_state(state, release_pending))
+                                else file_display_state(state, release_pending, bool(pin_explicit) or pin_origin is not None, cache_path))
         conn.close()
     except Exception as exc:
         log(f"state poll failed: {exc}")
@@ -443,6 +484,11 @@ def refresh_tracked_states(db_states):
                 continue
 
             transient = TRANSIENT_STATES.get(path)
+            # Once persisted work changes state, it takes over from the immediate
+            # menu feedback, even if a multi-item command is still running.
+            if transient and transient[1] == "pin_pending" and db_states.get(path) not in {None, "online_only", "unknown"}:
+                TRANSIENT_STATES.pop(path, None)
+                transient = None
             if transient and now - transient[0] < TRANSIENT_TTL:
                 state = transient[1]
             else:
@@ -509,43 +555,39 @@ def action_title(action):
 
 
 def run_action(action, paths, file_infos):
-    def worker():
-        log(f"action={action} paths={paths}")
-        if action == "status":
-            outputs = []
-            for path in paths:
-                result = run_local("status-path", path)
-                log(f"status rc={result.returncode} path={path} output={result.stdout.strip()[:500]}")
-                outputs.append(result.stdout.strip() or f"{path}: no status output")
-            notify("TwoDrive status", "\n\n".join(outputs[:20]))
-            schedule_refreshes(file_infos)
-            return
+    log(f"action={action} paths={paths}")
+    if action == "pin":
+        with STATE_LOCK:
+            pending = [path for path in paths if STATUS_CACHE.get(path, (0, {}))[1].get("state", "unknown")
+                       in {"unknown", "online_only", "hydrating", "pin_pending"}]
+        set_transient(pending, "pin_pending")
+        # Apply the accepted request before starting any CLI/network work.
+        refresh_files(file_infos)
+    elif action in {"release", "unpin"}:
+        clear_transient(paths)
 
-        schedule_refreshes(file_infos)
+    schedule_refreshes(file_infos)
 
-        if action == "sync":
-            result = run_local("sync")
+    if action == "sync":
+        def sync_finished(result):
             log(f"sync rc={result.returncode} output={result.stdout.strip()[:500]}")
             clear_transient(paths)
             notify("TwoDrive sync", result.stdout.strip() or "sync finished")
             schedule_refreshes(file_infos)
+
+        run_local_async(["sync"], sync_finished)
+        return
+
+    outputs = []
+    failures = 0
+    released_zero = 0
+
+    def finished():
+        if action == "status":
+            notify("TwoDrive status", "\n\n".join(outputs[:20]))
+            schedule_refreshes(file_infos)
             return
 
-        outputs = []
-        failures = 0
-        released_zero = 0
-        for path in paths:
-            result = run_local(action, path)
-            output = result.stdout.strip() or f"{action} finished for {path}"
-            log(f"{action} rc={result.returncode} path={path} output={output[:500]}")
-            if result.returncode != 0:
-                failures += 1
-                output = f"{path}: command failed\n{output}"
-            elif action == "release" and "released 0" in output and "queued 0" in output:
-                released_zero += 1
-            outputs.append(output)
-
-        clear_transient(paths)
         title = f"TwoDrive {action_title(action)}"
         summary = f"{action_title(action)} finished for {len(paths)} item(s)"
         if failures:
@@ -560,7 +602,31 @@ def run_action(action, paths, file_infos):
         notify(title, body)
         schedule_refreshes(file_infos)
 
-    threading.Thread(target=worker, daemon=True).start()
+    def run_next(index):
+        if index == len(paths):
+            finished()
+            return
+        path = paths[index]
+
+        def command_finished(result):
+            nonlocal failures, released_zero
+            output = result.stdout.strip() or (f"{path}: no status output" if action == "status"
+                                               else f"{action} finished for {path}")
+            log(f"{action} rc={result.returncode} path={path} output={output[:500]}")
+            if action != "status":
+                if result.returncode != 0:
+                    failures += 1
+                    output = f"{path}: command failed\n{output}"
+                elif action == "release" and "released 0" in output and "queued 0" in output:
+                    released_zero += 1
+                clear_transient([path])
+                schedule_refreshes(file_infos[index:index + 1])
+            outputs.append(output)
+            run_next(index + 1)
+
+        run_local_async(["status-path" if action == "status" else action, path], command_finished)
+
+    run_next(0)
 
 
 class TwoDriveExtension(GObject.GObject, Nautilus.MenuProvider, Nautilus.InfoProvider):

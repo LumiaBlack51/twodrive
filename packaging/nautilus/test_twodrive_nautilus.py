@@ -250,6 +250,161 @@ class ReleaseEmblemTests(unittest.TestCase):
         self.assertEqual(emblems, ["emblem-twodrive-cloud", "emblem-twodrive-syncing"])
 
 
+class PinEmblemTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.db_path = Path(self.directory.name) / "status.sqlite3"
+        self.conn = sqlite3.connect(self.db_path)
+        self.addCleanup(self.conn.close)
+        self.conn.execute("""create table files (
+            path text unique, is_dir integer, state text, cache_path text,
+            size integer default 1, release_pending integer default 0,
+            pin_explicit integer default 0, pin_origin_remote_id text
+        )""")
+        self.conn.executemany(
+            "insert into files (path, is_dir, state) values (?, ?, ?)",
+            [("/project", 1, "online_only"), ("/project/file", 0, "online_only"),
+             ("/project/plain", 0, "hydrating"), ("/project2/sibling", 0, "online_only")],
+        )
+        self.conn.commit()
+        self.addCleanup(patch.stopall)
+        patch.object(EXTENSION.os.path, "expanduser", return_value=os.fspath(self.db_path)).start()
+        for mapping in (EXTENSION.STATUS_CACHE, EXTENSION.TRANSIENT_STATES, EXTENSION.TRACKED_FILES):
+            patch.dict(mapping, {}, clear=True).start()
+        patch.object(EXTENSION, "log").start()
+
+    def test_persisted_pin_shows_cloud_and_pin_until_cache_publication(self):
+        path = "/project/file"
+        for state, explicit, origin in [("hydrating", 1, None), ("pinned", 1, None),
+                                         ("online_only", 1, None), ("pinned", 0, "parent-id")]:
+            with self.subTest(state=state, explicit=explicit):
+                self.conn.execute("""update files set state=?, pin_explicit=?,
+                    pin_origin_remote_id=?, cache_path=NULL where path=?""",
+                    (state, explicit, origin, path))
+                self.conn.commit()
+                EXTENSION.STATUS_CACHE.clear()
+                for display in (EXTENSION.db_states_for([path])[path], EXTENSION.status_for(path)["state"]):
+                    self.assertEqual(EXTENSION.emblems_for_state(display),
+                                     ["emblem-twodrive-cloud", "emblem-twodrive-pinned"])
+        self.conn.execute("update files set state='pinned', cache_path='/cache/file' where path=?", (path,))
+        self.conn.commit()
+        self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.db_states_for([path])[path]),
+                         ["emblem-twodrive-pinned"])
+        self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.db_states_for(["/project/plain"])["/project/plain"]),
+                         ["emblem-twodrive-syncing"])
+        for state, release_pending, expected in [("error", 0, ["emblem-twodrive-error"]),
+                                                  ("conflict", 0, ["emblem-twodrive-error"]),
+                                                  ("uploading", 0, ["emblem-twodrive-syncing"]),
+                                                  ("dirty", 1, ["emblem-twodrive-cloud", "emblem-twodrive-syncing"])]:
+            self.conn.execute("update files set state=?, release_pending=? where path=?", (state, release_pending, path))
+            self.conn.commit()
+            self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.db_states_for([path])[path]), expected)
+
+    def test_folder_waits_for_pinned_children_and_keeps_upload_error_priority(self):
+        self.conn.execute("delete from files where path='/project/plain'")
+        self.conn.execute("update files set state='pinned', pin_explicit=1 where path in ('/project', '/project/file')")
+        self.conn.commit()
+        self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.db_states_for(["/project"])["/project"]),
+                         ["emblem-twodrive-cloud", "emblem-twodrive-pinned"])
+        self.assertEqual(EXTENSION.db_states_for(["/project2"]), {})
+        self.assertEqual(EXTENSION.directory_state_for(self.conn, "/project2", "online_only"), "online_only")
+        self.conn.execute("update files set cache_path='/cache/file' where path='/project/file'")
+        self.conn.commit()
+        self.assertEqual(EXTENSION.db_states_for(["/project"])["/project"], "pinned")
+        for state, expected in [("uploading", "uploading"), ("error", "error")]:
+            self.conn.execute("update files set state=? where path='/project/file'", (state,))
+            self.conn.commit()
+            self.assertEqual(EXTENSION.db_states_for(["/project"])["/project"], expected)
+
+    def test_menu_pin_feedback_is_immediate_and_completion_comes_from_database(self):
+        extension = EXTENSION.TwoDriveExtension()
+        emblems, callbacks = [], []
+        file_info = types.SimpleNamespace(path="/project/file", add_emblem=emblems.append)
+        file_info.invalidate_extension_info = lambda: extension.update_file_info(file_info)
+        patch.object(EXTENSION, "cloud_path", side_effect=lambda file: file.path).start()
+        patch.object(EXTENSION, "start_refresh_timer").start()
+        patch.object(EXTENSION, "queue_state_poll").start()
+        patch.object(EXTENSION, "schedule_refreshes").start()
+        patch.object(EXTENSION, "notify").start()
+        patch.object(EXTENSION.threading, "Thread", side_effect=AssertionError("embedded Python worker")).start()
+        patch.object(EXTENSION, "run_local_async", create=True,
+                     side_effect=lambda args, cb: callbacks.append((args, cb))).start()
+        EXTENSION.STATUS_CACHE[file_info.path] = (EXTENSION.time.monotonic(), {"state": "online_only"})
+        extension.activate(None, "pin", [file_info.path], [file_info])
+        self.assertEqual(emblems, ["emblem-twodrive-cloud", "emblem-twodrive-pinned"])
+        self.assertEqual(callbacks[0][0], ["pin", file_info.path])
+        # The command is still running; authoritative publication must remove
+        # the temporary waiting badge before its completion callback arrives.
+        self.conn.execute("""update files set state='pinned', pin_explicit=1,
+            cache_path='/cache/file' where path=?""", (file_info.path,))
+        self.conn.commit()
+        emblems.clear()
+        EXTENSION.refresh_tracked_states(EXTENSION.db_states_for([file_info.path]))
+        self.assertEqual(emblems, ["emblem-twodrive-pinned"])
+        callbacks.pop()[1](EXTENSION.subprocess.CompletedProcess([], 0, "pinned"))
+        self.assertNotIn(file_info.path, EXTENSION.TRANSIENT_STATES)
+
+    def test_failed_pin_clears_feedback_and_reloads_cloud_state(self):
+        callbacks = []
+        patch.object(EXTENSION, "run_local_async", create=True,
+                     side_effect=lambda args, cb: callbacks.append(cb)).start()
+        patch.object(EXTENSION.threading, "Thread", side_effect=AssertionError("embedded Python worker")).start()
+        patch.object(EXTENSION, "notify").start()
+        patch.object(EXTENSION, "schedule_refreshes").start()
+        file_info = types.SimpleNamespace(invalidate_extension_info=lambda: None)
+        EXTENSION.run_action("pin", ["/project/file"], [file_info])
+        self.assertIn("/project/file", EXTENSION.TRANSIENT_STATES)
+        callbacks.pop()(EXTENSION.subprocess.CompletedProcess([], 1, "failed"))
+        self.assertNotIn("/project/file", EXTENSION.TRANSIENT_STATES)
+        self.assertEqual(EXTENSION.db_states_for(["/project/file"])["/project/file"], "online_only")
+
+
+class ActionSequenceTests(unittest.TestCase):
+    def test_multi_selection_runs_in_order_and_clears_each_completed_request(self):
+        callbacks, notifications = [], []
+        paths = ["/first", "/second"]
+        files = [types.SimpleNamespace(invalidate_extension_info=lambda: None) for _path in paths]
+        with patch.dict(EXTENSION.TRANSIENT_STATES, {}, clear=True), \
+             patch.dict(EXTENSION.STATUS_CACHE, {}, clear=True), \
+             patch.object(EXTENSION, "log"), \
+             patch.object(EXTENSION, "schedule_refreshes"), \
+             patch.object(EXTENSION, "notify", side_effect=lambda *args: notifications.append(args)), \
+             patch.object(EXTENSION, "run_local_async", side_effect=lambda args, cb: callbacks.append((args, cb))):
+            EXTENSION.run_action("pin", paths, files)
+            self.assertEqual([args for args, _cb in callbacks], [["pin", "/first"]])
+            callbacks.pop()[1](EXTENSION.subprocess.CompletedProcess([], 1, "download failed"))
+            self.assertNotIn("/first", EXTENSION.TRANSIENT_STATES)
+            self.assertIn("/second", EXTENSION.TRANSIENT_STATES)
+            self.assertEqual(callbacks[0][0], ["pin", "/second"])
+            callbacks.pop()[1](EXTENSION.subprocess.CompletedProcess([], 0, "pinned"))
+            self.assertEqual(EXTENSION.TRANSIENT_STATES, {})
+            self.assertEqual(len(notifications), 1)
+            self.assertIn("2 item(s); 1 failed", notifications[0][1])
+
+    def test_other_menu_commands_preserve_arguments_and_notifications(self):
+        for action, args, output, title in [
+            ("sync", ["sync"], "synced", "TwoDrive sync"),
+            ("status", ["status-path", "/file"], "state=online_only", "TwoDrive status"),
+            ("unpin", ["unpin", "/file"], "unpinned", "TwoDrive Cancel always keep on this device"),
+            ("release", ["release", "/file"], "released 0; queued 0", "TwoDrive Release space"),
+        ]:
+            with self.subTest(action=action), \
+                 patch.dict(EXTENSION.TRANSIENT_STATES, {}, clear=True), \
+                 patch.dict(EXTENSION.STATUS_CACHE, {}, clear=True), \
+                 patch.object(EXTENSION, "log"), \
+                 patch.object(EXTENSION, "schedule_refreshes"), \
+                 patch.object(EXTENSION, "notify") as notify, \
+                 patch.object(EXTENSION, "run_local_async") as run:
+                EXTENSION.run_action(action, ["/file"], [])
+                self.assertEqual(run.call_args.args[0], args)
+                run.call_args.args[1](EXTENSION.subprocess.CompletedProcess([], 0, output))
+                self.assertEqual(notify.call_args.args[0], title)
+                self.assertIn(output, notify.call_args.args[1])
+                if action == "release":
+                    self.assertIn("No local cache was removed", notify.call_args.args[1])
+
+
 class CopyPathTests(unittest.TestCase):
     def test_copy_path_outside_mount_preserves_exact_names(self):
         paths = ["/tmp/a folder/report.txt", '/tmp/a"b$`c']
@@ -275,7 +430,7 @@ class DirectoryStateTests(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
         self.conn.execute(
-            "create table files (path text unique, is_dir integer, state text, cache_path text, release_pending integer default 0)"
+            "create table files (path text unique, is_dir integer, state text, cache_path text, release_pending integer default 0, pin_explicit integer default 0, pin_origin_remote_id text)"
         )
 
     def tearDown(self):

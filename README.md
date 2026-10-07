@@ -56,6 +56,8 @@ See file status at a glance and manage cloud files directly in Nautilus.
 
 <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="22" height="22" alt="Cloud"> + <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-syncing.svg" width="22" height="22" alt="Syncing"> **Release pending:** a release was requested while changes were still being written or uploaded. Local data stays until upload succeeds and open handles close.
 
+<img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-cloud.svg" width="22" height="22" alt="Cloud"> + <img src="packaging/icons/hicolor/scalable/emblems/emblem-twodrive-pinned.svg" width="22" height="22" alt="Pinned"> **Keep pending:** Always keep was selected and the content is still waiting to download or downloading. Once the cache is published, only the pin remains.
+
 Folder emblems summarize descendants; they do not prove that every file is cached. Newly discovered cloud files remain online-only, including beneath an already pinned folder. [Pinning and release semantics →](doc/usage.md#keep-or-release-content)
 
 </details>

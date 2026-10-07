@@ -1,3 +1,12 @@
+twodrive (0.2.11-2) unstable; urgency=medium
+
+  * Show cloud and pin emblems immediately after selecting Always keep.
+  * Keep both emblems until pinned file content is cached, then show only pin.
+  * Run Nautilus menu commands through native asynchronous Gio subprocesses.
+  * Add pin-state, failure and multi-selection action regressions.
+
+ -- TwoDrive Developers <noreply@localhost>  Wed, 07 Oct 2026 20:00:00 +0800
+
 twodrive (0.2.11-1) unstable; urgency=medium
 
   * Diagnose missing upload sources, skipped symlinks and XDG directory mismatches.

@@ -30,6 +30,8 @@ twodrive release /Documents/report.pdf
 
 Pinning a folder applies to existing descendants. Locally created descendants can inherit that policy; **newly discovered cloud files remain online-only**, even beneath an already pinned folder. Folder emblems summarize descendants, not guaranteed offline availability of every child. Confirm downloads before going offline; `twodrive status-path /Documents/report.pdf` reports effective pin state.
 
+Selecting **Always keep** for an online-only file immediately shows **cloud + pin** in Nautilus. The two emblems remain while the pinned content waits for download or is downloading; after the complete cache is published, only **pin** remains. Folder emblems also reflect pinned descendants waiting for download; errors and pending uploads retain their existing indicators.
+
 **During download:** releasing a file cancels the download and removes partial data. A folder release includes descendants. Old handles cannot restart the transfer; an explicit new open can download again. A blocked network request must return or time out before cancellation finishes.
 
 **During writing/upload:** the release request is persisted and shown as cloud + syncing. Cache is removed after successful upload and closure of open handles. Failed/conflicting uploads retain data. Automatic pruning still protects pinned content; Always Keep cancels a pending release.
