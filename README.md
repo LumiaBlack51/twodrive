@@ -94,3 +94,17 @@ The desktop helpers are still limited: **Settings can change upload sources; oth
 Contributions, reproducible bug reports, and documentation improvements are welcome. Start with [CONTRIBUTING](CONTRIBUTING.md) for the Rust workspace, test commands, and an isolated mock backend that does not touch your real OneDrive. [Release history](CHANGELOG.md) and [engineering notes](doc/README.md#engineering-notes) live outside this overview.
 
 [MIT license](LICENSE). An independent project, not an official Microsoft client.
+
+## Experimental device peer
+
+The `dev` branch includes the standalone Windows/Linux `twodrive-peer` from `codex/peer-control`
+control process alongside the refactored provider architecture. It uses separate
+local state and does not replace the installed mount or daemon. See the
+[implementation and security boundary](doc/peer-implementation.md) and
+[first two-machine test guide](doc/peer-quickstart.zh-CN.md). Native Windows
+artifacts are built by the Peer native builds workflow. This stage implements
+authenticated control messages and signed updates, not file backup transfer.
+
+## Combined Windows, WebDAV and QUIC dev preview
+
+The dev branch also includes the Windows Full/Lite preview from PR #9 and encrypted WebDAV/QUIC directory sharing from PR #8. The combined Windows packages contain all three tools with independent state. See the [integration and setup guide](doc/dev-integration.md) for the supported flows and current UI boundaries. These builds do not install or replace stable TwoDrive.

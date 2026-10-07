@@ -2,7 +2,7 @@
 
 [English](README.md) · [架构设计](../../doc/dev-webdav-peer-design.md) · [故障记录](../../doc/incidents.md)
 
-这是 `dev` 分支上的独立实验入口 `twodrive-dev`。稳定 TwoDrive 的源码、CLI、OneDrive 服务、配置、数据库和安装包保持原样。这里使用已有的文件系统引擎，但有独立 Cargo workspace、锁文件、设备状态和挂载缓存。
+这是 `dev` 分支上的独立实验入口 `twodrive-dev`。正在使用的稳定 TwoDrive、配置、数据库和原 main 工作目录保持原样。dev 现已整合 Windows 预览及 OneDrive peer-control 源码，见[组合指南](../../doc/dev-integration.md)。这里使用已有的文件系统引擎，但有独立 Cargo workspace、锁文件、设备状态和挂载缓存。
 
 已实现：连接现有 HTTPS WebDAV；将显式目录共享；一次邀请完成设备配对；QUIC/TLS 加密、可靠 UDP 直连、NAT 打洞和加密中继回退；设备撤销；本机 WebDAV 网关；可选 Linux FUSE 挂载。没有 VPN、虚拟网卡或路由配置。它不是 Syncthing 式的双向目录镜像，暂时没有设置 GUI。
 

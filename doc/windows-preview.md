@@ -5,7 +5,7 @@ Full and Lite contain byte-identical Rust engines and native tray hosts.
 Full additionally contains Flutter Fluent UI. Lite contains no Flutter/Dart runtime.
 
 Run Start.ps1 with an explicit absolute disposable -StateDirectory. Add -Mock only
-for synthetic tests. Omit -Mock for the empty, unconfigured production shell:
+for synthetic tests. Omit -Mock for the signed-out shell, then sign in for read-only OneDrive browsing/cache:
 there are no sample accounts/files in that mode. Modes cannot share a state root.
 Do not point at an existing Linux data directory, real sync root or account.
 
@@ -25,8 +25,8 @@ pinned/open-file protections, extension-only file glyphs, recent confirmations,
 disconnected state. A pause drains already-started work and starts no new work.
 The management list is bounded to 200 rows; transfer history to 32 entries.
 
-Not implemented/enabled: CFAPI registration and callbacks, browser sign-in,
-account switching, production Graph worker binding, peer integration, native
+Not implemented/enabled: CFAPI registration and callbacks, simultaneous multi-account
+management, peer GUI integration, cloud writes, native
 sync-root file operations, pin controls, bandwidth limits, persistent operation
 journal, autostart, installer/updater/signing, aggregate batch throughput/ETA.
 No FUSE or WSL process is used by the Windows binaries.
@@ -49,7 +49,7 @@ registration is performed by these scripts.
 ## 真实 OneDrive 只读浏览
 
 Full 的文件页自动读取云端根目录，支持子目录、返回、面包屑、刷新和逐页加载。
-界面明确显示“云端浏览，尚未启用本地同步”；真实模式不提供上传、删除、固定、释放或内容下载。
+界面明确显示“云端浏览，尚未启用本地同步”；真实模式不提供上传、删除、固定或双向同步；显式只读内容下载见下文缓存里程碑。
 共享快捷方式、package/未知条目会标为暂不支持，不作为空文件夹处理。
 
 Lite 可使用同一引擎 IPC 查询（先按 Start.ps1 启动引擎）：
@@ -102,3 +102,7 @@ explicit download/resume command after restart; partial bytes are never a valid 
 One download runs at a time. Old version cache files are retained but not presented as
 valid for a changed item; automatic cache garbage collection is not implemented.
 CLI output contains private metadata: do not attach raw output to issue reports or Git.
+
+## Combined dev packages (2026-10-07)
+
+Build with `-IncludeDevTools` to bundle `twodrive-peer.exe` and `twodrive-dev.exe` in Full/Lite alongside the unchanged GUI engine. Follow [the combined guide](dev-integration.md); each component needs its own state root and trust/pairing flow. The UI still controls the OneDrive engine. WebDAV/QUIC and cloud peer control are separate CLI tools in this integration.

@@ -38,3 +38,12 @@ __pycache__/
 /apps/full/windows/flutter/ephemeral/
 /apps/full/*.log
 /dist-windows/
+
+# Peer local state / offline publisher secrets
+identity.dat
+release-key.dat
+selected-roots.json
+trusted.json
+
+# Cargo build settings are not runtime account configuration.
+!/.cargo/config.toml

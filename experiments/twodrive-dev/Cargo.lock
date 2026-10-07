@@ -3753,6 +3753,7 @@ version = "0.2.11"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "percent-encoding",
  "rand 0.8.8",
  "reqwest 0.12.28",
  "serde",
@@ -3772,8 +3773,10 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "toml",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

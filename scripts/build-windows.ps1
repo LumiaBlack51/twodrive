@@ -1,7 +1,8 @@
 param(
     [ValidateSet("Both", "Full", "Lite")][string]$Edition = "Both",
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [switch]$Offline
+    [switch]$Offline,
+    [switch]$IncludeDevTools
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
@@ -14,6 +15,16 @@ cargo test -p twodrive-windows --locked
 Check-Exit "Rust native tests"
 $version = (& target\release\twodrive-engine.exe --version).Trim()
 Check-Exit "version"
+if ($IncludeDevTools) {
+    cargo build -p twodrive-peer --bin twodrive-peer --release --locked
+    Check-Exit "Peer release"
+    cargo build --manifest-path experiments/twodrive-dev/Cargo.toml --release --locked
+    Check-Exit "WebDAV/QUIC release"
+    & target\release\twodrive-peer.exe --version
+    Check-Exit "Peer executable"
+    & experiments\twodrive-dev\target\release\twodrive-dev.exe --version
+    Check-Exit "WebDAV/QUIC executable"
+}
 if ($Edition -ne "Lite") {
     Push-Location apps\full
     try {
@@ -38,6 +49,11 @@ foreach ($name in $editions) {
     Copy-Item LICENSE -Destination $package
     Copy-Item doc\windows-preview.md -Destination (Join-Path $package "README.md")
     Copy-Item scripts\start-windows-preview.ps1 -Destination (Join-Path $package "Start.ps1")
+    if ($IncludeDevTools) {
+        Copy-Item target\release\twodrive-peer.exe -Destination $package
+        Copy-Item experiments\twodrive-dev\target\release\twodrive-dev.exe -Destination $package
+        Copy-Item doc\dev-integration.md -Destination (Join-Path $package "DEV-TOOLS.md")
+    }
     Set-Content -LiteralPath (Join-Path $package "edition.txt") -Value $name -Encoding ascii
     if ($name -eq "Full") {
         Copy-Item apps\full\build\windows\x64\runner\Release -Destination (Join-Path $package "ui") -Recurse
@@ -49,7 +65,7 @@ foreach ($name in $editions) {
         @{ path=$_.FullName.Substring($package.TrimEnd('\').Length + 1); bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower() }
     })
     @{ version=$version; edition=$name; channel="preview"; architecture="x64"; signed=$false;
-       native_sync_accepted=$false; ipc_version=1; files=$files } |
+       native_sync_accepted=$false; ipc_version=1; includes_dev_tools=[bool]$IncludeDevTools; files=$files } |
        ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $package "manifest.json") -Encoding utf8
     Compress-Archive -LiteralPath $package -DestinationPath "$package.zip"
 }

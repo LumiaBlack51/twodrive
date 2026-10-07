@@ -1,6 +1,6 @@
 # dev 分支：WebDAV 与加密设备共享设计
 
-日期：2026-10-06。实现位于 `experiments/twodrive-dev`，独立 Cargo workspace、锁文件、状态目录和二进制 `twodrive-dev`。稳定 `twodrive` CLI、daemon、OneDrive 数据库、服务、打包入口不变，不自动安装或启动。
+日期：2026-10-06。实现位于 `experiments/twodrive-dev`，独立 Cargo workspace、锁文件、状态目录和二进制 `twodrive-dev`。不自动安装或启动，不改动现用 OneDrive 配置、数据库或服务。2026-10-07 在 dev 内合并 Windows PR #9 和 peer-control，共享核心的移植/Graph 扩展保留于开发分支；详见[组合指南](dev-integration.md)。
 
 Linux 通过类型重导出复用已有存储与 FUSE 接口；Windows 使用实验模块自己的元数据与存储接口，不引入稳定核心库的 Unix 权限、OAuth 或数据库实现。元数据构造兼容性由 Linux 回归测试核对，Windows WebDAV/设备共享由原生 CI 编译、协议测试与双进程冒烟验证；这不代表稳定 TwoDrive 已移植到 Windows。
 

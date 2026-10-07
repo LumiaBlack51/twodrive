@@ -34,11 +34,16 @@ def main():
     parser.add_argument("--network", choices=["lan", "public", "relay-only"], default="lan")
     parser.add_argument("--mount", action="store_true")
     parser.add_argument("--read-only", action="store_true")
+    parser.add_argument("--keep-state", action="store_true", help="retain disposable test state/logs for diagnostics")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     network = ["--no-relay"] if args.network == "lan" else (["--relay-only"] if args.network == "relay-only" else [])
-    with tempfile.TemporaryDirectory(prefix="twodrive-dev-smoke-") as directory:
+    from contextlib import nullcontext
+    temporary = nullcontext(tempfile.mkdtemp(prefix="twodrive-dev-smoke-")) if args.keep_state else tempfile.TemporaryDirectory(prefix="twodrive-dev-smoke-")
+    with temporary as directory:
         sandbox = Path(directory)
+        if args.keep_state:
+            print(f"Disposable test state: {sandbox}", flush=True)
         root = sandbox / "share"
         root.mkdir()
         mounted = sandbox / "mount"
@@ -112,12 +117,17 @@ def main():
                     file.write(b"isolated FUSE save")
                     file.flush()
                     os.fsync(file.fileno())
-                wait_for(lambda: (root / "new-folder/written.txt").read_bytes() == b"isolated FUSE save", processes)
+                # A child saved before its parent's cloud acknowledgement is
+                # deferred to the engine's 60-second recovery scan. Include that
+                # existing retry interval in this integration test's deadline.
+                upload_started = time.monotonic()
+                wait_for(lambda: (root / "new-folder/written.txt").read_bytes() == b"isolated FUSE save", processes, seconds=90)
+                print(f"Mount save confirmed after {time.monotonic() - upload_started:.1f}s", flush=True)
                 folder.rename(mounted / "renamed-folder")
-                wait_for(lambda: (root / "renamed-folder/written.txt").read_bytes() == b"isolated FUSE save", processes)
+                wait_for(lambda: (root / "renamed-folder/written.txt").read_bytes() == b"isolated FUSE save", processes, seconds=90)
                 (mounted / "renamed-folder/written.txt").unlink()
                 (mounted / "renamed-folder").rmdir()
-                wait_for(lambda: not (root / "renamed-folder").exists(), processes)
+                wait_for(lambda: not (root / "renamed-folder").exists(), processes, seconds=90)
             logs[1].flush()
             client_output = (sandbox / "client.log").read_text()
             if args.network == "relay-only":
@@ -125,6 +135,12 @@ def main():
             print(f"PASS: two CLI processes, network={args.network}, encrypted peer GET/PUT/MOVE/DELETE, {len(data)} bytes checked")
             if args.mount:
                 print("PASS: isolated FUSE hydration, durable save/upload, directory move and delete")
+        except Exception:
+            for name, log in zip(["server", "client"], logs):
+                log.flush()
+                log.seek(0)
+                print(f"{name} failure log:\n{log.read()[-4000:]}", flush=True)
+            raise
         finally:
             if os.path.ismount(mounted):
                 subprocess.run(["fusermount3", "-u", str(mounted)], check=True, timeout=10)
