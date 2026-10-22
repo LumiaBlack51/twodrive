@@ -46,6 +46,47 @@
 
 
 
+## TD-20261022-04：Shell 注册归属未持续核对上下文标记
+
+- 日期：2026-10-22（Asia/Shanghai）。
+- 状态：已验证（生成根的归属检查范围）。
+- 影响版本与环境：dev 0fc9e12 / PR #41；Windows 11 10.0.26340.9750 x64。
+- 关联历史故障：TD-20261021-08 至 11 的保留/注销机制；本轮不替换这些保护。
+
+### 症状与影响
+
+ShellRoot::verify 只持续核对目录和 ID，未保存并再次核对注册时的上下文。不同上下文的视图仍可被认作相同归属；未观察到真实用户注册遭误删。
+
+### 触发条件与复现
+
+显式新建空生成根并附加 Shell。构造不执行注销的查询视图，保留同一 ID/目录但使用不同的期望上下文。旧验证逻辑错误通过，回归断言失败（exit 101）。测试未篡改 OS 注册；断言前已经清理自己的空根。
+
+### 根因与证据
+
+初次保留根恢复会检查 context，但 ShellRoot 没有保存期望值，后续 verify/finish 仅检查 ID 和目录。本轮原生回归隔离该遗漏，不能推断所有注销问题同源。
+
+### 解决办法与恢复操作
+
+注册和恢复构造均保留期望 context，verify 同时检查按 ID、按目录取得的 context。保留上游全部文件保留/转换/重试逻辑。Apartment 添加非 Send/Sync 标记，限制初始化与析构在同一线程。未恢复或修改真实数据。
+
+### 验证结果与边界
+
+旧逻辑原生测试失败、修复后在另一新根通过；正确原始 context 仍验证通过，两个空根都已正常注销。严格全特性 Clippy、76 次非忽略 Rust 测试执行通过；5 次忽略执行未计入。Flutter analyzer 与全部 43 项当前测试通过。
+重编译 engine 和 Explorer 证据见脱敏记录；截图仅本地保存。未验证完整图标/GUI 矩阵、系统重启、Linux GUI 或真实云原生同步。
+
+### 防复发措施与后续
+
+保留需显式新目录的 changed_context_is_not_owned_even_when_id_and_folder_match 回归。CI 默认不运行注册场景。后续继续 GUI 与图标矩阵，不能以属性查询代替视觉验收。
+
+### 交付记录
+
+[PR #45](https://github.com/LumiaBlack51/twodrive/pull/45) 向 dev 提交；整合基线 0fc9e1203433144fcd8a69ce0580123880b50d1d。详细记录：[Shell 验证](windows-shell-2026-10-22.md)、[脱敏数据](windows-shell-validation-2026-10-22.json)。
+
+## TD-20261022-03：独立 CFAPI Shell 注册调查与上游整合
+
+本轮自 dev 4fad4d1 开始调查裸 CFAPI 缺少 Shell 注册的问题，独立实现与本机证据保留在 00ff1807b21c4c547b7f153d2399da72f14d2ab0。生成根对照验证了属性 8/14/15、元数据不水合、固定/脏文件拒绝释放、完整文件保留及 Explorer 蓝云/本地勾选。初次 verbatim 路径与注销保留预期失败已在详细记录中保留。
+交付期间上游 PR #41 已合入，最终主动采用其更完整实现，初始代码不作为另一条并行生产路径。此历史证据不自动证明整合后相同场景通过；后续实际运行单独记入验证数据。真实云、完整 GUI、固定/同步/错误/冲突视觉结果仍不在该历史证据范围。
+
 ## TD-20261021-16: hosted tray fixture failed one foreground transfer
 
 - Date: 2026-10-21; status: original failure retained; one unchanged-source failed-job rerun passed. Exact cause remains unconfirmed.
