@@ -5,7 +5,7 @@
 ## TD-20261029-03：开放贡献 PR 与新增 dev 增量上传分支发生整合冲突
 
 - 日期：2026-10-29（Asia/Shanghai）
-- 状态：已验证全部三个开放 PR 相对候选 dev 的三方合并无冲突；待提交/合入 dev
+- 状态：已验证全部三个开放 PR 相对修复候选 dev 的三方合并无冲突；提交与 PR 见交付记录
 - 影响版本与环境：dev 6381926，以及开放 PR #45（b927d22）、#46（4a7b77f）、#47（f4e07fe）；仅源码整合，未安装或运行真实提供者。
 - 关联历史故障：TD-20261007-01 涉及合并工具截断 manifest；本轮尚无同机制证据。TD-20261029-01/02 为 dev 增量实现/测试记录，不能因时间相邻认定它们是冲突根因。
 
@@ -39,7 +39,7 @@ GitHub API 同时确认三个来源 fork 的 maintainer_can_modify=false，当�
 
 ### 交付记录
 
-已完成本地前后对照，修复提交/PR 待产生。原 PR：[#45](https://github.com/LumiaBlack51/twodrive/pull/45)、[#46](https://github.com/LumiaBlack51/twodrive/pull/46)、[#47](https://github.com/LumiaBlack51/twodrive/pull/47)。
+修复提交：[6b88695](https://github.com/LumiaBlack51/twodrive/commit/6b886952108ab660eba6542efa7353126a5970d6)；通过指向 dev 的 [PR #49](https://github.com/LumiaBlack51/twodrive/pull/49) 交付。后续只补本条交付引用，不更改已验证的旧插入上下文。原 PR：[#45](https://github.com/LumiaBlack51/twodrive/pull/45)、[#46](https://github.com/LumiaBlack51/twodrive/pull/46)、[#47](https://github.com/LumiaBlack51/twodrive/pull/47)。
 
 
 ## TD-20261029-02：超限补丁回归把流式早拒绝固定断言为 HTTP 413
