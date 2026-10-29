@@ -77,11 +77,11 @@
 
 ### 防复发措施与后续
 
-分别验证超限头部判定、活跃发送时拒绝、原内容与临时文件保护；不以收到某一状态作为唯一未写入证明。
+分别验证超限头部判定、活跃发送时拒绝、原内容与临时文件保护；不以收到某一状态作为唯一未写入证明。后续同一用例又观测到回环 HTTP 写端 BrokenPipe（OS 32），在取得响应头前结束；属于同一早拒绝跨两跳传播边界。仅对该刻意超限用例接受 BrokenPipe/ConnectionReset/ConnectionAborted 错误链，连接失败/超时不算通过，正常补丁仍必须成功。
 
 ### 交付记录
 
-尚未提交或发布。
+初始实现：[fff7c59](https://github.com/LumiaBlack51/twodrive/commit/fff7c59)。本条验证边界修正待提交；没有发布。
 
 
 ## TD-20261029-01：增量扩展把 Unicode URL 当作未解码磁盘路径
@@ -119,7 +119,7 @@ Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项�
 
 ### 交付记录
 
-尚未提交或发布，详见本轮新增 delta_upload.rs。
+初始实现提交 fff7c59 已存在；该提交的后续超限用例曾暴露上述客户端 BrokenPipe，验证边界随修正一起提交。尚未发布，原生 CI 与最终 dev 合并待补充。
 
 
 ## TD-20261021-16: hosted tray fixture failed one foreground transfer

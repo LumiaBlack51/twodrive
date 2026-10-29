@@ -119,11 +119,28 @@ async fn conditional_delta_full_fallback_corruption_locks_and_interruption_over_
         assert!(std::str::from_utf8(&head[..count]).unwrap().starts_with("HTTP/1.1 413 "));
         drop(preflight);
         // A sender already writing a rejected oversized body may observe the
-        // HTTP rejection or QUIC STOP_SENDING as gateway 502. Both must reject
+        // HTTP rejection, QUIC STOP_SENDING as gateway 502, or the loopback
+        // writer's broken pipe. All must reject
         // the mutation; check disk bytes independently below.
         for _ in 0..3 {
-            let status = send_patch(vec![0; 6 * 1024 * 1024], &created.entry.etag).status();
-            assert!(matches!(status, StatusCode::PAYLOAD_TOO_LARGE | StatusCode::BAD_GATEWAY));
+            let rejected = request("PATCH").header("If-Match", &created.entry.etag)
+                .header("Content-Type", delta::MEDIA_TYPE).body(vec![0; 6 * 1024 * 1024]).send();
+            match rejected {
+                Ok(response) => assert!(matches!(response.status(), StatusCode::PAYLOAD_TOO_LARGE | StatusCode::BAD_GATEWAY)),
+                Err(error) => {
+                    // The loopback HTTP hop can also close while reqwest is
+                    // writing. Do not accept unrelated connect/timeout errors.
+                    let mut source = std::error::Error::source(&error);
+                    let mut closed = false;
+                    while let Some(cause) = source {
+                        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                            closed |= matches!(io.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted);
+                        }
+                        source = cause.source();
+                    }
+                    assert!(closed, "unexpected oversized-upload failure: {error}");
+                }
+            }
             assert_eq!(fs::read(root.join("new.pptx")).unwrap(), current);
         }
         assert_eq!(fs::read(root.join("new.pptx")).unwrap(), current);

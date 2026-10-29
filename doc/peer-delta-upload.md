@@ -85,7 +85,7 @@ version (412), wrong base digest (409), lock, authorization, transport failure o
 ambiguous server error does not silently retry a mutation. Retained local pending
 work remains available for the normal recovery/reconciliation flow.
 
-An already streaming oversized body can be stopped before its HTTP rejection is received; the gateway may report 502 instead of 413. Both paths reject the mutation, and a 502 must not trigger an automatic full replay. Header-only limit rejection is tested separately. See [TD-20261029-02](incidents.md#td-20261029-02超限补丁回归把流式早拒绝固定断言为-http-413).
+An already streaming oversized body can be stopped before its HTTP rejection is received; the gateway may report 502 instead of 413, or the active loopback HTTP writer may receive a broken-pipe/reset error before response headers. Both paths reject the mutation, and a 502 must not trigger an automatic full replay. Header-only limit rejection is tested separately. See [TD-20261029-02](incidents.md#td-20261029-02超限补丁回归把流式早拒绝固定断言为-http-413).
 
 The upload limit bounds reconstructed content as well as ordinary PUT. Patch
 input is capped at `max_upload + 1 MiB`. Hashing and chunk matching use bounded
