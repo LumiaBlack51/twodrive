@@ -20,7 +20,7 @@ class StatusTray {
   }
   Future<void> icon(
     String state, {
-    String title = 'TwoDrive Development',
+    String title = 'TwoDrive',
   }) => channel.invokeMethod('configure', {
     'title': title,
     'icon':

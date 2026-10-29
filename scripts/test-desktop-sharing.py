@@ -51,9 +51,11 @@ def run(args):
             assert download.read_bytes() == b'desktop shared bytes\n'
             source = root / 'source.txt'
             source.write_bytes(b'uploaded via exported GUI connection\n')
+            client.assert_editable('shared-pc')
             client.call('upload', dict(path='/uploaded.txt',source=str(source)))
             assert (shared/'uploaded.txt').read_bytes() == source.read_bytes()
             checks['start_export_import_pair_download_upload'] = True
+            checks['imported_remote_write_grant_works_without_local_password'] = True
             peers = host.call('status')['sharing']['peers']
             assert len(peers) == 1
             host.call('share_revoke', dict(device=peers[0]))

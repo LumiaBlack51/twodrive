@@ -296,6 +296,10 @@ impl State {
     }
 
     pub fn save(&self, name: &str, value: &impl Serialize) -> anyhow::Result<()> {
+        self.write_bytes(name, &serde_json::to_vec_pretty(value)?)
+    }
+
+    pub(crate) fn write_bytes(&self, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
         let mut output = tempfile::NamedTempFile::new_in(&self.dir)?;
         #[cfg(unix)]
         {
@@ -304,7 +308,7 @@ impl State {
                 .as_file()
                 .set_permissions(fs::Permissions::from_mode(0o600))?;
         }
-        output.write_all(&serde_json::to_vec_pretty(value)?)?;
+        output.write_all(bytes)?;
         output.as_file().sync_all()?;
         persist_atomic(output, &self.dir.join(name))?;
         #[cfg(unix)]

@@ -70,3 +70,23 @@ python3 scripts/verify-google-drive.py \
 Final local checks: 58 Rust tests in the standalone experiment, 13 Flutter tests, one Python verifier regression, Rust formatting and strict Clippy, Flutter analysis and Linux release build passed. These checks include local substitutes; the two linked reports identify the separately executed live Google checks. The stable workspace's full suite and native Windows Google execution were not rerun. Source remains on the local `dev` branch; no GitHub release was created for this work.
 
 发布：[Development 0.1.2 Release](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.1.2)（Linux/Windows、源码、规范、校验和与验证报告）；[最终构建与范围](development-0.1.2.md)。
+
+## 2026-10-28 Windows 本机预览补充
+
+用户已完成本机网页授权，当前原 state 中的四个账号均有匹配的桌面 session；Google 的离线令牌已保存，路径为 `D:\TwoDrive\GoogleDrive`。本次没有复制其他电脑的登录令牌。桌面应用 OAuth 凭据标识应用，不等于某台电脑已经登录；Windows 私密令牌由当前用户 DPAPI 保护。
+
+Google Provider 现补齐 `storage_usage`，仅查询既有 Drive v2 `about` 的 `quotaType,quotaBytesTotal,quotaBytesUsedAggregate`。展示的是可能与 Gmail、Photos 共用的**账号空间**，不会把 Drive 单项用量当成账号总用量；不遍历私人文件估算，不为查询容量要求额外授权。不限量账号不捏造总容量，零值、超额使用及缺失字段保留真实含义；无效响应或请求失败返回错误，不冒充“不支持”。依据 [Google about 配额字段](https://developers.google.com/workspace/drive/api/reference/rest/v2/about)。
+
+另显式开启 reqwest `system-proxy`：未设置 HTTP(S) 代理环境变量时，Windows 的静态用户系统代理也可用于 Google 令牌/API 请求。`direct` 仍明确禁用代理。不修改系统代理，未新增 PAC/WPAD 支持。无凭据探针在旧功能图下系统路由 15 秒超时、显式本机代理可达；修复后系统路由可达而 direct 仍超时。探针只有向公开 token 端点的 GET，不包含 OAuth 码、令牌或 Drive 文件请求；404 在这里表示网络可达，不等于登录成功。
+
+四账号同时保持连接的既有实现不变：在线切换先返回 `retained=true`，不进入 Provider 登录；UI 对此显示“正在切换网盘”。启动通过已保存 session 恢复所有账号，遇到过期授权会单独报错，不静默混用其他账号。127.0.0.1 回调接收成功只表示收到授权码，后续令牌交换、身份探测成功后才是客户端登录成功。
+
+验证：新增容量回归在旧代码因返回 None 失败；修复后覆盖账号总用量区别于 Drive 用量、只读查询、不扫描目录、不限量/零值/超额/缺失、无效数值/HTTP 错误和前后取消。126 次默认 Rust 执行、78 项 Flutter、严格检查及 Windows release 构建通过，5 项组件默认忽略不计入。实际包的独立 WinFsp 只读 5 组、密码保护编辑 7 组及新进程启动恢复 6 组回归通过，均未使用用户云盘。现已部署；真实 Google 容量数值、Windows Google 挂载读取及重新启动后的四账号真实恢复尚待验收，不把本机模拟当成这些结论。故障记录见 TD-20261028-22 至 27。
+
+同批包随后包含 TD-20261028-26 的前端退出优化：退出时先隐藏窗口，后台继续正常卸载；后端拒绝退出会恢复原窗口，重复动作合并。新增 3 项 Workspace 回归后，最终完整 Flutter 测试为 81 项，分析和 Windows release 构建通过。用户已确认此前运行包的多账号切换正常；该确认不等同于容量或退出优化验收。
+
+交付 `TwoDrive-0.1.7-google-20261028`：Rust 构建输入 `c8a2ce7fe06faa5e0d9a0f24f5ca57a3f36fd893`，最终 GUI 输入 `800cb9246113711511c62614a36856208f6c1dcf`；43 个运行和说明文件的大小及 SHA-256 已核对。代码已以 DavidXile 身份推送 [PR #47](https://github.com/LumiaBlack51/twodrive/pull/47)，保持 Ready for review。用户确认正常退出后，私密备份原 state 和导入凭据；新包只读升级检查确认配置字节一致。默认启动版本已切换，启动后本机核对一个新版 GUI/main engine、原四条完整配置、匹配 session 身份、首选项及四个 D 盘路径，全部未解锁。
+
+只读窗口观察 Google 已连接并能显示根目录；另三个网盘的所属挂载进程存在。Google 自动挂载被提前存在的普通空目标目录拒绝，该目录已改名保留，原 `D:\TwoDrive\GoogleDrive` 路径释放；等待用户点击重试，没有鼠标控制或另行云盘探针。目录来源未确认，不将它归因于容量或代理改动。真实容量显示、Google 挂载读取和新退出体验仍待用户验收，不把本机进程检查当成文件可读或 hosted CI 已通过；未合并或发布正式 Release。
+
+后续用户验收（2026-10-29 记录）：用户明确回复“容量和挂载正常，退出也改善了”，完成新包容量显示、挂载可用及退出体验的人工验收。保留以上部署时的观察记录；没有因此新增独立云盘探针、文件字节比对、真实写入或退出阶段计时。生产代码保持此前已通过 126 次 Rust 执行、81 项 Flutter 与实际包回归的版本；本轮仅提交验收记录，不重新运行相同构建或把用户反馈当作 hosted CI 结果。

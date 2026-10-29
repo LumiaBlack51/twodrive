@@ -1,0 +1,45 @@
+{
+  "families": [
+    {
+      "file": "DejaVuSansMono.ttf",
+      "family": "DejaVu Sans Mono",
+      "sha256": "c805f9436dbc268644c1d9584f01a601a653e028e08fd74b9b949f6cf8304d88",
+      "bytes": 343140
+    },
+    {
+      "file": "NotoSansCJKSC-Bold.otf",
+      "family": "Noto Sans CJK SC",
+      "sha256": "bc2cb5813a02e256c2f53f1288fa5eb5e9e7a1b950905996cabba9485efdb5e7",
+      "bytes": 17002224
+    },
+    {
+      "file": "NotoSansCJKSC-Regular.otf",
+      "family": "Noto Sans CJK SC",
+      "sha256": "f107ade83f440d12d5f38081e026e1931d495ae558272759e59784ea8dd6b127",
+      "bytes": 16437340
+    },
+    {
+      "file": "Roboto-Bold.ttf",
+      "family": "Roboto",
+      "sha256": "36f3709dea3e3ce3c6aedc058079e55980825f898f1e901d091c73c40de8bab1",
+      "bytes": 306940
+    },
+    {
+      "file": "Roboto-Medium.ttf",
+      "family": "Roboto Medium",
+      "sha256": "7984aafeaf437899ce89b251d2875fc5048cb7d290152eac070239cca7ff726c",
+      "bytes": 306536
+    },
+    {
+      "file": "Roboto-Regular.ttf",
+      "family": "Roboto",
+      "sha256": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174",
+      "bytes": 305608
+    }
+  ],
+  "noto_source": "Zorin fonts-noto-cjk NotoSansCJK-Regular.ttc and NotoSansCJK-Bold.ttc, fontNumber=2 (SC)",
+  "extraction_tool": "fontTools 4.68.0, TTFont(source,fontNumber=2).save(destination)",
+  "other_sources": "Zorin fonts-roboto-unhinted and fonts-dejavu-core",
+  "licenses": "Complete distribution copyright/license files included as declared Flutter assets; no font names or glyphs modified",
+  "scope": "Used by the Linux theme only; desktop text scaling is inherited"
+}

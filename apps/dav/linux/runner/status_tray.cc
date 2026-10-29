@@ -24,7 +24,7 @@ struct Tray {
   guint watcher = 0;
   std::string name;
   std::string icon;
-  std::string title = "TwoDrive Development";
+  std::string title = "TwoDrive";
   twodrive::TrayAnchor anchor;
   bool host_anchor = false;
   GtkStatusIcon* legacy = nullptr;
@@ -284,7 +284,7 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
     tray->icon = fl_value_get_string(icon);
     FlValue* title = fl_value_lookup_string(args, "title");
     tray->title = title && fl_value_get_type(title) == FL_VALUE_TYPE_STRING
-        ? fl_value_get_string(title) : "TwoDrive Development";
+        ? fl_value_get_string(title) : "TwoDrive";
     const char* desktop = g_getenv("XDG_CURRENT_DESKTOP");
     bool gnome = desktop && (g_strrstr(desktop, "GNOME") || g_strrstr(desktop, "Zorin"));
 #ifdef GDK_WINDOWING_X11
@@ -292,6 +292,7 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
 #else
     gnome = false;
 #endif
+    if (g_strcmp0(g_getenv("TWODRIVE_TRAY_BACKEND"), "sni") == 0) gnome = false;
     if (gnome) {
       if (!tray->legacy) {
         tray->legacy = gtk_status_icon_new();
