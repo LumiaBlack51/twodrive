@@ -51,6 +51,8 @@ jobs:
       - run: cargo clippy --all-targets --locked ${{ matrix.args }} -- -D warnings
       - name: Reject a response belonging to another signed command
         run: python scripts/test-control-response.py
+      - name: Reject false success and unbounded HTTP trickle in acceptance runner
+        run: python scripts/test-reliability.py
       - name: Confirm the DNS regression rejects the old selection
         run: python scripts/test-dns-old-selection.py
       - run: cargo test --locked ${{ matrix.args }}

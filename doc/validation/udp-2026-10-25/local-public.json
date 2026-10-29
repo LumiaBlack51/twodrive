@@ -1,0 +1,437 @@
+{
+  "schema": 1,
+  "scope": "same-host-two-processes",
+  "independent_nat_established": false,
+  "network_mode": "public",
+  "continuous_path_evidence": false,
+  "attempts": [
+    {
+      "status": "passed",
+      "files": [
+        {
+          "file": "empty.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "upload_seconds": 0.011081,
+          "download_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "download_seconds": 0.003246,
+          "download_MiB_s": 0.0,
+          "create_collision": "passed"
+        },
+        {
+          "file": "中文 空格/long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 4099,
+          "sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "upload_seconds": 0.010055,
+          "download_sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "download_seconds": 0.005125,
+          "download_MiB_s": 0.763,
+          "range": "passed"
+        },
+        {
+          "file": "nested/a/b/small.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 65537,
+          "sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "upload_seconds": 0.038733,
+          "download_sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "download_seconds": 0.012672,
+          "download_MiB_s": 4.932,
+          "range": "passed"
+        },
+        {
+          "case": "owned_remote_collection_cleanup",
+          "status": "passed"
+        }
+      ],
+      "path_coverage": "initial-only",
+      "whole_transfer_transport": "unverified",
+      "connect_seconds": 1.865265,
+      "resource_samples": [
+        {
+          "seconds": 0.0,
+          "role": "server",
+          "cpu_seconds": 0.203125,
+          "rss_bytes": 24649728,
+          "peak_rss_bytes": 24649728
+        },
+        {
+          "seconds": 0.0,
+          "role": "client",
+          "cpu_seconds": 0.03125,
+          "rss_bytes": 16252928,
+          "peak_rss_bytes": 16252928
+        },
+        {
+          "seconds": 1.003,
+          "role": "server",
+          "cpu_seconds": 0.296875,
+          "rss_bytes": 25456640,
+          "peak_rss_bytes": 25456640
+        },
+        {
+          "seconds": 1.003,
+          "role": "client",
+          "cpu_seconds": 0.1875,
+          "rss_bytes": 25489408,
+          "peak_rss_bytes": 27324416
+        }
+      ],
+      "initial_transports": [
+        "direct-udp"
+      ],
+      "owned_processes_stopped": true,
+      "shared_files_remaining": 0,
+      "seconds": 2.200658
+    },
+    {
+      "status": "passed",
+      "files": [
+        {
+          "file": "empty.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "upload_seconds": 0.008384,
+          "download_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "download_seconds": 0.00334,
+          "download_MiB_s": 0.0,
+          "create_collision": "passed"
+        },
+        {
+          "file": "中文 空格/long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 4099,
+          "sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "upload_seconds": 0.012243,
+          "download_sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "download_seconds": 0.003585,
+          "download_MiB_s": 1.09,
+          "range": "passed"
+        },
+        {
+          "file": "nested/a/b/small.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 65537,
+          "sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "upload_seconds": 0.014148,
+          "download_sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "download_seconds": 0.009283,
+          "download_MiB_s": 6.733,
+          "range": "passed"
+        },
+        {
+          "case": "owned_remote_collection_cleanup",
+          "status": "passed"
+        }
+      ],
+      "path_coverage": "initial-only",
+      "whole_transfer_transport": "unverified",
+      "connect_seconds": 1.857457,
+      "resource_samples": [
+        {
+          "seconds": 0.0,
+          "role": "server",
+          "cpu_seconds": 0.25,
+          "rss_bytes": 24944640,
+          "peak_rss_bytes": 24944640
+        },
+        {
+          "seconds": 0.0,
+          "role": "client",
+          "cpu_seconds": 0.0,
+          "rss_bytes": 10543104,
+          "peak_rss_bytes": 10543104
+        },
+        {
+          "seconds": 1.015,
+          "role": "server",
+          "cpu_seconds": 0.265625,
+          "rss_bytes": 25686016,
+          "peak_rss_bytes": 25686016
+        },
+        {
+          "seconds": 1.015,
+          "role": "client",
+          "cpu_seconds": 0.125,
+          "rss_bytes": 25595904,
+          "peak_rss_bytes": 27271168
+        }
+      ],
+      "initial_transports": [
+        "direct-udp"
+      ],
+      "owned_processes_stopped": true,
+      "shared_files_remaining": 0,
+      "seconds": 2.137936
+    },
+    {
+      "status": "passed",
+      "files": [
+        {
+          "file": "empty.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "upload_seconds": 0.031765,
+          "download_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "download_seconds": 0.003305,
+          "download_MiB_s": 0.0,
+          "create_collision": "passed"
+        },
+        {
+          "file": "中文 空格/long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 4099,
+          "sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "upload_seconds": 0.009768,
+          "download_sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "download_seconds": 0.003935,
+          "download_MiB_s": 0.993,
+          "range": "passed"
+        },
+        {
+          "file": "nested/a/b/small.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 65537,
+          "sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "upload_seconds": 0.010545,
+          "download_sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "download_seconds": 0.017459,
+          "download_MiB_s": 3.58,
+          "range": "passed"
+        },
+        {
+          "case": "owned_remote_collection_cleanup",
+          "status": "passed"
+        }
+      ],
+      "path_coverage": "initial-only",
+      "whole_transfer_transport": "unverified",
+      "connect_seconds": 1.852695,
+      "resource_samples": [
+        {
+          "seconds": 0.0,
+          "role": "server",
+          "cpu_seconds": 0.21875,
+          "rss_bytes": 25120768,
+          "peak_rss_bytes": 25120768
+        },
+        {
+          "seconds": 0.0,
+          "role": "client",
+          "cpu_seconds": 0.0,
+          "rss_bytes": 10579968,
+          "peak_rss_bytes": 10579968
+        },
+        {
+          "seconds": 1.007,
+          "role": "server",
+          "cpu_seconds": 0.21875,
+          "rss_bytes": 25903104,
+          "peak_rss_bytes": 25903104
+        },
+        {
+          "seconds": 1.007,
+          "role": "client",
+          "cpu_seconds": 0.1875,
+          "rss_bytes": 25673728,
+          "peak_rss_bytes": 27160576
+        }
+      ],
+      "initial_transports": [
+        "direct-udp"
+      ],
+      "owned_processes_stopped": true,
+      "shared_files_remaining": 0,
+      "seconds": 2.118297
+    },
+    {
+      "status": "passed",
+      "files": [
+        {
+          "file": "empty.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "upload_seconds": 0.007492,
+          "download_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "download_seconds": 0.003189,
+          "download_MiB_s": 0.0,
+          "create_collision": "passed"
+        },
+        {
+          "file": "中文 空格/long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 4099,
+          "sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "upload_seconds": 0.009174,
+          "download_sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "download_seconds": 0.003939,
+          "download_MiB_s": 0.992,
+          "range": "passed"
+        },
+        {
+          "file": "nested/a/b/small.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 65537,
+          "sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "upload_seconds": 0.025152,
+          "download_sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "download_seconds": 0.010144,
+          "download_MiB_s": 6.161,
+          "range": "passed"
+        },
+        {
+          "case": "owned_remote_collection_cleanup",
+          "status": "passed"
+        }
+      ],
+      "path_coverage": "initial-only",
+      "whole_transfer_transport": "unverified",
+      "connect_seconds": 1.94097,
+      "resource_samples": [
+        {
+          "seconds": 0.0,
+          "role": "server",
+          "cpu_seconds": 0.203125,
+          "rss_bytes": 24965120,
+          "peak_rss_bytes": 24965120
+        },
+        {
+          "seconds": 0.0,
+          "role": "client",
+          "cpu_seconds": 0.0,
+          "rss_bytes": 10510336,
+          "peak_rss_bytes": 10510336
+        },
+        {
+          "seconds": 1.0,
+          "role": "server",
+          "cpu_seconds": 0.203125,
+          "rss_bytes": 25792512,
+          "peak_rss_bytes": 25792512
+        },
+        {
+          "seconds": 1.001,
+          "role": "client",
+          "cpu_seconds": 0.21875,
+          "rss_bytes": 25702400,
+          "peak_rss_bytes": 27222016
+        }
+      ],
+      "initial_transports": [
+        "direct-udp"
+      ],
+      "owned_processes_stopped": true,
+      "shared_files_remaining": 0,
+      "seconds": 2.222474
+    },
+    {
+      "status": "passed",
+      "files": [
+        {
+          "file": "empty.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "upload_seconds": 0.029697,
+          "download_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "download_seconds": 0.027614,
+          "download_MiB_s": 0.0,
+          "create_collision": "passed"
+        },
+        {
+          "file": "中文 空格/long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 4099,
+          "sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "upload_seconds": 0.021837,
+          "download_sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "download_seconds": 0.003353,
+          "download_MiB_s": 1.166,
+          "range": "passed"
+        },
+        {
+          "file": "nested/a/b/small.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 65537,
+          "sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "upload_seconds": 0.030535,
+          "download_sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "download_seconds": 0.008256,
+          "download_MiB_s": 7.57,
+          "range": "passed"
+        },
+        {
+          "case": "owned_remote_collection_cleanup",
+          "status": "passed"
+        }
+      ],
+      "path_coverage": "initial-only",
+      "whole_transfer_transport": "unverified",
+      "connect_seconds": 1.854286,
+      "resource_samples": [
+        {
+          "seconds": 0.0,
+          "role": "server",
+          "cpu_seconds": 0.328125,
+          "rss_bytes": 25092096,
+          "peak_rss_bytes": 25092096
+        },
+        {
+          "seconds": 0.0,
+          "role": "client",
+          "cpu_seconds": 0.0,
+          "rss_bytes": 10559488,
+          "peak_rss_bytes": 10567680
+        },
+        {
+          "seconds": 1.013,
+          "role": "server",
+          "cpu_seconds": 0.328125,
+          "rss_bytes": 25915392,
+          "peak_rss_bytes": 25915392
+        },
+        {
+          "seconds": 1.013,
+          "role": "client",
+          "cpu_seconds": 0.1875,
+          "rss_bytes": 25747456,
+          "peak_rss_bytes": 27308032
+        }
+      ],
+      "initial_transports": [
+        "direct-udp"
+      ],
+      "owned_processes_stopped": true,
+      "shared_files_remaining": 0,
+      "seconds": 2.307622
+    }
+  ],
+  "resume_supported": false,
+  "cpu_memory_sampling": "1s-Windows-owned-backends",
+  "started_utc": "2026-10-25T12:06:44Z",
+  "binary_sha256": "b1185b615eb63b266cc30baf3cfb7dbf8c5b1746e68117dcece92b1af034de17",
+  "seconds": 11.034774,
+  "passed": 5,
+  "failed": 0,
+  "soak_duration_met": false
+}

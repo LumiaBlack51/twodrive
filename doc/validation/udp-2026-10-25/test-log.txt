@@ -1,0 +1,19 @@
+Sanitized selected observations; generated fixture names only. Not a raw CLI log.
+Baseline: 0fc9e1203433144fcd8a69ce0580123880b50d1d
+CI artifact ZIP SHA256 verified against GitHub metadata.
+smoke.py --network lan: PASS, 2097105 bytes checked.
+smoke.py --network lan --read-only: PASS, GET hash verified and PUT rejected with 403.
+test-control-response.py: 2 tests OK.
+test-network-report.ps1: active redirected writer and stage/report regression passed on Windows PowerShell 5.1.
+test-agent-bootstrap-path.ps1: exact bootstrap assignment/hash accepts verbatim paths; legacy Path/Join-Path rejected.
+test-reliability.py final: 5 tests OK; truncation, HTTP status, streamed hash, body trickle deadline, header trickle deadline.
+Final runner real CLI check: 1 round passed; personal network configuration restored; not clean-network acceptance.
+Initial transport observations: local lan 5/5 direct-udp; public automatic 5/5 direct-udp; relay-only 5/5 relay.
+Whole-transfer selected path: unverified in every report.
+Initial corpus round: TimeoutError; 1000 small files plus basic files and 100 MiB completed first; cleanup passed.
+Large-file retries: 1 GiB complete SHA256 match; not proof of a product fix.
+Partial request aborts at 0/50/99 percent: target GET 404.
+Server stopped: HTTP 502 after 15.038 seconds.
+Network precondition attempts: VPN/proxy processes remain. No clean-network pass recorded.
+Post-interruption check: no twodrive test processes; proxy switch restored to 1; PulseVPN UI/core running.
+No invitation, credential, private key, raw IP, interface GUID or personal file listing included.
