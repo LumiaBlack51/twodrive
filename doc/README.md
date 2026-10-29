@@ -61,3 +61,4 @@ Existing investigation paths are retained so earlier release links continue to w
 - [Development 0.1.6 发布与标准打包](development-0.1.6.md)：SQLite 元数据写入竞争修复、完整离线 Debian 源码/二进制构建与 MSIX。
 - [Development 0.1.5 发布与安装验证](development-0.1.5.md)：共享 GUI、更新检查、MSIX 实际安装/运行/卸载、Deb 隔离 FUSE 验收。
 - [Development 0.1.2 发布与验证](development-0.1.2.md)：云账号、在线连接管理、X11/Wayland 组件、原生 CI 与分发范围。
+- [Generated Windows Shell registration / 生成数据的 Explorer 状态验证](windows-shell-2026-10-22.md) · [2026-10-22 脱敏验证](windows-shell-validation-2026-10-22.json)

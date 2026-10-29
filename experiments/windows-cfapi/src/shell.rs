@@ -2,7 +2,9 @@
 //! other registrations, installs a COM extension, or accepts account identities.
 use std::{
     collections::HashMap,
+    marker::PhantomData,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 use windows::{
     Security::Cryptography::CryptographicBuffer,
@@ -22,13 +24,13 @@ use windows::{
     core::{GUID, HSTRING, Result},
 };
 
-struct Apartment;
+struct Apartment(PhantomData<Rc<()>>);
 impl Apartment {
     fn new() -> Result<Self> {
         unsafe {
             RoInitialize(RO_INIT_MULTITHREADED)?;
         }
-        Ok(Self)
+        Ok(Self(PhantomData))
     }
 }
 impl Drop for Apartment {
@@ -81,6 +83,7 @@ fn user_sid() -> Result<String> {
 pub struct ShellRoot {
     id: HSTRING,
     root: PathBuf,
+    context: Vec<u8>,
     registered: bool,
     published: HashMap<PathBuf, String>,
     // Destroy WinRT objects and registration before leaving this apartment.
@@ -105,6 +108,7 @@ impl ShellRoot {
         let result = Self {
             id,
             root: root.into(),
+            context: context.to_vec(),
             registered: true,
             published: HashMap::new(),
             _apartment: apartment,
@@ -142,6 +146,7 @@ impl ShellRoot {
         let mut result = Self {
             id,
             root: root.into(),
+            context: context.to_vec(),
             registered: true,
             published: HashMap::new(),
             _apartment: apartment,
@@ -158,12 +163,15 @@ impl ShellRoot {
         let info = StorageProviderSyncRootManager::GetSyncRootInformationForId(&self.id)?;
         let folder = StorageFolder::GetFolderFromPathAsync(&storage_path(&self.root))?.join()?;
         let by_folder = StorageProviderSyncRootManager::GetSyncRootInformationForFolder(&folder)?;
+        let expected = CryptographicBuffer::CreateFromByteArray(&self.context)?;
         if PathBuf::from(info.Path()?.Path()?.to_string())
             .canonicalize()
             .ok()
             .as_ref()
             != Some(&self.root)
             || by_folder.Id()? != self.id
+            || !CryptographicBuffer::Compare(&info.Context()?, &expected)?
+            || !CryptographicBuffer::Compare(&by_folder.Context()?, &expected)?
         {
             return Err(windows::core::Error::new(
                 windows::core::HRESULT(0x8007000Du32 as i32),
@@ -305,6 +313,52 @@ pub fn notify(path: &Path, directory: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires an explicit new generated root; never register automatically"]
+    fn changed_context_is_not_owned_even_when_id_and_folder_match() {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_SHELL_FIXTURE_ROOT")
+                .expect("explicit new Shell root required"),
+        );
+        assert!(root.file_name().is_some_and(|name| {
+            name.to_string_lossy()
+                .starts_with("twodrive-cfapi-fixture-")
+        }));
+        let mut session = crate::native::Session::create(&root).unwrap();
+        session.attach_shell().unwrap();
+        let folder = StorageFolder::GetFolderFromPathAsync(&storage_path(session.root()))
+            .unwrap()
+            .join()
+            .unwrap();
+        let info =
+            StorageProviderSyncRootManager::GetSyncRootInformationForFolder(&folder).unwrap();
+        let mut actual = windows::core::Array::<u8>::new();
+        CryptographicBuffer::CopyToByteArray(&info.Context().unwrap(), &mut actual).unwrap();
+        // A non-owning view queries our fresh fixture. It must never unregister
+        // it or publish metadata, including while the assertion is failing.
+        let mut view = ShellRoot {
+            id: info.Id().unwrap(),
+            root: session.root().into(),
+            context: b"different-generated-owner".to_vec(),
+            registered: false,
+            published: HashMap::new(),
+            _apartment: Apartment::new().unwrap(),
+        };
+        let mismatch_rejected = view.verify().is_err();
+        view.context = actual.to_vec();
+        let original_accepted = view.verify().is_ok();
+        drop(view);
+        drop(info);
+        drop(folder);
+        let canonical_root = session.root().to_owned();
+        session.finish().unwrap();
+        crate::native::verify_unregistered(&canonical_root).unwrap();
+        assert!(
+            original_accepted,
+            "the original generated binding must match"
+        );
+        assert!(mismatch_rejected, "changed context must veto ownership");
+    }
     #[test]
     fn metadata_lookup_accepts_chinese_file_beyond_max_path() {
         let _apartment = Apartment::new().unwrap();
