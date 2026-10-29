@@ -61,6 +61,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
             is_dir: row.get::<_, i64>(4)? != 0,
             size: row.get::<_, i64>(5)? as u64,
             modified_unix: row.get(6)?,
+            created_unix: None,
             etag: row.get(7)?,
         },
         cloud_remote_id: row.get(14)?,

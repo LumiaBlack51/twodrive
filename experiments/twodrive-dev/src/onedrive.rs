@@ -31,6 +31,7 @@ fn entry(m: twodrive_core::MetadataEntry) -> MetadataEntry {
         is_dir: m.is_dir,
         size: m.size,
         modified_unix: m.modified_unix,
+        created_unix: m.created_unix,
         etag: m.etag,
     }
 }
@@ -55,6 +56,17 @@ impl OneDrive {
     }
 }
 impl Provider for OneDrive {
+    fn storage_usage(
+        &self,
+        check: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<crate::provider::StorageUsage>> {
+        let quota = self.graph.readonly_quota(check)?;
+        Ok(crate::provider::StorageUsage::account(
+            quota["total"].as_u64(),
+            quota["used"].as_u64(),
+            quota["remaining"].as_u64(),
+        ))
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             upload: self.writable,
@@ -65,9 +77,16 @@ impl Provider for OneDrive {
         }
     }
     fn list_directory(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+        self.list_directory_checked(path, &mut || Ok(()))
+    }
+    fn list_directory_checked(
+        &self,
+        path: &str,
+        check: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<Vec<MetadataEntry>> {
         Ok(self
             .graph
-            .desktop_directory(path, &mut || Ok(()))?
+            .desktop_directory(path, check)?
             .into_iter()
             .map(entry)
             .collect())

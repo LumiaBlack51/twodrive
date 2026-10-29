@@ -1,7 +1,7 @@
 use super::auth;
 use crate::{
     model::{CloudBackend, DeltaResult, MetadataEntry},
-    provider::{Capabilities, Progress, Provider, valid_path},
+    provider::{Capabilities, Progress, Provider, StorageUsage, valid_path},
     state::State,
 };
 use anyhow::{Context, ensure};
@@ -751,6 +751,43 @@ impl Write for DigestWriter {
     }
 }
 impl Provider for GoogleDrive {
+    fn storage_usage(
+        &self,
+        check: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<StorageUsage>> {
+        check()?;
+        let value = self.json(
+            self.request(Method::GET, "about")?.query(&[(
+                "fields",
+                "quotaType,quotaBytesTotal,quotaBytesUsedAggregate",
+            )]),
+            "读取容量",
+        )?;
+        check()?;
+        let bytes = |key: &str| -> anyhow::Result<Option<u64>> {
+            let Some(value) = value.get(key).filter(|v| !v.is_null()) else {
+                return Ok(None);
+            };
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()))
+                .context("Google 返回了无效的容量数值")
+                .map(Some)
+        };
+        let total = if value["quotaType"] == "UNLIMITED" {
+            None
+        } else {
+            bytes("quotaBytesTotal")?
+        };
+        // The account limit is shared with Gmail/Photos: Drive-only usage would
+        // overstate free space, so never substitute quotaBytesUsed here.
+        let used = bytes("quotaBytesUsedAggregate")?;
+        ensure!(
+            total.is_some() || used.is_some(),
+            "Google 未返回账号容量信息"
+        );
+        Ok(StorageUsage::account(total, used, None))
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             upload: self.writable,

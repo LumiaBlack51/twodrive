@@ -19,6 +19,10 @@ mod portable {
         pub is_dir: bool,
         pub size: u64,
         pub modified_unix: i64,
+        /// Optional known creation time; not a fabricated cloud timestamp.
+        #[cfg_attr(target_os = "linux", allow(dead_code))]
+        // Portable parity tests use the core model.
+        pub created_unix: Option<i64>,
         pub etag: String,
     }
     impl MetadataEntry {
@@ -76,6 +80,7 @@ mod portable {
                 is_dir,
                 size,
                 modified_unix,
+                created_unix: None,
                 etag,
             }
         }

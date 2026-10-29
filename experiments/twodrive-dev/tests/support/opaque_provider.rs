@@ -17,11 +17,15 @@ type Files = BTreeMap<String, (MetadataEntry, Vec<u8>)>;
 pub struct OpaqueProvider {
     files: Arc<Mutex<Files>>,
     pub caps: Capabilities,
+    pub download_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub browse_ttl: std::time::Duration,
 }
 impl Default for OpaqueProvider {
     fn default() -> Self {
         Self {
             files: Arc::default(),
+            download_gate: None,
+            browse_ttl: std::time::Duration::ZERO,
             caps: Capabilities {
                 upload: true,
                 mkdir: true,
@@ -33,6 +37,11 @@ impl Default for OpaqueProvider {
     }
 }
 impl OpaqueProvider {
+    #[allow(dead_code)] // This shared fixture also serves cache-independent test binaries.
+    pub fn with_browse_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.browse_ttl = ttl;
+        self
+    }
     pub fn with_caps(mut self, caps: Capabilities) -> Self {
         self.caps = caps;
         self
@@ -117,6 +126,14 @@ impl CloudBackend for OpaqueProvider {
         w: &mut dyn Write,
         progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
     ) -> anyhow::Result<u64> {
+        while self
+            .download_gate
+            .as_ref()
+            .is_some_and(|gate| !gate.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            progress(0)?;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let data = self.download(id)?;
         w.write_all(&data)?;
         progress(data.len() as u64)?;
@@ -177,6 +194,9 @@ impl CloudBackend for OpaqueProvider {
     }
 }
 impl Provider for OpaqueProvider {
+    fn browse_cache_ttl(&self) -> std::time::Duration {
+        self.browse_ttl
+    }
     fn capabilities(&self) -> Capabilities {
         self.caps
     }
