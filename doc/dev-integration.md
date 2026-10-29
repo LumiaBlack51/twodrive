@@ -8,7 +8,7 @@ Integration date: 2026-10-07. The `dev` branch combines Windows [PR #9](https://
 | --- | --- | --- |
 | Windows Full/Lite, `twodrive-engine` and `twodrive-tray` | OneDrive sign-in, browsing, persistent metadata/delta index, explicit read-only downloads/resume, cache viewing; Full UI and Lite share one engine | Explicit Windows preview state root |
 | `twodrive-peer` | Same-account OneDrive discovery, fingerprint trust, authenticated encrypted control messages, ping/pong, signed update verification | Dedicated peer state; DPAPI secrets on Windows |
-| `twodrive-dev` | Existing WebDAV client, directory sharing, private single-use invitation, encrypted QUIC, NAT traversal/public relay fallback, loopback WebDAV gateway, Linux FUSE mount | Dedicated dev device state; separate mount cache |
+| `twodrive-dev` | Existing WebDAV client, directory sharing, private single-use invitation, encrypted QUIC, NAT traversal/public relay fallback, loopback WebDAV gateway, Linux FUSE mount, negotiated binary delta/full uploads | Dedicated dev device state; separate mount cache |
 
 The GUI still manages its OneDrive engine. Peer control and QUIC/WebDAV remain separate CLI protocols: cloud-control trust does not authorize a QUIC share, and the merge does not add automatic OneDrive-to-QUIC route switching. Pair QUIC devices using the single-use invitation. Cloud control messages cannot read or transfer files. CFAPI, bidirectional Windows synchronization, and GUI controls for WebDAV/QUIC remain future work.
 
@@ -60,6 +60,8 @@ $peerDevState = Join-Path $env:LOCALAPPDATA 'twodrive-peer-dev'
 ```
 
 From another terminal, run `peers` with the same `--state-dir`, verify the other device's full fingerprint against its local `init` output, and use `trust OTHER_FINGERPRINT` on both devices. Then `ping --to OTHER_FINGERPRINT` exercises control messages. Follow the [peer guide](https://github.com/LumiaBlack51/twodrive/blob/dev/doc/peer-quickstart.zh-CN.md); an unverified discovery record does not establish trust.
+
+Binary delta uploads and full fallback (including the shared Linux/Windows backend and frontend input contract) are documented in [peer-delta-upload.md](peer-delta-upload.md). The generic desktop paired-provider schema exposes the full-upload override. Third-party PUT-only clients retain full uploads.
 
 ## Validation boundaries
 

@@ -46,6 +46,82 @@
 
 
 
+
+
+## TD-20261029-02：超限补丁回归把流式早拒绝固定断言为 HTTP 413
+
+- 日期：2026-10-29（Asia/Shanghai）
+- 状态：已验证测试边界修正及内容保护；未声称修复 HTTP-over-QUIC 的所有早拒绝响应差异
+- 影响版本与环境：本轮未提交 delta_upload.rs，本机 QUIC/HTTP 转发；未发布或安装。
+- 关联历史故障：TD-20261006-02 有上传限额与 HTTP framing 调查，本次尚不认定相同根因。
+
+### 症状与影响
+
+相同 6 MiB 超限补丁前次收到 413，本轮收到网关 502；回归要求固定 413 因而失败。需区分拒绝写入与错误响应传递；后续逐次比对确认原文件未更改。
+
+### 触发条件与复现
+
+服务器限额 4 MiB、补丁输入额外允许 1 MiB，客户端仍在发送 6 MiB body 时服务端提前返回错误并关闭 HTTP-over-QUIC 流；重跑新增组合回归出现不同 HTTP 状态。
+
+### 根因与证据
+
+重复 8 次合成超限流式发送观测到 413 和 502；502 对应错误链的 stopped by peer（仅记录布尔分类，不保存正文）。锁定 noq 的 RecvStream::drop 在接收尚未结束时调用 stop(0)，Hyper 写入错误可先于读取早拒绝响应结束请求；与实际错误链和状态差异相符。回归误把应用的拒绝判定等同于活跃 QUIC 发送端必然取得的 HTTP 状态。与旧 XML/PUT 限额串用机制不同。
+
+### 解决办法与恢复操作
+
+拆分验证：只发送超限 Content-Length、没有活动 body 写者时，必须通过真实网关收到 413；另在仍发送超限 body 时只接受明确的 413 或因 STOP_SENDING 导致的 502，逐次独立核对原文件和后续临时文件清理。没有修改限额、放宽写入权限或自动重放变更；一次性诊断已删除。没有用户数据恢复操作。
+
+### 验证结果与边界
+
+原固定状态断言实际失败（502 != 413）。拆分后的真实本机 QUIC 回归通过：头部超限仍为 413；8 次活动 body 发送中拒绝结果含 413/502，所有原内容保持不变，正常 PATCH 和后续锁/取消回归通过。另一个刻意截断 body 的用例产生 Hyper body-write-aborted，明确与超限 STOP_SENDING 区分。未执行抓包、所有 QUIC/HTTP 早拒绝组合或真实异地链路验证；Windows 原生 CI 待完成。
+
+### 防复发措施与后续
+
+分别验证超限头部判定、活跃发送时拒绝、原内容与临时文件保护；不以收到某一状态作为唯一未写入证明。
+
+### 交付记录
+
+尚未提交或发布。
+
+
+## TD-20261029-01：增量扩展把 Unicode URL 当作未解码磁盘路径
+
+- 日期：2026-10-29（Asia/Shanghai）
+- 状态：已验证 Linux 分块、真实本机 QUIC 与合成文档；Windows 原生 CI 待完成
+- 影响版本与环境：本轮未提交的 twodrive-dev 0.1.7 增量扩展；Linux 临时目录和本机真实 QUIC。未发布或安装。
+- 关联历史故障：TD-20261006-03 是裸 ETag 引号适配，本次是另一种根因，保留旧结论。
+
+### 症状与影响
+
+新增 conditional_delta_full_fallback_corruption_locks_and_interruption_over_quic 回归首次使用 PROPFIND 取得的当前版本上传时，TD-SIGNATURE 返回 412，未进入 PATCH，也未修改原文件。
+
+### 触发条件与复现
+
+在临时共享根创建合成二进制文件，通过真实本机 QUIC 的 WebDAV 网关查询 ETag，然后进行 Auto 条件上传；首轮稳定拒绝。
+
+### 根因与证据
+
+dav-server 0.11 的 DavPath::from_uri 只复制 URI 字节，不执行 URL 解码；扩展误以为其与普通 DAV 处理路径一致。合成中文路径被当作含 %XX 的磁盘文件名，delta_base 返回 NotFound，映射为 412。普通 DAV 使用规范化/解码路径构造；不是文件 ETag 本身过期。已查阅本机锁定依赖源码确认这一差异。
+
+### 解决办法与恢复操作
+
+扩展改用 DavPath::new(request.uri().path())，与 DAV 的 URL 路径规范化保持一致；继续使用相同 capability 与普通文件检查。没有用户数据恢复操作。
+
+### 验证结果与边界
+
+Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项默认测试与严格 Clippy/格式通过；7 项根 FUSE 和 1 项 peer 更新进程测试仍默认忽略。另显式通过独立 dev 的真实隔离 FUSE 冒烟，包含已有大文件修改、持久上传、新目录与移动/删除。
+
+同一中文路径 QUIC 回归在修复前失败（TD-SIGNATURE 412），修复后通过。分块编码/校验回归、真实本机加密 QUIC 的增量/强制全量/冲突/损坏/超限/中断/锁/取消检查通过，旧 DAV 的条件全量回退通过。两进程 smoke 的合成 PDF/DOCX/PPTX 均逐字节校验并验证强制全量；自动差分的补丁加签名约为原文件 2.4%/3.5%/3.6%，仅代表这些合成样例。Windows 原生 CI 待完成，真实异地 NAT 和真实编辑器保存未验证。
+
+### 防复发措施与后续
+
+保留中文路径、当前/旧版本、完整回退、损坏补丁、中断与 DAV 锁的组合回归；测试与文档明确字节增量和元数据轮询的区别。详见[增量协议与验证边界](peer-delta-upload.md)。
+
+### 交付记录
+
+尚未提交或发布，详见本轮新增 delta_upload.rs。
+
+
 ## TD-20261021-16: hosted tray fixture failed one foreground transfer
 
 - Date: 2026-10-21; status: original failure retained; one unchanged-source failed-job rerun passed. Exact cause remains unconfirmed.
