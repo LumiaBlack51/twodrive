@@ -73,7 +73,7 @@
 
 ### 验证结果与边界
 
-原固定状态断言实际失败（502 != 413）。拆分后的真实本机 QUIC 回归通过：头部超限仍为 413；8 次活动 body 发送中拒绝结果含 413/502，所有原内容保持不变，正常 PATCH 和后续锁/取消回归通过。另一个刻意截断 body 的用例产生 Hyper body-write-aborted，明确与超限 STOP_SENDING 区分。未执行抓包、所有 QUIC/HTTP 早拒绝组合或真实异地链路验证；Windows 原生 CI 待完成。
+原固定状态断言实际失败（502 != 413）。拆分后的真实本机 QUIC 回归通过：头部超限仍为 413；8 次活动 body 发送中拒绝结果含 413/502，所有原内容保持不变，正常 PATCH 和后续锁/取消回归通过。另一个刻意截断 body 的用例产生 Hyper body-write-aborted，明确与超限 STOP_SENDING 区分。未执行抓包、所有 QUIC/HTTP 早拒绝组合或真实异地链路验证；Windows 原生组合回归也已通过（见 TD-20261029-01 的 CI 链接）。
 
 ### 防复发措施与后续
 
@@ -81,13 +81,13 @@
 
 ### 交付记录
 
-初始实现：[fff7c59](https://github.com/LumiaBlack51/twodrive/commit/fff7c59)。本条验证边界修正待提交；没有发布。
+初始实现：[fff7c59](https://github.com/LumiaBlack51/twodrive/commit/fff7c59)；验证修正：[4fb5b25](https://github.com/LumiaBlack51/twodrive/commit/4fb5b25)，随 [PR #48](https://github.com/LumiaBlack51/twodrive/pull/48) 交付。该运行时代码的原生 Linux/Windows 结果见下一条；没有发布 Release。
 
 
 ## TD-20261029-01：增量扩展把 Unicode URL 当作未解码磁盘路径
 
 - 日期：2026-10-29（Asia/Shanghai）
-- 状态：已验证 Linux 分块、真实本机 QUIC 与合成文档；Windows 原生 CI 待完成
+- 状态：已验证 Linux/Windows 原生分块、真实本机 QUIC 与合成文档；异地 NAT/真实编辑器保存未验证
 - 影响版本与环境：本轮未提交的 twodrive-dev 0.1.7 增量扩展；Linux 临时目录和本机真实 QUIC。未发布或安装。
 - 关联历史故障：TD-20261006-03 是裸 ETag 引号适配，本次是另一种根因，保留旧结论。
 
@@ -111,7 +111,7 @@ dav-server 0.11 的 DavPath::from_uri 只复制 URI 字节，不执行 URL 解�
 
 Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项默认测试与严格 Clippy/格式通过；7 项根 FUSE 和 1 项 peer 更新进程测试仍默认忽略。另显式通过独立 dev 的真实隔离 FUSE 冒烟，包含已有大文件修改、持久上传、新目录与移动/删除。
 
-同一中文路径 QUIC 回归在修复前失败（TD-SIGNATURE 412），修复后通过。分块编码/校验回归、真实本机加密 QUIC 的增量/强制全量/冲突/损坏/超限/中断/锁/取消检查通过，旧 DAV 的条件全量回退通过。两进程 smoke 的合成 PDF/DOCX/PPTX 均逐字节校验并验证强制全量；自动差分的补丁加签名约为原文件 2.4%/3.5%/3.6%，仅代表这些合成样例。Windows 原生 CI 待完成，真实异地 NAT 和真实编辑器保存未验证。
+同一中文路径 QUIC 回归在修复前失败（TD-SIGNATURE 412），修复后通过。分块编码/校验回归、真实本机加密 QUIC 的增量/强制全量/冲突/损坏/超限/中断/锁/取消检查通过，旧 DAV 的条件全量回退通过。两进程 smoke 的合成 PDF/DOCX/PPTX 均逐字节校验并验证强制全量；自动差分的补丁加签名约为原文件 2.4%/3.5%/3.6%，仅代表这些合成样例。同一运行时代码 4fb5b25 的 Linux 84 项、Windows 81 项原生默认测试、严格 Clippy/格式、release 构建、文档 delta/full 两进程冒烟和签名控制冒烟全部通过，见下方真实 CI。真实异地 NAT 和真实编辑器保存未验证。
 
 ### 防复发措施与后续
 
@@ -119,7 +119,7 @@ Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项�
 
 ### 交付记录
 
-初始实现提交 fff7c59 已存在；该提交的后续超限用例曾暴露上述客户端 BrokenPipe，验证边界随修正一起提交。尚未发布，原生 CI 与最终 dev 合并待补充。
+初始实现：[fff7c59](https://github.com/LumiaBlack51/twodrive/commit/fff7c59)，验证边界修正及本轮已验证的最终运行时代码：[4fb5b25](https://github.com/LumiaBlack51/twodrive/commit/4fb5b25ffeb0406b05fc1161b7f85bfb90e595a3)。[原生 Linux CI](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401817) 和[原生 Windows CI](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401486) 均成功，日志已核实测试数及 PDF/DOCX/PPTX 增量/全量逐字节结果。代码与记录由指向 dev 的 [PR #48](https://github.com/LumiaBlack51/twodrive/pull/48) 交付；本记录后续只补验证证据，不改运行时代码/锁文件。未创建 Release，也未安装或替换现用程序。
 
 
 ## TD-20261021-16: hosted tray fixture failed one foreground transfer

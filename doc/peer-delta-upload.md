@@ -121,3 +121,17 @@ production accounts and power-loss behavior remain separate acceptance scopes.
 
 Related development fault and before/after evidence:
 [TD-20261029-01](incidents.md#td-20261029-01增量扩展把-unicode-url-当作未解码磁盘路径).
+
+## Verified native build
+
+Runtime/test source [4fb5b25](https://github.com/LumiaBlack51/twodrive/commit/4fb5b25ffeb0406b05fc1161b7f85bfb90e595a3),
+[PR #48 targeting dev](https://github.com/LumiaBlack51/twodrive/pull/48):
+[Linux job](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401817)
+passed 84 default tests and the release two-process document/control smoke;
+[Windows job](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401486)
+passed 81 default tests and the same release smoke. Both passed strict formatting
+and Clippy. For these synthetic ~788 KiB fixtures, patch plus signature was about
+2.4% (PDF), 3.5% (DOCX), and 3.6% (PPTX); these ratios do not predict other files or
+real editor saves. Separate local Linux FUSE smoke also compared an existing-file
+edit and subsequent create/save/move/delete against the exported directory.
+Later documentation-only commits preserve this verified runtime and test source.
