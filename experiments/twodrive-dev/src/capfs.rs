@@ -46,6 +46,28 @@ fn blocking<'a, T: Send + 'a>(action: impl FnOnce() -> FsResult<T> + Send + 'a) 
 }
 
 impl CapFs {
+    /// Same capability/path/type checks as DAV reads. Never open a FIFO or a
+    /// path outside the exported directory to build a signature or copy data.
+    pub(crate) fn delta_base(&self, dav: &DavPath) -> FsResult<(cap_std::fs::File, String)> {
+        let destination = path(dav)?;
+        if !self.0.metadata(&destination).map_err(error)?.is_file() {
+            return Err(FsError::Forbidden);
+        }
+        let mut options = CapOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let file = self.0.open_with(destination, &options).map_err(error)?;
+        let meta = Meta(file.metadata().map_err(error)?);
+        if !meta.0.is_file() {
+            return Err(FsError::Forbidden);
+        }
+        let etag = meta.etag().ok_or(FsError::GeneralFailure)?;
+        Ok((file, format!("\"{etag}\"")))
+    }
     pub fn new(root: &Path) -> anyhow::Result<Self> {
         Ok(Self(Arc::new(Dir::open_ambient_dir(
             root,

@@ -15,16 +15,22 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use twodrive_dev::{profile::Profile, provider::Backend, state::State, webdav::WebDavBackend};
+use twodrive_dev::{
+    profile::Profile,
+    provider::Backend,
+    state::State,
+    webdav::{UploadMode, WebDavBackend},
+};
 pub fn descriptor() -> Value {
     json!({"id":"peer","label":"PC / NAS（设备共享）","account_label":"远程设备","icon":"devices",
     "identity_fields":["peer_state"],"protected_paths":["peer_state"],
-    "help":"扫描局域网中的 TwoDrive 设备，或直接导入可信的配对邀请。跨网络通过 QUIC/UDP 打洞连接，直连失败时可使用加密中继。普通 NAS 也可以选择 WebDAV。",
+    "help":"扫描局域网中的 TwoDrive 设备，或直接导入可信的配对邀请。跨网络加密连接。修改已有文件时自动仅传输变化的内容，必要时使用整文件上传。普通 NAS 也可以选择 WebDAV。",
     "actions":[{"id":"discover","label":"发现局域网设备"},{"id":"import","label":"导入连接文件","input":"file"}],
     "capabilities":{"upload":true,"conditional_upload":true,"mkdir":true,"rename":true,"delete":true,"backup":true},
     "fields":[{"key":"invitation_file","label":"配对邀请 JSON（首次连接需要）","type":"file","transient":true},
       {"key":"expected_device","label":"已选择的设备身份","advanced":true,"read_only":true},
-      {"key":"peer_state","label":"本机配对目录（留空自动创建）","advanced":true}]})
+      {"key":"peer_state","label":"本机配对目录（留空自动创建）","advanced":true},
+      {"key":"full_upload","label":"始终整文件上传","type":"boolean","advanced":true}]})
 }
 pub fn prepare(p: &mut Profile, state: &State) -> anyhow::Result<()> {
     if p.option("peer_state").is_empty() {
@@ -124,12 +130,15 @@ pub fn action(action: &str, args: &Value, cancel: &AtomicBool) -> anyhow::Result
 }
 fn backend(p: &Profile, url: &str) -> anyhow::Result<Backend> {
     let credentials = State::new(p.option("peer_state").into())?.read("credentials.json")?;
-    Ok(Backend::new(WebDavBackend::routed(
-        url,
-        Some(credentials),
-        p.writable,
-        "direct",
-    )?))
+    Ok(Backend::new(
+        WebDavBackend::routed(url, Some(credentials), p.writable, "direct")?.with_upload_mode(
+            if p.options.get("full_upload").is_some_and(|v| v == true) {
+                UploadMode::Full
+            } else {
+                UploadMode::Auto
+            },
+        ),
+    ))
 }
 pub fn restore(p: &Profile, recipe: &Value) -> anyhow::Result<Backend> {
     backend(

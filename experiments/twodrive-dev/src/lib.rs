@@ -1,4 +1,6 @@
 pub mod capfs;
+pub mod delta;
+mod delta_http;
 pub mod discovery;
 pub mod google;
 pub mod local_files;

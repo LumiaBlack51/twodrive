@@ -618,3 +618,44 @@ fn malicious_dav_metadata_is_rejected_without_false_deletions() {
     );
     server.join().unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delta_auto_falls_back_to_conditional_full_put_on_legacy_dav() {
+    use std::sync::Arc;
+    use twodrive_dev::webdav::{UploadKind, UploadMode};
+    // local_webdav deliberately has no peer delta extension (an older server).
+    let fixture = Fixture::local(true, 8 * 1024 * 1024).await;
+    let backend = fixture.backend.clone();
+    let source = fixture._temp.path().join("source.bin");
+    tokio::task::spawn_blocking(move || {
+        let mut content = vec![23; 2 * 1024 * 1024];
+        let original = backend.upload("/legacy.docx", content.clone()).unwrap();
+        content[500000] = 42;
+        fs::write(&source, &content).unwrap();
+        let outcome = backend
+            .upload_controlled_with_mode(
+                "/legacy.docx",
+                &source,
+                Some(&original.etag),
+                UploadMode::Auto,
+                Arc::new(|_, _| Ok(())),
+            )
+            .unwrap();
+        assert_eq!(outcome.kind, UploadKind::Full);
+        assert_eq!(outcome.uploaded_bytes, content.len() as u64);
+        assert_eq!(backend.download("/legacy.docx").unwrap(), content);
+        assert!(
+            backend
+                .upload_controlled_with_mode(
+                    "/legacy.docx",
+                    &source,
+                    Some(&original.etag),
+                    UploadMode::Auto,
+                    Arc::new(|_, _| Ok(()))
+                )
+                .is_err()
+        );
+    })
+    .await
+    .unwrap();
+}
