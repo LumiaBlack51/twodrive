@@ -48,7 +48,9 @@ impl Database {
                 is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, local_mode)
              VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 'cached', ?9, ?10, ?11)
              ON CONFLICT(remote_id) DO UPDATE SET
-                path = excluded.path, parent_path = excluded.parent_path, name = excluded.name,
+                -- This ID may have been imported and renamed while the PUT
+                -- acknowledgement was in flight. Attach its bytes without
+                -- rolling back the copy's current name or ancestor moves.
                 size = excluded.size, modified_unix = excluded.modified_unix, etag = excluded.etag,
                 state = CASE WHEN files.pin_explicit = 1 OR files.pin_origin_remote_id IS NOT NULL
                     THEN 'pinned' ELSE 'cached' END,
@@ -65,13 +67,12 @@ impl Database {
         );
         tx.execute(
             "DELETE FROM files WHERE remote_id = ?1 AND state = 'conflict'
-               AND path = ?2 AND cache_path IS ?3 AND cloud_remote_id IS ?4
-               AND size = ?5 AND modified_unix = ?6 AND etag = ?7
-               AND upload_path = ?8 AND upload_cache_path IS ?3 AND upload_target_id IS NULL
+               AND cache_path IS ?2 AND cloud_remote_id IS ?3
+               AND size = ?4 AND modified_unix = ?5 AND etag = ?6
+               AND upload_path = ?7 AND upload_cache_path IS ?2 AND upload_target_id IS NULL
                AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations WHERE local_id = ?1)",
             params![
                 original.metadata.remote_id,
-                original.metadata.path,
                 cache_path.to_string_lossy(),
                 original.cloud_remote_id,
                 original.metadata.size as i64,

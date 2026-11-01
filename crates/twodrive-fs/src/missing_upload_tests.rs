@@ -79,7 +79,26 @@ impl CloudBackend for Backend {
             anyhow::bail!("unsupported OneDrive file name");
         }
         self.rename_requests.lock().unwrap().push(path.into());
-        self.inner.rename(id, path)
+        // The shared MockBackend renames one metadata row. Model the cloud's
+        // directory move semantics here so ancestor-race assertions include
+        // descendants at their actual destination, not only the local index.
+        let original = self.inner.get_metadata(id)?.unwrap();
+        let descendants = if original.is_dir {
+            self.inner
+                .list_all()?
+                .into_iter()
+                .filter(|entry| entry.path.starts_with(&format!("{}/", original.path)))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+        let renamed = self.inner.rename(id, path)?;
+        for entry in descendants {
+            let suffix = entry.path.strip_prefix(&original.path).unwrap();
+            self.inner
+                .rename(&entry.remote_id, &format!("{path}{suffix}"))?;
+        }
+        Ok(renamed)
     }
     fn delete(&self, id: &str) -> anyhow::Result<()> {
         self.inner.delete(id)
@@ -661,6 +680,114 @@ fn failed_missing_target_copy_is_durable_and_can_finish_after_restart() {
     test.backend.fail_copy = false;
     assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 1);
     test.check_copy();
+    assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 0);
+}
+
+fn check_renamed_recovery(test: &Test, destination: &str, moves: usize) {
+    assert_eq!(recover_dirty_uploads(&test.db, &test.backend).unwrap(), 1);
+    let copy = test
+        .db
+        .get_by_path(destination)
+        .unwrap()
+        .expect("upload acknowledgement reverted the recovery copy's local rename");
+    assert_eq!(copy.state, FileState::Cached);
+    assert_eq!(std::fs::read(copy.cache_path.unwrap()).unwrap(), EDIT);
+    assert!(test.db.get_by_remote_id(LOCAL).unwrap().is_none());
+    let reopened = Database::new(test.db.path());
+    reopened.init().unwrap();
+    assert_eq!(
+        crate::recover_pending_metadata_operations(&reopened, &test.backend).unwrap(),
+        moves
+    );
+    assert!(reopened.pending_metadata_operations().unwrap().is_empty());
+    let remote = test
+        .backend
+        .get_metadata_by_path(destination)
+        .unwrap()
+        .unwrap();
+    assert_eq!(test.backend.download(&remote.remote_id).unwrap(), EDIT);
+    assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 0);
+}
+
+#[test]
+fn recovery_copy_rename_before_ack_survives_completion_and_restart() {
+    let test = Test::new("dot-copy-rename");
+    test.backend.delete(CLOUD).unwrap();
+    let db = test.db.clone();
+    *test.backend.on_ack.lock().unwrap() = Some(Box::new(move |uploaded| {
+        db.upsert_metadata(&uploaded).unwrap();
+        db.move_subtree_and_queue(&uploaded.remote_id, "/kept-recovery.txt")
+            .unwrap();
+    }));
+    check_renamed_recovery(&test, "/kept-recovery.txt", 1);
+}
+
+#[test]
+fn recovery_copy_and_ancestor_moves_before_ack_keep_both_pending_destinations() {
+    let test = Test::new("dot-copy-ancestor");
+    test.db
+        .upsert_metadata(&test.backend.get_metadata("dir-documents").unwrap().unwrap())
+        .unwrap();
+    test.backend.delete(CLOUD).unwrap();
+    let db = test.db.clone();
+    *test.backend.on_ack.lock().unwrap() = Some(Box::new(move |uploaded| {
+        db.upsert_metadata(&uploaded).unwrap();
+        db.move_subtree_and_queue(&uploaded.remote_id, "/Documents/kept-recovery.txt")
+            .unwrap();
+        db.move_subtree_and_queue("dir-documents", "/Moved Documents")
+            .unwrap();
+    }));
+    check_renamed_recovery(&test, "/Moved Documents/kept-recovery.txt", 2);
+}
+
+#[test]
+fn recovery_copy_shared_parent_move_before_ack_retires_only_the_matching_generation() {
+    let test = Test::new("dot-shared-parent");
+    test.db
+        .upsert_metadata(&test.backend.get_metadata("dir-documents").unwrap().unwrap())
+        .unwrap();
+    test.db
+        .move_subtree_and_queue(LOCAL, "/Documents/source.txt")
+        .unwrap();
+    assert_eq!(
+        crate::recover_pending_metadata_operations(&test.db, &test.backend).unwrap(),
+        1
+    );
+    test.backend.delete(CLOUD).unwrap();
+    let db = test.db.clone();
+    let destination = std::sync::Arc::new(Mutex::new(None));
+    let destination_copy = std::sync::Arc::clone(&destination);
+    *test.backend.on_ack.lock().unwrap() = Some(Box::new(move |uploaded| {
+        db.upsert_metadata(&uploaded).unwrap();
+        db.move_subtree_and_queue("dir-documents", "/Moved Documents")
+            .unwrap();
+        *destination_copy.lock().unwrap() = Some(format!("/Moved Documents/{}", uploaded.name));
+    }));
+    assert_eq!(recover_dirty_uploads(&test.db, &test.backend).unwrap(), 1);
+    let destination = destination.lock().unwrap().clone().unwrap();
+    let copy = test
+        .db
+        .get_by_path(&destination)
+        .unwrap()
+        .expect("completion reverted a pending parent move");
+    assert_eq!(copy.state, FileState::Cached);
+    assert!(
+        test.db.get_by_remote_id(LOCAL).unwrap().is_none(),
+        "parent move left the already-preserved old generation queued forever"
+    );
+    let reopened = Database::new(test.db.path());
+    reopened.init().unwrap();
+    assert_eq!(
+        crate::recover_pending_metadata_operations(&reopened, &test.backend).unwrap(),
+        1
+    );
+    assert!(reopened.pending_metadata_operations().unwrap().is_empty());
+    let remote = test
+        .backend
+        .get_metadata_by_path(&destination)
+        .unwrap()
+        .unwrap();
+    assert_eq!(test.backend.download(&remote.remote_id).unwrap(), EDIT);
     assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 0);
 }
 
