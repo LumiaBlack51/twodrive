@@ -1,4 +1,4 @@
-twodrive (0.2.22-1) unstable; urgency=medium
+twodrive (0.2.23-1) unstable; urgency=medium
 
   * Apply known-folder exclusions to descendants, events and persisted uploads.
   * Persist upload results incrementally and migrate legacy JSON transactionally.
@@ -8,7 +8,18 @@ twodrive (0.2.22-1) unstable; urgency=medium
   * Resolve existing cloud directories and distinguish subsecond local saves.
   * Retain offline dpkg-buildpackage/debhelper source and binary builds.
 
- -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 18:12:43 +0800
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 18:48:27 +0800
+
+twodrive (0.2.22-1) unstable; urgency=medium
+
+  * Keep untouched writable opens clean and skip their release upload.
+  * Begin write state/activity only on write or truncation.
+  * Preserve pending states when opening without changing content.
+  * Guard delayed writes against a replaced cache or remote version.
+  * Cover inactive sibling handles and isolated FUSE open/write/close.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 18:30:00 +0800
 
 twodrive (0.2.21-1) unstable; urgency=medium
 
