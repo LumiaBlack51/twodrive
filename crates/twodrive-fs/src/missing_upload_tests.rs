@@ -796,7 +796,8 @@ fn recovery_copy_shared_parent_move_before_ack_retires_only_the_matching_generat
 #[ignore = "requires /dev/fuse and fusermount3; isolated mock mount only"]
 fn mounted_save_after_remote_deletion_preserves_edits_and_open_readers() {
     use std::{
-        io::Read,
+        io::{Read, Seek, SeekFrom},
+        os::unix::fs::MetadataExt,
         sync::Arc,
         time::{Duration, Instant},
     };
@@ -842,6 +843,41 @@ fn mounted_save_after_remote_deletion_preserves_edits_and_open_readers() {
     // the old database row must not invalidate that still-open descriptor.
     assert_eq!(old_bytes, new_edit);
     assert!(backend.get_metadata_by_path(ORIGINAL).unwrap().is_none());
+    // No directory scan: cached lookup/getattr must retire the old name too.
+    // Wait beyond the filesystem attribute TTL before querying the kernel.
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        !source.exists(),
+        "retired source remains visible after recovery"
+    );
+    assert_eq!(old_reader.metadata().unwrap().nlink(), 0);
+    assert_eq!(old_reader.metadata().unwrap().len(), new_edit.len() as u64);
+    // Recreating the name must create a separate inode/cache generation. An
+    // already-open reader continues to refer to the preserved older bytes.
+    let replacement = b"a new file at the original path";
+    std::fs::write(&source, replacement).unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), replacement);
+    assert_ne!(
+        source.metadata().unwrap().ino(),
+        old_reader.metadata().unwrap().ino()
+    );
+    old_reader.seek(SeekFrom::Start(0)).unwrap();
+    old_bytes.clear();
+    old_reader.read_to_end(&mut old_bytes).unwrap();
+    assert_eq!(old_bytes, new_edit);
+    assert_eq!(old_reader.metadata().unwrap().nlink(), 0);
+    assert_eq!(
+        std::fs::read(mount.join(&copy.metadata.name)).unwrap(),
+        new_edit
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while test.db.get_by_path(ORIGINAL).unwrap().unwrap().state != FileState::Cached {
+        assert!(
+            Instant::now() < deadline,
+            "replacement upload did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         recover_dirty_uploads(&test.db, backend.as_ref()).unwrap(),
         0

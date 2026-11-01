@@ -49,6 +49,45 @@
 
 
 
+## TD-20261101-05：恢复副本完成后原路径仍可见并显示同步失败
+
+- 日期：2026-11-01（Asia/Shanghai）
+- 状态：根因已定位，代码已修复；初步回归通过，完整交付验证中。
+- 影响版本与环境：本机 0.2.20；后台完成缺失云端对象的冲突副本保全后。
+- 关联历史故障：TD-20261101-01、TD-20261101-02；属于恢复完成后的 FUSE 命名空间遗漏，历史云端删除行为的执行者仍未确认。
+
+### 症状与影响
+
+用户报告原文件名仍显示同步失败。原路径的 status-path 为 unknown/error，数据库和真实云端只有已完成的恢复副本；原路径却仍能 stat/read。针对该文件读取的两份已缓存内容长度及 SHA-256 一致，未发现内容丢失。
+
+### 触发条件与复现
+
+后台完成 missing-target conflict recovery 并退休原数据库行后，不扫描目录，直接 stat/read 原文件名。新增隔离实际 FUSE 断言在 0.2.20 上稳定失败：`retired source remains visible after recovery`。另两个单元回归分别证明退休 inode 仍返回旧记录、不同身份复用相同路径时共享 inode。
+
+### 根因与证据
+
+lookup 优先使用内存路径；record_for_ino 只返回缓存记录，refresh_record 在数据库身份和路径均不存在时仍回退旧记录。后台事务已经移除原行，却不能同步更新挂载进程内的 InodeTable，getattr/lookup 因此持续成功，桌面查询数据库则得到 unknown/error。另 refresh_children/insert_or_update 仅凭路径复用 inode，可能把仍打开的旧身份与后来同名的新身份混在一起，旧 inode 更新/移除还会无条件删除新所有者的路径映射。
+
+### 解决办法与恢复操作
+
+按数据库身份解析现有 inode，不再以同名的另一个数据库身份刷新旧记录；lookup 优先选择现有路径所有者，拒绝已经退休的身份。保留仍在数据库中的、被 delta 移动的身份在目录刷新前支持幂等改名的兼容行为。开放描述符继续读取其原缓存，退休后 fstat 返回 nlink=0，并从已打开缓存取得当前大小。不同身份重用路径时分配不同 inode；移除旧路径映射必须仍拥有该映射，目录输出排除失去映射的旧项。
+
+本机恢复单独执行：核对无该文件的开放句柄、数据库原路径为空、真实云端原文件名不存在，两份缓存字节一致后，将已保全副本通过正常挂载改回用户指定的原文件名。未直接编辑 SQLite、没有覆盖另一个云端文件。完成后真实云端同一 ID 返回原名称、63870 字节和相同服务器内容校验值；本地 cached/synced，metadata_operation_pending=false。路径、ID、内容摘要和恢复快照仅保存在本机私有维护目录。
+
+### 验证结果与边界
+
+修复前：新增两个单元回归及增强的实际 FUSE 回归均失败。修复后 workspace 默认 Rust 测试 216 项通过、11 项依赖环境而忽略（其中 fs 72 项通过）；25 项 Nautilus、4 项 Settings 通过，格式、严格 Clippy 和 workspace 构建通过。全部 10 项显式 FUSE 回归通过（真实挂载、模拟云端），隔离 daemon smoke 待补充。进一步边缘断言发现初稿 fstat 使用打开时大小（40）而非修改后大小（35），已改为查询持有的缓存描述符；同时保留现有幂等云端移动回归要求。首次批量 FUSE 执行的一个失败来自未设置要求的 TWODRIVE_TEST_CLI，补齐构建后按测试说明重新执行，不将该前置条件失败计为产品通过。
+
+生产只执行用户授权的文件名恢复，未在真实 OneDrive 主动制造删除/上传竞争；FUSE 回归仍使用模拟云端，不能称为真实云端端到端竞争验证。
+
+### 防复发措施与后续
+
+保留 retired_inode_keeps_open_reader_without_aliasing_a_replacement、replaced_path_does_not_reuse_or_lose_the_new_owners_inode，以及增强的 mounted_save_after_remote_deletion_preserves_edits_and_open_readers：不扫描目录也不能重新查到已退休名称，旧读句柄 nlink/大小有效，同名重建与旧读句柄及恢复副本隔离。继续执行原子保存、云端先移动、释放取消下载等既有真实 FUSE 回归。
+
+### 交付记录
+
+提交、PR、Release 待补充；完整检查、Dot 意见、本机升级及本轮清理结果随交付更新。
+
 ## TD-20261101-04：收尾文档 PR 的 CI 状态读取再次 TCP 超时
 
 - 日期：2026-11-01（Asia/Shanghai）

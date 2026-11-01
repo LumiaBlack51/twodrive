@@ -34,14 +34,39 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         };
 
         let path = join_cloud_path(parent_path, name);
-        let ino = if let Some(ino) = self.inodes.ino_for_path(&path) {
-            ino
-        } else if let Ok(Some(record)) = self.db.get_by_path(&path) {
-            self.inodes.insert_or_update(record)
-        } else {
-            reply.error(libc::ENOENT);
-            return;
+        // Prefer the current path owner. A retired identity cannot recreate a
+        // name just because an open descriptor still has valid attributes.
+        let record = match self.db.get_by_path(&path) {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                // Keep the existing idempotent-rename seam for a live identity
+                // moved by delta before the caller submits its own rename.
+                // Directory refresh removes that temporary old-name alias.
+                if let Some(ino) = self.inodes.ino_for_path(&path)
+                    && self.record_for_ino(ino).is_some()
+                    && let Some(attr) = self.attr_for_ino(ino)
+                {
+                    reply.entry(&attribute_ttl(&attr), &attr, 0);
+                    return;
+                }
+                reply.error(libc::ENOENT);
+                return;
+            }
+            Err(err) => {
+                eprintln!("twodrive lookup error: {err:#}");
+                reply.error(libc::EIO);
+                return;
+            }
         };
+        let ino = self
+            .inodes
+            .ino_for_path(&path)
+            .filter(|ino| {
+                self.inodes
+                    .record_for_ino(*ino)
+                    .is_some_and(|cached| cached.metadata.remote_id == record.metadata.remote_id)
+            })
+            .unwrap_or_else(|| self.inodes.insert_or_update(record));
 
         match self.attr_for_ino(ino) {
             Some(attr) => reply.entry(&attribute_ttl(&attr), &attr, 0),

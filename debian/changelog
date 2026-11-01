@@ -1,3 +1,14 @@
+twodrive (0.2.21-1) unstable; urgency=medium
+
+  * Retire stale FUSE paths after background conflict recovery.
+  * Keep open descriptors valid without reviving removed directory entries.
+  * Allocate separate inodes when different local identities reuse a path.
+  * Preserve replacement path ownership during stale inode updates/removal.
+  * Cover cached lookups, open-reader sizes and recreated-name isolation.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 15:30:00 +0800
+
 twodrive (0.2.20-1) unstable; urgency=medium
 
   * Coalesce exact clean delta echoes before binding renamed initial uploads.
