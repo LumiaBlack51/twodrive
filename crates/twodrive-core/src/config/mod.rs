@@ -40,6 +40,11 @@ pub struct KnownFoldersConfig {
     pub rescan_interval: String,
     pub startup_scan: bool,
     pub upload_deletes: bool,
+    pub exclude_names: Vec<String>,
+    pub upload_rate_window: String,
+    pub max_file_uploads_per_window: u32,
+    pub max_project_uploads_per_window: u32,
+    pub upload_rate_roots: Vec<String>,
     pub exclude_suffixes: Vec<String>,
     pub folders: Vec<KnownFolderConfig>,
 }
@@ -82,6 +87,11 @@ impl Default for KnownFoldersConfig {
             rescan_interval: "15m".to_string(),
             startup_scan: true,
             upload_deletes: false,
+            exclude_names: vec!["node_modules".to_string()],
+            upload_rate_window: "20s".to_string(),
+            max_file_uploads_per_window: 25,
+            max_project_uploads_per_window: 180,
+            upload_rate_roots: Vec::new(),
             exclude_suffixes: vec![
                 ".crdownload".to_string(),
                 ".part".to_string(),
@@ -151,5 +161,10 @@ impl Config {
     pub fn known_folder_rescan_seconds(&self) -> anyhow::Result<u64> {
         parse_duration_seconds(&self.known_folders.rescan_interval)
             .map(|value| if value <= 0 { 0 } else { value.max(30) as u64 })
+    }
+
+    pub fn known_folder_upload_rate_seconds(&self) -> anyhow::Result<u64> {
+        parse_duration_seconds(&self.known_folders.upload_rate_window)
+            .map(|value| value.max(1) as u64)
     }
 }
