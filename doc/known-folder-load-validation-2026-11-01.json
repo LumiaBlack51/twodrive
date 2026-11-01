@@ -1,0 +1,256 @@
+{
+  "date": "2026-11-01",
+  "timezone": "Asia/Shanghai",
+  "version": "0.2.23-1",
+  "source_commit": "ecbaf0ec0fceccc147d89127cbe5c3f425120ff3",
+  "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/56",
+  "incident_ids": [
+    "TD-20261101-09",
+    "TD-20261101-10",
+    "TD-20261101-11",
+    "TD-20261101-12",
+    "TD-20261101-13"
+  ],
+  "observations": {
+    "legacy_state_bytes": 20471497,
+    "tracked_snapshots": 12802,
+    "pending_uploads": 52783,
+    "pending_under_dependency_directory": 52772,
+    "state_rewritten_within_seconds": 3,
+    "observed_hot_thread_cpu_seconds_in_4s": 1.04,
+    "original_cpu_call_stack_sampled": false
+  },
+  "local_mitigation": {
+    "canceled_original_project_jobs": 51280,
+    "canceled_recreated_project_jobs": 17,
+    "source_files_deleted": false,
+    "cloud_copies_deleted": false,
+    "queue_after_pause": 0,
+    "daemon_cpu_percent_during_4s_after_pause": 0.0,
+    "optional_known_folder_uploads_temporarily_paused": false,
+    "private_backup_retained": true,
+    "resumed_after_verified_0.2.23_installation": true
+  },
+  "behavior": {
+    "debounce_seconds": 5,
+    "maximum_debounce_wait_seconds": 30,
+    "sliding_window_seconds": 20,
+    "file_changed_generations_limit": 25,
+    "hot_project_repeated_changes_limit": 180,
+    "stable_first_uploads_exempt": true,
+    "ordinary_first_edits_exempt_from_project_budget": true,
+    "admitted_generation_network_retries_exempt": true,
+    "batch_size_cap_added": false,
+    "configured_concurrency_reduced": false,
+    "durable_deferral_retries_latest_source": true,
+    "project_filesystem_discovery_only_after_churn_threshold": true,
+    "maximum_project_search_depth": 8,
+    "maximum_cold_project_searches_per_window": 8,
+    "maximum_project_marker_metadata_probes_per_window": 512,
+    "positive_and_negative_cache_seconds": 20,
+    "normal_project_metadata_probes": 0,
+    "explicit_and_automatic_nested_projects_isolated": true,
+    "watcher_payload_capacity": 1024,
+    "watcher_overflow_recovers_via_filtered_scan": true,
+    "incremental_result_rows_changed_beside_1000_unrelated_snapshots": 2,
+    "legacy_snapshot_retained_unchanged": true
+  },
+  "verification": {
+    "workspace_rust_passed": 234,
+    "workspace_environment_dependent_ignored": 12,
+    "daemon_tests_passed": 22,
+    "nautilus_tests_passed": 25,
+    "settings_tests_passed": 4,
+    "package_lock_tests_passed": 2,
+    "release_guard_tests_passed": 6,
+    "workspace_format_passed": true,
+    "strict_workspace_clippy_passed_before_review_fixes": true,
+    "strict_daemon_clippy_passed_after_review_fixes": true,
+    "pre_fix_production_regressions_failed": 4,
+    "explicit_nested_regression_failed_before_fix": true,
+    "automatic_nested_regression_failed_before_fix": true,
+    "project_detection_positive_negative_cache_queries": 1000,
+    "cold_discovery_budget_unknown_parent_queries": 1000,
+    "genuine_power_measurement_performed": false,
+    "power_loss_test_performed": false,
+    "live_onedrive_synthetic_write_test_performed": false,
+    "integrated_workspace_strict_clippy_passed": true,
+    "final_package_actual_mock_fuse_smoke_passed": true,
+    "source_offline_metadata_with_empty_cargo_home_passed": true,
+    "vendor_files_checked": 16043,
+    "upstream_git_archive_files_checked": 310,
+    "final_integrated_workspace_strict_clippy_passed": true
+  },
+  "review": {
+    "latest_reviewed_commit": "ecbaf0ec0fceccc147d89127cbe5c3f425120ff3",
+    "dot_recommendation": "merge after required CI passes",
+    "review_execution": "static source review; tests executed separately by implementation workflow",
+    "confirmed_findings_fixed": [
+      "explicit nested project identity",
+      "automatic nested project identity"
+    ],
+    "integrated_base_reviewed": "a1cb928bf917bf6781e2e69b209d6a8f07ab162b",
+    "all_findings_verified_with_regressions": true
+  },
+  "ci": {
+    "native_run": 41299224533,
+    "debian_package_run": 41299224543,
+    "policy_run": 41299224541,
+    "all_eight_pr_checks_passed": true,
+    "linux_ci_explicit_writable_open_fuse_regression_passed": true,
+    "artifact_digest_reported_by_github": "sha256:680417a6757daee55296b659fa10730db3d2f926a21b4aa13864eb91b1c2ee0e"
+  },
+  "release": {
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.23-1",
+    "tag": "v0.2.23-1",
+    "source_commit": "ecbaf0ec0fceccc147d89127cbe5c3f425120ff3",
+    "main_merge_commit": "83ec23bc4f4a0fc067c5fe739aad2e6873112e95",
+    "published_at": "2026-11-01T11:19:29Z",
+    "channel": "stable",
+    "asset_count": 11,
+    "guard_verified_before_and_after_publication": true,
+    "artifacts": [
+      {
+        "name": "SHA256SUMS",
+        "bytes": 960,
+        "sha256": "d4b9c6165ae923f7d896af903df58eff18089b2c96539fc4706d6df07c81c52d"
+      },
+      {
+        "name": "twodrive-dbgsym_0.2.23-1_amd64.ddeb",
+        "bytes": 41424814,
+        "sha256": "cf9c07db57829f972a0fab263d8bd9f4164c48cd1f5640f8dcb0b3c53116dc0e"
+      },
+      {
+        "name": "twodrive_0.2.23-1.debian.tar.xz",
+        "bytes": 47484,
+        "sha256": "5dc457a3022f4fc0287b6fd5455f42439625daccc02c8575b7c29451a9e57752"
+      },
+      {
+        "name": "twodrive_0.2.23-1.dsc",
+        "bytes": 1428,
+        "sha256": "15f9441599d5c1e0736dd2839f24f1a79bf8e75750436b2ad8c76159a667734f"
+      },
+      {
+        "name": "twodrive_0.2.23-1_amd64.buildinfo",
+        "bytes": 13170,
+        "sha256": "bae8564f2bb6befa02ae94bf7cc8eaa71f9d5982065343734a0dea3a3ab91426"
+      },
+      {
+        "name": "twodrive_0.2.23-1_amd64.changes",
+        "bytes": 2952,
+        "sha256": "d9d4320e810a233406ced0dc43ad0831318d1e3d9e1d7f3220aa3da6f9875330"
+      },
+      {
+        "name": "twodrive_0.2.23-1_amd64.deb",
+        "bytes": 2895146,
+        "sha256": "2bb084a3483b8d7dc96ccff0a2e488ace19a4111f12fe89c893bc671ee3ddaff"
+      },
+      {
+        "name": "twodrive_0.2.23-1_amd64.deb.sha256",
+        "bytes": 94,
+        "sha256": "37de2b34c11e036dd7bc67a910c50a41ea1fedd32a5edad2d31502dac5ec954e"
+      },
+      {
+        "name": "twodrive_0.2.23.orig-vendor.tar.xz",
+        "bytes": 33588316,
+        "sha256": "1a763973df544370905a0810dd195adcdfd3cc76b7d19a0ef14d67eda8405673"
+      },
+      {
+        "name": "twodrive_0.2.23.orig.tar.xz",
+        "bytes": 1670436,
+        "sha256": "933b2f4b222eb8385ba1b2bcc0e971e0529405a176d0c0285484598f5fa6eb62"
+      },
+      {
+        "name": "verification.json",
+        "bytes": 2458,
+        "sha256": "9d9a4ab190abb8ebe1c26416b31d71d936edd5189419677c0bd5ca6f6d1efffc"
+      }
+    ],
+    "package_validation": {
+      "manifest_member_counts": {
+        "twodrive_0.2.23-1.dsc": 3,
+        "twodrive_0.2.23-1_amd64.buildinfo": 3,
+        "twodrive_0.2.23-1_amd64.changes": 7
+      },
+      "all_sha256_and_sizes_verified": true,
+      "upstream_files_equal_verified_git_archive": 310,
+      "source_commit": "ecbaf0ec0fceccc147d89127cbe5c3f425120ff3",
+      "binaries_sha256": {
+        "twodrive": "3cd552fe1c4bf2313b4560b2117709b7912ee8be5e5375086927e68d650baf98",
+        "twodrive-daemon": "1caf25d4e59696d5c896009edad0f25d5401ffa548b415a61efdb63a91a7397d"
+      },
+      "lintian_log": "W: twodrive: debian-changelog-line-too-long [usr/share/doc/twodrive/changelog.Debian.gz:4]\nW: twodrive source: newer-standards-version 4.7.4 (current is 4.6.2)\n"
+    },
+    "vendor_files_checked": 16043,
+    "final_package_isolated_mock_fuse_smoke_passed": true,
+    "source_offline_metadata_passed": true,
+    "unsigned_project_artifacts": true
+  },
+  "local_installation": {
+    "validation": {
+      "version": "0.2.23",
+      "mount_present": true,
+      "new_known_folder_store_integrity": "ok",
+      "main_database_integrity": "ok",
+      "known_folder_uploads_resumed": true,
+      "legacy_snapshot_retained": true,
+      "snapshots": 14486,
+      "pending_total": 0,
+      "excluded_project_pending_before": 0,
+      "excluded_project_pending_after": 0,
+      "dependency_pending": 0,
+      "cpu_percent_samples_4s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "window_seconds": 20,
+      "file_limit": 25,
+      "project_limit": 180,
+      "debounce_seconds": 5,
+      "rollback_version": "0.2.22",
+      "rollback_matches_published_package": true,
+      "source_files_or_cloud_copies_deleted": false
+    },
+    "daemon_sha256": "1caf25d4e59696d5c896009edad0f25d5401ffa548b415a61efdb63a91a7397d",
+    "cli_sha256": "3cd552fe1c4bf2313b4560b2117709b7912ee8be5e5375086927e68d650baf98",
+    "running_daemon_and_cli_match_release_payload": true,
+    "private_minimal_rollback_backup_version": "0.2.22",
+    "private_backup_includes_no_recursive_cache_or_history_copy": true,
+    "original_user_worktree_not_modified_by_this_task": true,
+    "configuration_preserved_except_authorized_exclusion_rate_and_resume_fields": true
+  },
+  "cleanup": {
+    "own_build_and_release_cache_logical_bytes_removed": 1847604964,
+    "own_test_container_writable_bytes_removed": 108675072,
+    "test_container_removed": true,
+    "failed_test_directories_removed": 4,
+    "generated_bytecode_directories_removed": 2,
+    "one_time_upgrade_script_removed": true,
+    "temporary_log_removal": "completed before final delivery",
+    "shared_ubuntu_base_image_retained": true,
+    "other_tasks_worktrees_and_caches_preserved": true,
+    "private_recovery_state_and_verified_rollback_retained": true
+  },
+  "limits": [
+    "Mock backend tests are not genuine OneDrive end-to-end verification.",
+    "No historical CPU call stack establishes the exclusive CPU hotspot.",
+    "Metadata snapshots do not provide content-hash identity on filesystems with insufficient timestamp precision.",
+    "Project identity caches and rate histories reset on daemon restart.",
+    "When bounded project discovery cannot identify a root, file protection remains active without inferring an ancestor project.",
+    "Observed runtime CPU samples cover three 4-second intervals after restart, not every workload or a long-duration power test."
+  ],
+  "previous_candidate_source": "20d8bee23e64a5c324fd0b20879316798ad6bb8b",
+  "integration": {
+    "main_merge": "a1cb928bf917bf6781e2e69b209d6a8f07ab162b",
+    "reason": "concurrent PR #55 merged and released 0.2.22 while this candidate was in final packaging gate",
+    "release_advanced_to": "0.2.23-1",
+    "incident_renumbering": {
+      "07": "09",
+      "08": "10",
+      "09": "11",
+      "10": "12"
+    },
+    "both_product_fixes_retained": true
+  }
+}
