@@ -1,3 +1,19 @@
+twodrive (0.2.20-1) unstable; urgency=medium
+
+  * Coalesce exact clean delta echoes before binding renamed initial uploads.
+  * Prevent late upload cleanup from deleting cloud IDs with active local owners.
+  * Preserve a pending cloud move when an atomic save replaces renamed content.
+  * Validate rename/folder names before authentication and network requests.
+  * Reconcile missing bound upload targets instead of retrying stale IDs forever.
+  * Preserve unsynced local edits as conflict copies without restoring deleted
+    originals or overwriting newer same-name cloud objects.
+  * Complete missing-original conflict recovery atomically, preserving newer
+    saves and concurrent deletion recovery.
+  * Add remote-deletion, restart, replacement and active-writer regressions.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 13:45:00 +0800
+
 twodrive (0.2.19-1) unstable; urgency=medium
 
   * Preserve cached Linux trash metadata and payloads beyond cache retention.

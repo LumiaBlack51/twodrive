@@ -6,6 +6,98 @@ use crate::paths::{cloud_name, normalize_cloud_path, parent_cloud_path};
 use crate::{FileRecord, FileState, MetadataEntry, now_unix};
 
 impl Database {
+    /// Publish the acknowledged recovery copy before retiring only the exact
+    /// conflicted generation. A concurrent new save/move must remain pending.
+    pub fn complete_missing_conflict_upload(
+        &self,
+        original: &FileRecord,
+        uploaded: &MetadataEntry,
+        cache_path: &Path,
+    ) -> anyhow::Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let present = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE remote_id = ?1)
+             AND NOT EXISTS(SELECT 1 FROM pending_deletes WHERE local_id = ?1)",
+            params![original.metadata.remote_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !present {
+            return Ok(false);
+        }
+        let copy_id = tx
+            .query_row(
+                "SELECT remote_id FROM files WHERE cloud_remote_id = ?1",
+                params![uploaded.remote_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| uploaded.remote_id.clone());
+        anyhow::ensure!(
+            copy_id != original.metadata.remote_id,
+            "recovery copy reused the missing identity"
+        );
+        tx.execute(
+            "INSERT OR IGNORE INTO retired_cache(cache_path)
+             SELECT cache_path FROM files WHERE remote_id = ?1
+               AND state IN ('cached', 'pinned') AND cache_path IS NOT NULL AND cache_path <> ?2",
+            params![copy_id, cache_path.to_string_lossy()],
+        )?;
+        let changed = tx.execute(
+            "INSERT INTO files(remote_id, cloud_remote_id, path, parent_path, name,
+                is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, local_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 'cached', ?9, ?10, ?11)
+             ON CONFLICT(remote_id) DO UPDATE SET
+                -- This ID may have been imported and renamed while the PUT
+                -- acknowledgement was in flight. Attach its bytes without
+                -- rolling back the copy's current name or ancestor moves.
+                size = excluded.size, modified_unix = excluded.modified_unix, etag = excluded.etag,
+                state = CASE WHEN files.pin_explicit = 1 OR files.pin_origin_remote_id IS NOT NULL
+                    THEN 'pinned' ELSE 'cached' END,
+                cache_path = excluded.cache_path, cache_accessed_unix = excluded.cache_accessed_unix
+             WHERE files.cloud_remote_id = excluded.cloud_remote_id
+               AND files.state IN ('online_only', 'cached', 'pinned', 'hydrating')",
+            params![copy_id, uploaded.remote_id, uploaded.path, uploaded.parent_path,
+                uploaded.name, uploaded.size as i64, original.metadata.modified_unix,
+                uploaded.etag, cache_path.to_string_lossy(), now_unix(), original.local_mode],
+        )?;
+        anyhow::ensure!(
+            changed == 1,
+            "recovery copy has a protected local generation"
+        );
+        tx.execute(
+            "DELETE FROM files WHERE remote_id = ?1 AND state = 'conflict'
+               AND cache_path IS ?2 AND cloud_remote_id IS ?3
+               AND size = ?4 AND modified_unix = ?5 AND etag = ?6
+               AND upload_path = ?7 AND upload_cache_path IS ?2 AND upload_target_id IS NULL
+               AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations WHERE local_id = ?1)",
+            params![
+                original.metadata.remote_id,
+                cache_path.to_string_lossy(),
+                original.cloud_remote_id,
+                original.metadata.size as i64,
+                original.metadata.modified_unix,
+                original.metadata.etag,
+                uploaded.path
+            ],
+        )?;
+        // If a newer local generation kept this row, retire just the failed
+        // generation's acknowledged claim, never its newer cache or state.
+        tx.execute(
+            "UPDATE files SET upload_path = NULL, upload_target_id = NULL, upload_cache_path = NULL
+             WHERE remote_id = ?1 AND upload_path = ?2 AND upload_cache_path IS ?3
+               AND upload_target_id IS NULL",
+            params![
+                original.metadata.remote_id,
+                uploaded.path,
+                cache_path.to_string_lossy()
+            ],
+        )?;
+        tx.commit()?;
+        self.recompute_pin_inheritance()?;
+        Ok(true)
+    }
+
     pub fn upsert_metadata(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
         self.upsert_metadata_entries([entry], false)
     }
@@ -244,6 +336,39 @@ impl Database {
             .is_none_or(|remote_id| remote_id == uploaded.remote_id);
         let needs_cloud_move = current.metadata.path != normalize_cloud_path(requested_path)
             && current.cloud_remote_id.is_none();
+        if current.cloud_remote_id.is_none() {
+            // A first PUT can be visible to delta before its acknowledgement.
+            // If the user has already renamed the unbound local record, delta
+            // may import a clean alias at the old name. Coalesce only an exact
+            // server echo, never another edited/pinned/moving local identity.
+            let alias: Option<(String, Option<String>)> = tx
+                .query_row(
+                    "SELECT remote_id, cache_path FROM files
+                 WHERE cloud_remote_id = ?1 AND remote_id <> ?2 AND path = ?3
+                   AND etag = ?4 AND size = ?5 AND is_dir = 0 AND pin_explicit = 0
+                   AND state IN ('online_only', 'cached', 'pinned', 'hydrating')
+                   AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations op
+                       WHERE op.local_id = files.remote_id)",
+                    params![
+                        uploaded.remote_id,
+                        local_id,
+                        normalize_cloud_path(requested_path),
+                        uploaded.etag,
+                        uploaded.size as i64
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((alias_id, cache)) = alias {
+                if let Some(cache) = cache {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO retired_cache(cache_path) VALUES (?1)",
+                        params![cache],
+                    )?;
+                }
+                tx.execute("DELETE FROM files WHERE remote_id = ?1", params![alias_id])?;
+            }
+        }
         tx.execute(
             r#"
             UPDATE files

@@ -76,7 +76,9 @@ Settings is a **GTK 4 overview with an upload source chooser** for token-file st
 
 TwoDrive is experimental, not a backup system. Keep independent copies. Local recovery and conflict handling reduce specific risks; they do not guarantee against data loss.
 
-On an ETag conflict, TwoDrive attempts to retain the cloud version under its original name and upload the local edit as a `TwoDrive conflict` copy. This is not document merging. Existing duplicate cloud directories need separate reconciliation. Unsupported OneDrive filenames, including `:` or `?`, can block uploads while retaining local content; inspect the error and rename appropriately.
+Renaming during an upload keeps the local identity and replays the latest cloud destination. Atomic saves into a renamed file retain that pending move. Names containing unsupported characters stay local until corrected; rename and folder creation validate names before contacting OneDrive.
+
+On an ETag conflict, TwoDrive attempts to retain the cloud version under its original name and upload the local edit as a `TwoDrive conflict` copy. If an upload returns a data-endpoint 404 and a separate lookup confirms that its bound cloud ID is absent, TwoDrive also preserves the local edit as a conflict copy. It does not recreate the original name or overwrite a replacement at that name. Once the copy is acknowledged and recorded, only the matching old generation is retired; a concurrent newer save remains pending. This is not document merging. Existing duplicate cloud directories need separate reconciliation. Unsupported OneDrive filenames, including `:` or `?`, can block uploads while retaining local content; inspect the error and rename appropriately.
 
 Tokens are plaintext JSON with mode `0600`; Secret Service is not implemented. Do not share tokens, OAuth callback URLs, or upload-session URLs. `twodrive logout` removes the local token file only: stop the daemon first, since a running process can retain tokens in memory. It does not revoke account-side consent.
 

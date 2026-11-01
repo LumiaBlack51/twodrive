@@ -7,6 +7,26 @@ use crate::paths::normalize_cloud_path;
 use crate::{FileRecord, FileState, now_unix};
 
 impl Database {
+    /// Do not let a failed, older upload turn a reopened/new generation into a
+    /// conflict. The successful claim must still describe the same snapshot.
+    pub fn mark_upload_conflict(&self, record: &FileRecord) -> anyhow::Result<bool> {
+        Ok(self.connect()?.execute(
+            "UPDATE files SET state = 'conflict'
+             WHERE remote_id = ?1 AND state = 'uploading' AND path = ?2
+               AND cache_path IS ?3 AND cloud_remote_id IS ?4
+               AND size = ?5 AND modified_unix = ?6 AND etag = ?7",
+            params![
+                record.metadata.remote_id,
+                record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
+                record.cloud_remote_id,
+                record.metadata.size as i64,
+                record.metadata.modified_unix,
+                record.metadata.etag
+            ],
+        )? == 1)
+    }
+
     pub fn mark_state(&self, remote_id: &str, state: FileState) -> anyhow::Result<()> {
         let conn = self.connect()?;
         conn.execute(

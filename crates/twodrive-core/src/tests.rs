@@ -84,6 +84,93 @@ fn add_file(db: &Database, id: &str, path: &str) {
 }
 
 #[test]
+fn missing_conflict_copy_rejection_keeps_the_original_generation_and_claim() {
+    let test = TestDatabase::new("missing-conflict-rollback");
+    add_file(&test.db, "old", "/edit.txt");
+    let cache = test.root.join("edit");
+    fs::write(&cache, b"edit").unwrap();
+    test.db.mark_cached("old", &cache).unwrap();
+    test.db.mark_state("old", FileState::Conflict).unwrap();
+    let original = test.db.get_by_remote_id("old").unwrap().unwrap();
+    let copy = MetadataEntry::new_file("copy", "/recovered.txt", 4, 2, "etag-copy");
+    assert!(
+        test.db
+            .begin_conflict_upload(&original, &copy.path, &cache)
+            .unwrap()
+    );
+    let conn = Connection::open(test.db.path()).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER reject_recovery_copy BEFORE INSERT ON files
+        WHEN NEW.remote_id = 'copy' BEGIN SELECT RAISE(IGNORE); END;",
+    )
+    .unwrap();
+    assert!(
+        test.db
+            .complete_missing_conflict_upload(&original, &copy, &cache)
+            .is_err()
+    );
+    assert!(test.db.get_by_remote_id("copy").unwrap().is_none());
+    let kept = test.db.get_by_remote_id("old").unwrap().unwrap();
+    assert_eq!(kept.state, FileState::Conflict);
+    assert_eq!(kept.cache_path.as_deref(), Some(cache.as_path()));
+    let claim: String = conn
+        .query_row(
+            "SELECT upload_path FROM files WHERE remote_id = 'old'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(claim, copy.path);
+    assert_eq!(fs::read(&cache).unwrap(), b"edit");
+    conn.execute_batch("DROP TRIGGER reject_recovery_copy;")
+        .unwrap();
+    assert!(
+        test.db
+            .complete_missing_conflict_upload(&original, &copy, &cache)
+            .unwrap()
+    );
+    assert!(test.db.get_by_remote_id("old").unwrap().is_none());
+    assert_eq!(
+        test.db.get_by_remote_id("copy").unwrap().unwrap().state,
+        FileState::Cached
+    );
+}
+
+#[test]
+fn atomic_save_into_a_renamed_file_keeps_the_pending_cloud_move() {
+    let test = TestDatabase::new("replace-renamed-target");
+    add_file(&test.db, "target", "/old.txt");
+    test.db
+        .move_subtree_and_queue("target", "/final.txt")
+        .unwrap();
+    let cache = test.root.join("new-edit");
+    fs::write(&cache, b"latest saved bytes").unwrap();
+    test.db
+        .create_local_file("local-upload-temp", "/.save-temp", &cache)
+        .unwrap();
+    test.db
+        .mark_dirty_with_size("local-upload-temp", 18)
+        .unwrap();
+    let replaced = test
+        .db
+        .replace_file_locally("local-upload-temp", "target", "/final.txt")
+        .unwrap();
+    assert_eq!(replaced.cloud_remote_id.as_deref(), Some("target"));
+    let reopened = Database::new(test.db.path());
+    reopened.init().unwrap();
+    let pending = reopened
+        .pending_metadata_operation("target")
+        .unwrap()
+        .expect("saving a renamed file must not cancel its cloud move");
+    assert_eq!(pending.kind, PendingMetadataKind::Move);
+    assert_eq!(pending.path, "/final.txt");
+    assert_eq!(
+        fs::read(replaced.cache_path.unwrap()).unwrap(),
+        b"latest saved bytes"
+    );
+}
+
+#[test]
 fn retired_remote_versions_wait_for_references_and_file_locks_across_restart() {
     let test = TestDatabase::new("retired-cache");
     let cache_dir = test.root.join("cache");
