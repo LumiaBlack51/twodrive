@@ -118,6 +118,17 @@ untouched_writable_open_close_preserves_clean_and_pending_states、first_real_wr
 
 调查与修复位于独立 worktree，原开发目录的未提交 AGENTS.md、incident 记录及调查 JSON 均未改动。GitHub PR/Release 待提交并核实。
 
+### 0.2.22-1 交付补记 · 2026-11-01
+
+[PR #55](https://github.com/LumiaBlack51/twodrive/pull/55) 已合入 main，合并提交 `a1cb928bf917bf6781e2e69b209d6a8f07ab162b`。不可移动注解标签 v0.2.22-1 指向已审查并整合的源提交 `accfc7860597af5f829fb914970ba52982386901`，与合并源 Git 树一致。[Dot 最新源审查](https://github.com/LumiaBlack51/twodrive/pull/55#issuecomment-6556722306) 无剩余阻断意见；审查为静态源码/CI 检查，不能冒称其独立执行了测试。Native Linux/Windows、Debian policy、辅助构建及[正式 Debian CI](https://github.com/LumiaBlack51/twodrive/actions/runs/41297411755) 全部通过。
+
+[0.2.22-1 Release](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.22-1) 已于 18:47:30（Asia/Shanghai）公开 stable。CI ZIP 的大小/SHA-256/CRC、13 项 Debian manifest 引用、308 个上游文件、Debian 源及 copyright 前缀、16,043 个 vendor 文件校验通过；Lintian 0 error、1 个检查器 Standards-Version 偏旧提示。标准 Debian 包原字节的独立容器 mock-daemon 通过 hydration、保存/上传、改名/删除、pin/release、自动缓存保留与回收站恢复/显式删除。发布前后完整 11 附件的集合、uploaded 状态、大小、远端摘要与注解标签解析目标均通过保护检查。项目包未签名，不声称 Debian 官方归档构建。
+
+本机按既有 per-user 方式从正式包更新 CLI/daemon，运行中程序摘要与包一致、CLI 报告 0.2.22；升级前活动传输、待同步文件与挂载内常规文件句柄均为零，未关闭用户编辑器或读取未缓存内容。仅保全配置/凭据、SQLite/队列及一套 0.2.21 回退程序，没有递归复制 cache/backups/recovery。升级瞬间配置/凭据与自定义 service 保留；数据库 quick_check 为 ok，cached/online_only/pinned 数量保持 280/19758/45。没有人为制造真实云端写入重放空开故障，实际上传回归来自上述隔离挂载。
+
+[Office 0.3.0 Preview](https://github.com/LumiaBlack51/twodrive-office/releases/tag/v0.3.0) 已另行发布并更新现有 ONLYOFFICE 插件/runtime；本地持久保存与 180 秒/关闭时提交在该仓库验证。LibreOffice 日常 profile 未修改。公开验证摘要见 [office-save-validation-2026-11-01.json](office-save-validation-2026-11-01.json)。
+
+
 
 ## TD-20261101-06：发布后只读核验的 GitHub 标签查询再次 TCP 超时
 
