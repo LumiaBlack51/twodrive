@@ -45,6 +45,16 @@ fn expire(events: &mut VecDeque<Instant>, now: Instant, window: Duration) {
     }
 }
 
+fn explicit_project_root(path: &Path, config: &Config) -> Option<PathBuf> {
+    config
+        .known_folders
+        .upload_rate_roots
+        .iter()
+        .filter_map(|root| expand_known_folder_home(root).ok())
+        .filter(|root| root.is_absolute() && path.starts_with(root))
+        .max_by_key(|root| root.components().count())
+}
+
 impl UploadRate {
     pub(super) fn acquire(
         &mut self,
@@ -108,11 +118,19 @@ impl UploadRate {
         // An ordinary first edit of each file never consumes the project
         // budget. The project counter starts with repeated changes in-window.
         let mut project = if repeated && project_max > 0 {
-            self.hot_projects
-                .keys()
-                .filter(|root| job.local_path.starts_with(root))
-                .max_by_key(|root| root.components().count())
-                .cloned()
+            if let Some(explicit) = explicit_project_root(&job.local_path, config) {
+                // A cold explicit child is still a separate identity; an
+                // already-hot ancestor must not claim its events or quota.
+                self.hot_projects
+                    .contains_key(&explicit)
+                    .then_some(explicit)
+            } else {
+                self.hot_projects
+                    .keys()
+                    .filter(|root| job.local_path.starts_with(root))
+                    .max_by_key(|root| root.components().count())
+                    .cloned()
+            }
         } else {
             None
         };
@@ -125,9 +143,11 @@ impl UploadRate {
                     .repeat_history
                     .iter()
                     .filter(|(file, _)| {
-                        self.local_paths
-                            .get(*file)
-                            .is_some_and(|path| path.starts_with(root))
+                        self.local_paths.get(*file).is_some_and(|path| {
+                            path.starts_with(root)
+                                && explicit_project_root(path, config)
+                                    .is_none_or(|owner| owner == *root)
+                        })
                     })
                     .flat_map(|(_, times)| times.iter().copied())
                     .filter(|time| now.duration_since(*time) < window)
@@ -187,13 +207,7 @@ impl UploadRate {
         {
             return root.clone();
         }
-        let explicit = config
-            .known_folders
-            .upload_rate_roots
-            .iter()
-            .filter_map(|root| expand_known_folder_home(root).ok())
-            .filter(|root| root.is_absolute() && path.starts_with(root))
-            .max_by_key(|root| root.components().count());
+        let explicit = explicit_project_root(path, config);
         if explicit.is_some() {
             self.project_cache
                 .insert(parent.to_path_buf(), (explicit.clone(), now));
@@ -423,5 +437,28 @@ mod tests {
                 <= MAX_PROJECT_SEARCHES_PER_WINDOW * MAX_PROJECT_DEPTH * PROJECT_MARKERS.len()
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_nested_projects_keep_separate_budgets_in_either_discovery_order() {
+        let mut config = Config::default();
+        config.known_folders.max_file_uploads_per_window = 0;
+        config.known_folders.max_project_uploads_per_window = 1;
+        config.known_folders.upload_rate_roots =
+            vec!["/source/project".into(), "/source/project/nested".into()];
+        let now = Instant::now();
+        let window = Duration::from_secs(20);
+        for order in [["outer", "nested/inner"], ["nested/inner", "outer"]] {
+            let mut rate = UploadRate::default();
+            for name in order {
+                assert!(rate.acquire(&job(name, 1), true, &config, window, now));
+                assert!(
+                    rate.acquire(&job(name, 2), true, &config, window, now),
+                    "another configured root must not consume {name}'s budget"
+                );
+                assert!(!rate.acquire(&job(name, 3), true, &config, window, now));
+            }
+            assert_eq!(rate.metadata_probes, 0);
+        }
     }
 }
