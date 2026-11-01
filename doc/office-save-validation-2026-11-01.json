@@ -1,0 +1,64 @@
+{
+  "version": "0.2.22-1",
+  "channel": "stable",
+  "source_commit": "accfc7860597af5f829fb914970ba52982386901",
+  "integrated_main_commit": "a1cb928bf917bf6781e2e69b209d6a8f07ab162b",
+  "source_tree": "6b3c639d70b52c7284d85866497ab079422d6c24",
+  "ci_native": "https://github.com/LumiaBlack51/twodrive/actions/runs/41297411744",
+  "ci_debian": "https://github.com/LumiaBlack51/twodrive/actions/runs/41297411755",
+  "ci_artifact_sha256": "36b96f9a684ffab3f238538354e9c7596e90adebc9c6584ad7fd6202c38e5027",
+  "pr": "https://github.com/LumiaBlack51/twodrive/pull/55",
+  "dot_review": {
+    "url": "https://github.com/LumiaBlack51/twodrive/pull/55#issuecomment-6556722306",
+    "head": "accfc7860597af5f829fb914970ba52982386901",
+    "result": "no remaining blocking finding; static review, no independent test execution"
+  },
+  "tests": {
+    "workspace_passed": 219,
+    "workspace_ignored": 12,
+    "nautilus_passed": 25,
+    "settings_passed": 4,
+    "fuse_regression": "old 0.2.21 fails; fixed source passed three independent container rounds and required Linux CI"
+  },
+  "package_validation": {
+    "manifest_sha256_references": 13,
+    "upstream_files_compared": 308,
+    "vendor_files_checked": 16043,
+    "lintian_errors": 0,
+    "lintian_warnings": [
+      "newer-standards-version: package 4.7.4, checker knows 4.6.2"
+    ],
+    "debian_lifecycle": "CI install, upgrade, remove, reinstall and purge passed",
+    "format": "standard dpkg-buildpackage/debhelper source, binary and debug packages; unsigned project release",
+    "actual_package_mock_smoke": "Passed in independent Ubuntu container: hydration, write/upload, rename/delete, pin/unpin/release, automatic retention, trash preservation/restore/explicit deletion; no real cloud access"
+  },
+  "limitations": [
+    "No live OneDrive end-to-end save replay",
+    "Office plugin 0.3.0 is a separate release; Graph transfers remain full-file",
+    "Host FUSE mount was denied by NoNewPrivs; explicit mount tests used an isolated container and GitHub CI"
+  ],
+  "delivery": {
+    "release": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.22-1",
+    "release_published_at": "2026-11-01T10:47:30Z",
+    "release_assets_verified_before_and_after": 11,
+    "office_release": "https://github.com/LumiaBlack51/twodrive-office/releases/tag/v0.3.0",
+    "local_version": "0.2.22",
+    "running_daemon_matches_package": true,
+    "mount_available": true,
+    "database_quick_check": "ok",
+    "active_transfers_and_open_regular_handles_before_upgrade": 0,
+    "private_backup_scope": [
+      "configuration and credentials",
+      "SQLite and queues",
+      "one previous CLI/daemon version"
+    ],
+    "unsynced_cache_files_copied": 0
+  },
+  "cleanup": {
+    "owned_disposable_worktree_allocated_bytes_before_removal": 1992073216,
+    "scope": "this task Cargo target, temporary worktrees, downloaded/extracted CI/source/package payloads, isolated Docker test environment and transient logs; preserve user data and minimal rollback state",
+    "status": "Owned Cargo/build/download/extracted-source/test payloads and isolated container removed; small documentation worktree removed after this PR merges",
+    "payload_allocated_bytes_removed": 1982590976,
+    "old_code_reproduction_worktree_removed": true
+  }
+}
