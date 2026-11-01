@@ -902,6 +902,87 @@ fn large_directory_refresh_preserves_inodes_and_removes_stale_names() {
 }
 
 #[test]
+fn retired_inode_keeps_open_reader_without_aliasing_a_replacement() {
+    let mut test = TestFs::new("retired-inode-replacement");
+    let original = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let ino = test
+        .fs
+        .inodes
+        .ino_for_path(&original.metadata.path)
+        .unwrap();
+    let cache = test.fs.ensure_cached(&original).unwrap();
+    let bytes = fs::read(&cache).unwrap();
+    let fh = test.fs.open_read_handle(ino, cache).unwrap();
+    test.fs
+        .db
+        .remove_by_remote_id(&original.metadata.remote_id)
+        .unwrap();
+    assert!(test.fs.record_for_ino(ino).is_none());
+    assert_eq!(test.fs.attr_for_ino(ino).unwrap().nlink, 0);
+    let replacement =
+        MetadataEntry::new_file("replacement-id", &original.metadata.path, 987, 2, "new");
+    test.fs.db.upsert_metadata(&replacement).unwrap();
+    test.fs.refresh_child_records("/");
+    let replacement_ino = test.fs.inodes.ino_for_path(&replacement.path).unwrap();
+    assert_ne!(replacement_ino, ino);
+    assert_eq!(test.fs.attr_for_ino(ino).unwrap().nlink, 0);
+    assert_eq!(test.fs.attr_for_ino(ino).unwrap().size, bytes.len() as u64);
+    assert_eq!(test.fs.attr_for_ino(replacement_ino).unwrap().size, 987);
+    assert_eq!(test.fs.read_open_handle(fh, 0, 4096).unwrap(), bytes);
+    test.fs.release_read_handle(fh).unwrap();
+    assert!(test.fs.attr_for_ino(ino).is_none());
+}
+
+#[test]
+fn replaced_path_does_not_reuse_or_lose_the_new_owners_inode() {
+    let test = TestFs::new("inode-path-ownership");
+    let original = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    for via_refresh in [false, true] {
+        for move_old in [false, true] {
+            let mut table = InodeTable::new(std::slice::from_ref(&original));
+            let old_ino = table.ino_for_path(&original.metadata.path).unwrap();
+            let mut replacement = original.clone();
+            replacement.metadata.remote_id = "replacement-id".into();
+            if via_refresh {
+                table.refresh_children("/", vec![replacement.clone()]);
+            } else {
+                table.insert_or_update(replacement.clone());
+            }
+            let new_ino = table.ino_for_path(&original.metadata.path).unwrap();
+            assert_ne!(old_ino, new_ino, "different identities shared an inode");
+            let children = table.children_for_ino(ROOT_INO);
+            assert_eq!(children.len(), 1, "stale child remained in the namespace");
+            assert_eq!(children[0].1.metadata.remote_id, "replacement-id");
+            if move_old {
+                let mut moved = original.clone();
+                moved.metadata.path = "/moved.txt".into();
+                moved.metadata.name = "moved.txt".into();
+                table.replace_ino_record(old_ino, moved);
+                assert_eq!(
+                    table.ino_for_path(&replacement.metadata.path),
+                    Some(new_ino)
+                );
+            }
+            table.remove_ino(old_ino);
+            assert_eq!(
+                table.ino_for_path(&replacement.metadata.path),
+                Some(new_ino)
+            );
+        }
+    }
+}
+
+#[test]
 fn filesystem_stats_report_real_backing_store_capacity() {
     let root = test_root("statfs");
     fs::create_dir_all(&root).unwrap();
