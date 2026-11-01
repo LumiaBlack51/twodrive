@@ -2651,3 +2651,8 @@ Path::parent 对单文件名返回空路径；原子写入尝试在空路径创�
 - 同批发布的既有 Nautilus 修复：[030132f](https://github.com/LumiaBlack51/twodrive/commit/030132f)，与解压故障根因不同。
 - Release：[TwoDrive 0.2.9-1](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.9-1)
 - 详细调查：[Archive extraction I/O error](archive-extraction-2026-09-15.md)
+
+
+### TD-20261101-07/08 本轮清理补记
+
+已清理本轮 Cargo target、正式制品下载 ZIP、源码/vendor/程序解包、Office CI 包、本轮测试日志与字节码，以及专用 Docker 测试容器；被统计的这些删除路径分配占用为 1,982,590,976 字节，不冒称整盘净空闲变化。旧码复现 worktree 也已移除；仅剩待文档 PR 门控的小型源工作树将在合入后移除。保留正常开发目录的未提交文件、用户缓存与独有恢复资料，以及配置/SQLite/队列和一套最近旧程序作为回退。没有对用户真实缓存运行 prune 或扫描追删。

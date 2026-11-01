@@ -57,6 +57,8 @@
   "cleanup": {
     "owned_disposable_worktree_allocated_bytes_before_removal": 1992073216,
     "scope": "this task Cargo target, temporary worktrees, downloaded/extracted CI/source/package payloads, isolated Docker test environment and transient logs; preserve user data and minimal rollback state",
-    "status": "scheduled as final delivery step; final removal recorded in Office verification"
+    "status": "Owned Cargo/build/download/extracted-source/test payloads and isolated container removed; small documentation worktree removed after this PR merges",
+    "payload_allocated_bytes_removed": 1982590976,
+    "old_code_reproduction_worktree_removed": true
   }
 }
