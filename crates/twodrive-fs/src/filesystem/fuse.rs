@@ -117,12 +117,14 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
             self.inodes.replace_ino_record(ino, record);
         }
         if let Some(size) = size {
-            let result = if let Some(handle) = fh.and_then(|fh| self.write_handles.get(&fh)) {
-                OpenOptions::new()
-                    .write(true)
-                    .open(&handle.cache_path)
-                    .and_then(|file| file.set_len(size))
-                    .map_err(anyhow::Error::from)
+            let result = if let Some(fh) = fh.filter(|fh| self.write_handles.contains_key(fh)) {
+                self.begin_handle_write(fh).and_then(|()| {
+                    OpenOptions::new()
+                        .write(true)
+                        .open(&self.write_handles[&fh].cache_path)
+                        .and_then(|file| file.set_len(size))
+                        .map_err(anyhow::Error::from)
+                })
             } else {
                 self.truncate_without_handle(ino, size)
             };
@@ -414,6 +416,13 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
     ) {
         if offset < 0 {
             reply.error(libc::EINVAL);
+            return;
+        }
+        if !data.is_empty()
+            && let Err(err) = self.begin_handle_write(fh)
+        {
+            eprintln!("twodrive begin write error: {err:#}");
+            reply.error(libc::EIO);
             return;
         }
         let Some(handle) = self.write_handles.get(&fh) else {
