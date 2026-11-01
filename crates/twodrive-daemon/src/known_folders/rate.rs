@@ -26,7 +26,6 @@ pub(super) struct UploadRate {
     projects: HashMap<PathBuf, VecDeque<Instant>>,
     admitted: HashMap<String, (FileSnapshot, Instant)>,
     project_cache: HashMap<PathBuf, (Option<PathBuf>, Instant)>,
-    hot_projects: HashMap<PathBuf, Instant>,
     local_paths: HashMap<String, PathBuf>,
     repeat_history: HashMap<String, VecDeque<Instant>>,
     recent_repeats: VecDeque<Instant>,
@@ -90,8 +89,6 @@ impl UploadRate {
                 .retain(|_, (_, admitted)| now.duration_since(*admitted) < window);
             self.project_cache
                 .retain(|_, (_, checked)| now.duration_since(*checked) < window);
-            self.hot_projects
-                .retain(|_, detected| now.duration_since(*detected) < window);
             self.local_paths
                 .retain(|file, _| self.files.contains_key(file));
             self.repeat_history
@@ -118,19 +115,7 @@ impl UploadRate {
         // An ordinary first edit of each file never consumes the project
         // budget. The project counter starts with repeated changes in-window.
         let mut project = if repeated && project_max > 0 {
-            if let Some(explicit) = explicit_project_root(&job.local_path, config) {
-                // A cold explicit child is still a separate identity; an
-                // already-hot ancestor must not claim its events or quota.
-                self.hot_projects
-                    .contains_key(&explicit)
-                    .then_some(explicit)
-            } else {
-                self.hot_projects
-                    .keys()
-                    .filter(|root| job.local_path.starts_with(root))
-                    .max_by_key(|root| root.components().count())
-                    .cloned()
-            }
+            self.project_owner(&job.local_path, config, window, now)
         } else {
             None
         };
@@ -144,9 +129,7 @@ impl UploadRate {
                     .iter()
                     .filter(|(file, _)| {
                         self.local_paths.get(*file).is_some_and(|path| {
-                            path.starts_with(root)
-                                && explicit_project_root(path, config)
-                                    .is_none_or(|owner| owner == *root)
+                            self.project_owner(path, config, window, now).as_ref() == Some(root)
                         })
                     })
                     .flat_map(|(_, times)| times.iter().copied())
@@ -154,7 +137,6 @@ impl UploadRate {
                     .collect::<Vec<_>>();
                 history.sort_unstable();
                 self.projects.insert(root.clone(), history.into());
-                self.hot_projects.insert(root.clone(), now);
             }
         }
         if file_hot {
@@ -192,6 +174,23 @@ impl UploadRate {
         self.admitted
             .insert(job.remote_path.clone(), (job.snapshot.clone(), now));
         true
+    }
+
+    // A hot ancestor is not proof of ownership: an unknown parent can have a
+    // nearer marker. Reuse only its own resolved identity or an explicit root.
+    fn project_owner(
+        &self,
+        path: &Path,
+        config: &Config,
+        window: Duration,
+        now: Instant,
+    ) -> Option<PathBuf> {
+        explicit_project_root(path, config).or_else(|| {
+            path.parent()
+                .and_then(|parent| self.project_cache.get(parent))
+                .filter(|(_, checked)| now.duration_since(*checked) < window)
+                .and_then(|(root, _)| root.clone())
+        })
     }
 
     fn project_root(
@@ -460,5 +459,39 @@ mod tests {
             }
             assert_eq!(rate.metadata_probes, 0);
         }
+    }
+
+    #[test]
+    fn automatic_nested_projects_keep_separate_budgets_in_either_discovery_order() {
+        let (root, _) = crate::known_folders::tests::test_paths("automatic-nested-budget");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("Cargo.toml"), b"outer project").unwrap();
+        fs::write(root.join("nested/package.json"), b"{}").unwrap();
+        let mut config = Config::default();
+        config.known_folders.folders[0].local = root.to_string_lossy().into_owned();
+        config.known_folders.max_file_uploads_per_window = 0;
+        config.known_folders.max_project_uploads_per_window = 1;
+        let now = Instant::now();
+        let window = Duration::from_secs(20);
+        for order in [["outer", "nested/inner"], ["nested/inner", "outer"]] {
+            let mut rate = UploadRate::default();
+            for name in order {
+                let candidate = |generation| KnownFolderUploadJob {
+                    local_path: root.join(name),
+                    ..job(name, generation)
+                };
+                assert!(rate.acquire(&candidate(1), true, &config, window, now));
+                assert!(
+                    rate.acquire(&candidate(2), true, &config, window, now),
+                    "hot ancestor must not claim automatically identified {name}"
+                );
+                assert!(!rate.acquire(&candidate(3), true, &config, window, now));
+            }
+            assert!(
+                rate.metadata_probes
+                    <= MAX_PROJECT_SEARCHES_PER_WINDOW * MAX_PROJECT_DEPTH * PROJECT_MARKERS.len()
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }
