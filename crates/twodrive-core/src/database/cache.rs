@@ -7,6 +7,29 @@ use crate::paths::normalize_cloud_path;
 use crate::{FileRecord, FileState, now_unix};
 
 impl Database {
+    /// Claim the inspected cache/remote baseline before a delayed first write.
+    /// A concurrent delta or upload completion must not supply a newer ETag
+    /// for bytes that were opened from an older cached version.
+    pub fn begin_cached_write(&self, record: &FileRecord) -> anyhow::Result<bool> {
+        Ok(self.connect()?.execute(
+            "UPDATE files SET state = 'writing'
+             WHERE remote_id = ?1 AND cache_path IS ?2 AND cloud_remote_id IS ?3
+               AND etag = ?4 AND state = ?5 AND size = ?6 AND modified_unix = ?7",
+            params![
+                record.metadata.remote_id,
+                record
+                    .cache_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy()),
+                record.cloud_remote_id,
+                record.metadata.etag,
+                record.state.as_str(),
+                record.metadata.size as i64,
+                record.metadata.modified_unix
+            ],
+        )? == 1)
+    }
+
     /// Do not let a failed, older upload turn a reopened/new generation into a
     /// conflict. The successful claim must still describe the same snapshot.
     pub fn mark_upload_conflict(&self, record: &FileRecord) -> anyhow::Result<bool> {

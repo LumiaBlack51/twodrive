@@ -49,6 +49,47 @@
 
 
 
+
+## TD-20261101-07：Office 空开关闭触发全量上传
+
+- 日期：2026-11-01（Asia/Shanghai）
+- 状态：已修复并通过本地单元回归；隔离 FUSE 挂载在本机被权限拒绝，CI 验证待补。
+- 影响版本与环境：TwoDrive 0.2.21 及此前版本的 Unix FUSE 非截断可写 open/release；Office 插件 0.2.2 频繁提交真实编辑时也会逐次完整上传。
+- 关联历史故障：TD-20261021-01；Office 仓库 0.2.1/0.2.2 已修复重复内容导出，本次是其范围之外的可写句柄机制。
+
+### 症状与影响
+
+用户报告文档打开后不操作、关闭仍重新上传，编辑时可能反复传完整文件，要求本地保存与每几分钟/关闭时同步分开。当前上传协议仍是完整内容，不能将分片或重试描述为差量更新。
+
+### 触发条件与复现
+
+对现有缓存文件以 O_RDWR/O_WRONLY、无 O_TRUNC 打开，随后 flush/fsync/release，没有 write。旧源新增回归实际失败于 `open is not an upload`：创建了 upload ActivityGuard，且打开就把数据库改成 Writing；release 无条件 mark_dirty/enqueue。修复后的回归同时验证干净及已有 Dirty 状态不变、无上传排队、真实首次写入仍进入 Writing，未写入的兄弟句柄不能提前提交另一句柄的半成品。
+
+### 根因与证据
+
+create_overwrite_upload 将可写权限视为已经改写；queue_upload_handle 未区分真正写入。先前 Office 快照/内容摘要去重覆盖的是插件转换与替换，无法阻止文件系统自己因空开关闭而上传。修改过程中的真实每秒导出则是另一条正常但流量过高的路径。
+
+### 解决办法与恢复操作
+
+非截断 open 仅持有缓存，不改状态、不显示上传活动；首个非空 write 或 ftruncate 才启动写入状态/活动，创建与 O_TRUNC 保持真实修改路径。无修改 release 不排队，也不覆盖其他代次已有的 Dirty/Uploading 状态。延迟首次写入核对打开时缓存/ETag，并以条件 UPDATE 原子领取检查过的数据库基线，避免后台 delta/上传确认插入新版本基线后覆盖它。缓存/远端基线已变则拒绝写入并要求重新打开。
+
+Office 0.3.0 配套将频繁导出持久保存到挂载外，每 180 秒或文档关闭提交最新版本。失败与冲突保留本地内容，崩溃恢复需所有编辑器退出；插件记录在独立 Office 仓库。没有修改 Graph 上传协议或声称微软式差量同步。
+
+### 验证结果与边界
+
+旧 0.2.21 源携带新增回归实际失败；完整 workspace 最终 219 项通过、12 项环境依赖测试忽略；Clippy/fmt 与双 lock 一致性通过，Nautilus 25 项、设置 4 项 Python 回归通过。GitHub CI 结果待最终补记。
+
+本机显式运行新增真实 FUSE 挂载回归失败：fusermount3 `Operation not permitted`，没有挂载成功或编辑真实云端。该回归已加入 Linux CI 强制执行，不能把普通测试忽略项说成已通过。Office 的隔离 Desktop 10 PPTX/DOCX/XLSX 及 headless LibreOffice Writer/Calc/Impress 临时文件测试通过，真实 OneDrive 端到端未主动重放。
+
+### 防复发措施与后续
+
+untouched_writable_open_close_preserves_clean_and_pending_states、first_real_write_marks_writing_and_untouched_sibling_cannot_publish_partial_content、delayed_first_write_rejects_a_new_remote_baseline，以及 CI 中的 mounted_untouched_writable_close_does_not_upload_but_real_write_does。正常写入、新建、截断、改名/原子替换、失败恢复仍须保留。正式 PR、Dot 回复、Release/安装与清理结果待补。
+
+### 交付记录
+
+调查与修复位于独立 worktree，原开发目录的未提交 AGENTS.md、incident 记录及调查 JSON 均未改动。GitHub PR/Release 待提交并核实。
+
+
 ## TD-20261101-06：发布后只读核验的 GitHub 标签查询再次 TCP 超时
 
 - 日期：2026-11-01（Asia/Shanghai）

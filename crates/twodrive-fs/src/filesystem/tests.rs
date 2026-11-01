@@ -307,6 +307,221 @@ impl Drop for TestFs {
     }
 }
 
+#[test]
+fn untouched_writable_open_close_preserves_clean_and_pending_states() {
+    for dirty in [false, true] {
+        let mut test = TestFs::new(if dirty {
+            "untouched-dirty"
+        } else {
+            "untouched-clean"
+        });
+        let original = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        test.fs.ensure_cached(&original).unwrap();
+        if dirty {
+            test.fs
+                .db
+                .mark_state(&original.metadata.remote_id, FileState::Dirty)
+                .unwrap();
+        }
+        let before = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        let (_, fh, _) = test
+            .fs
+            .create_overwrite_upload(before.clone(), false)
+            .unwrap();
+        assert!(
+            test.fs.write_handles[&fh].activity.is_none(),
+            "open is not an upload"
+        );
+        assert_eq!(
+            test.fs
+                .db
+                .get_by_path("/README-cloud.txt")
+                .unwrap()
+                .unwrap()
+                .state,
+            before.state
+        );
+        test.fs.sync_handle(fh, false).unwrap();
+        test.fs.queue_upload_handle(fh).unwrap();
+        let after = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.state, before.state);
+        assert_eq!(after.metadata.etag, before.metadata.etag);
+        assert_eq!(after.metadata.modified_unix, before.metadata.modified_unix);
+        assert!(
+            test.fs
+                .upload_pool
+                .sender
+                .pending
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn first_real_write_marks_writing_and_untouched_sibling_cannot_publish_partial_content() {
+    let mut test = TestFs::new("first-real-write");
+    let record = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let (_, writer, _) = test.fs.create_overwrite_upload(record, false).unwrap();
+    let current = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let (_, spectator, _) = test.fs.create_overwrite_upload(current, false).unwrap();
+    test.fs.begin_handle_write(writer).unwrap();
+    assert!(test.fs.write_handles[&writer].activity.is_some());
+    let cache = test.fs.write_handles[&writer].cache_path.clone();
+    write_slice(&cache, 0, b"new content").unwrap();
+    test.fs.queue_upload_handle(spectator).unwrap();
+    let current = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.state, FileState::Writing);
+    assert!(
+        test.fs
+            .upload_pool
+            .sender
+            .pending
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    test.fs.queue_upload_handle(writer).unwrap();
+    test.fs.write_handles.clear();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let saved = test
+            .fs
+            .db
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap();
+        if saved.state == FileState::Cached {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn delayed_first_write_rejects_a_new_remote_baseline() {
+    let mut test = TestFs::new("delayed-write-baseline");
+    let record = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let (_, fh, _) = test.fs.create_overwrite_upload(record, false).unwrap();
+    let before = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let mut changed = before.metadata.clone();
+    changed.etag = "external-new-version".into();
+    test.fs.db.upsert_metadata(&changed).unwrap();
+    assert!(
+        !test.fs.db.begin_cached_write(&before).unwrap(),
+        "a stale inspected baseline must not claim newer metadata"
+    );
+    assert!(test.fs.begin_handle_write(fh).is_err());
+    assert!(!test.fs.write_handles[&fh].changed);
+}
+
+#[test]
+#[ignore = "requires /dev/fuse; uses an isolated temporary mock mount"]
+fn mounted_untouched_writable_close_does_not_upload_but_real_write_does() {
+    let root = test_root("mounted-noop-open");
+    let mount = root.join("mount");
+    fs::create_dir_all(&mount).unwrap();
+    let db = Database::new(root.join("test.sqlite3"));
+    db.init().unwrap();
+    let backend = MockBackend::new();
+    sync_metadata(&db, &backend).unwrap();
+    let filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    let backend = Arc::clone(&filesystem.backend);
+    let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+    let path = mount.join("README-cloud.txt");
+    let content = fs::read(&path).unwrap();
+    let before = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
+    for _ in 0..3 {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+    }
+    thread::sleep(Duration::from_millis(300));
+    let after = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
+    assert_eq!(after.state, FileState::Cached);
+    assert_eq!(
+        after.metadata.etag, before.metadata.etag,
+        "untouched close uploaded a new cloud version"
+    );
+    assert_eq!(fs::read(&path).unwrap(), content);
+    {
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(b"edited").unwrap();
+        file.sync_all().unwrap();
+        assert_eq!(
+            db.get_by_path("/README-cloud.txt").unwrap().unwrap().state,
+            FileState::Writing
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let saved = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
+        if saved.state == FileState::Cached && saved.metadata.etag != before.metadata.etag {
+            assert!(
+                backend
+                    .download(saved.cloud_remote_id.as_deref().unwrap())
+                    .unwrap()
+                    .starts_with(b"edited")
+            );
+            break;
+        }
+        assert!(Instant::now() < deadline, "real writes must still upload");
+        thread::sleep(Duration::from_millis(10));
+    }
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn test_root(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "twodrive-fs-{name}-{}-{}",

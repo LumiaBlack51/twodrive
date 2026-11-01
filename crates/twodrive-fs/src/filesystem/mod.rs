@@ -193,6 +193,7 @@ struct WriteHandle {
     _cache_guard: fs::File,
     activity: Option<ActivityGuard>,
     uploaded: bool,
+    changed: bool,
     created_new_record: bool,
     unlinked: bool,
     base_etag: Option<String>,
