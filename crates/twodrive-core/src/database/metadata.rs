@@ -6,6 +6,97 @@ use crate::paths::{cloud_name, normalize_cloud_path, parent_cloud_path};
 use crate::{FileRecord, FileState, MetadataEntry, now_unix};
 
 impl Database {
+    /// Publish the acknowledged recovery copy before retiring only the exact
+    /// conflicted generation. A concurrent new save/move must remain pending.
+    pub fn complete_missing_conflict_upload(
+        &self,
+        original: &FileRecord,
+        uploaded: &MetadataEntry,
+        cache_path: &Path,
+    ) -> anyhow::Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let present = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE remote_id = ?1)
+             AND NOT EXISTS(SELECT 1 FROM pending_deletes WHERE local_id = ?1)",
+            params![original.metadata.remote_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !present {
+            return Ok(false);
+        }
+        let copy_id = tx
+            .query_row(
+                "SELECT remote_id FROM files WHERE cloud_remote_id = ?1",
+                params![uploaded.remote_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| uploaded.remote_id.clone());
+        anyhow::ensure!(
+            copy_id != original.metadata.remote_id,
+            "recovery copy reused the missing identity"
+        );
+        tx.execute(
+            "INSERT OR IGNORE INTO retired_cache(cache_path)
+             SELECT cache_path FROM files WHERE remote_id = ?1
+               AND state IN ('cached', 'pinned') AND cache_path IS NOT NULL AND cache_path <> ?2",
+            params![copy_id, cache_path.to_string_lossy()],
+        )?;
+        let changed = tx.execute(
+            "INSERT INTO files(remote_id, cloud_remote_id, path, parent_path, name,
+                is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, local_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 'cached', ?9, ?10, ?11)
+             ON CONFLICT(remote_id) DO UPDATE SET
+                path = excluded.path, parent_path = excluded.parent_path, name = excluded.name,
+                size = excluded.size, modified_unix = excluded.modified_unix, etag = excluded.etag,
+                state = CASE WHEN files.pin_explicit = 1 OR files.pin_origin_remote_id IS NOT NULL
+                    THEN 'pinned' ELSE 'cached' END,
+                cache_path = excluded.cache_path, cache_accessed_unix = excluded.cache_accessed_unix
+             WHERE files.cloud_remote_id = excluded.cloud_remote_id
+               AND files.state IN ('online_only', 'cached', 'pinned', 'hydrating')",
+            params![copy_id, uploaded.remote_id, uploaded.path, uploaded.parent_path,
+                uploaded.name, uploaded.size as i64, original.metadata.modified_unix,
+                uploaded.etag, cache_path.to_string_lossy(), now_unix(), original.local_mode],
+        )?;
+        anyhow::ensure!(
+            changed == 1,
+            "recovery copy has a protected local generation"
+        );
+        tx.execute(
+            "DELETE FROM files WHERE remote_id = ?1 AND state = 'conflict'
+               AND path = ?2 AND cache_path IS ?3 AND cloud_remote_id IS ?4
+               AND size = ?5 AND modified_unix = ?6 AND etag = ?7
+               AND upload_path = ?8 AND upload_cache_path IS ?3 AND upload_target_id IS NULL
+               AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations WHERE local_id = ?1)",
+            params![
+                original.metadata.remote_id,
+                original.metadata.path,
+                cache_path.to_string_lossy(),
+                original.cloud_remote_id,
+                original.metadata.size as i64,
+                original.metadata.modified_unix,
+                original.metadata.etag,
+                uploaded.path
+            ],
+        )?;
+        // If a newer local generation kept this row, retire just the failed
+        // generation's acknowledged claim, never its newer cache or state.
+        tx.execute(
+            "UPDATE files SET upload_path = NULL, upload_target_id = NULL, upload_cache_path = NULL
+             WHERE remote_id = ?1 AND upload_path = ?2 AND upload_cache_path IS ?3
+               AND upload_target_id IS NULL",
+            params![
+                original.metadata.remote_id,
+                uploaded.path,
+                cache_path.to_string_lossy()
+            ],
+        )?;
+        tx.commit()?;
+        self.recompute_pin_inheritance()?;
+        Ok(true)
+    }
+
     pub fn upsert_metadata(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
         self.upsert_metadata_entries([entry], false)
     }

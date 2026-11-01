@@ -241,9 +241,11 @@ impl Database {
             // Preserve content, state, upload claims and pending metadata jobs.
             return Ok(target);
         }
+        // An atomic save replaces the target's bytes, not its cloud identity or
+        // destination. Keep its pending rename; only the source job is obsolete.
         tx.execute(
-            "DELETE FROM pending_metadata_operations WHERE local_id IN (?1, ?2)",
-            params![source_local_id, target_local_id],
+            "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
+            params![source_local_id],
         )?;
         if let Some(source_cloud_id) = source
             .cloud_remote_id
@@ -498,11 +500,14 @@ impl Database {
     }
 
     pub fn queue_remote_delete(&self, cloud_remote_id: &str, path: &str) -> anyhow::Result<()> {
+        // Cleanup of an obsolete upload acknowledgement is not a user unlink.
+        // A live record may already have adopted the returned cloud identity.
         let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT INTO pending_deletes(remote_id, cloud_remote_id, path, cache_path, queued_unix)
-            VALUES (?1, ?1, ?2, NULL, ?3)
+            SELECT ?1, ?1, ?2, NULL, ?3
+            WHERE NOT EXISTS (SELECT 1 FROM files WHERE cloud_remote_id = ?1)
             ON CONFLICT(remote_id) DO UPDATE SET cloud_remote_id = excluded.cloud_remote_id,
                 path = excluded.path, queued_unix = excluded.queued_unix
             "#,
