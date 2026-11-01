@@ -1,5 +1,6 @@
 twodrive (0.2.20-1) unstable; urgency=medium
 
+  * Coalesce exact clean delta echoes before binding renamed initial uploads.
   * Prevent late upload cleanup from deleting cloud IDs with active local owners.
   * Preserve a pending cloud move when an atomic save replaces renamed content.
   * Validate rename/folder names before authentication and network requests.

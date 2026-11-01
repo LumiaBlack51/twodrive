@@ -500,6 +500,93 @@ fn renames_during_initial_upload_replay_only_the_latest_valid_destination() {
 }
 
 #[test]
+fn initial_upload_echo_after_rename_is_coalesced_without_an_old_name_duplicate() {
+    let test = Test::unbound("rename-echo-before-ack");
+    let db = test.db.clone();
+    *test.backend.on_ack.lock().unwrap() = Some(Box::new(move |uploaded| {
+        db.move_subtree_and_queue(LOCAL, "/Draft: proposal.docx")
+            .unwrap();
+        db.move_subtree_and_queue(LOCAL, "/final proposal.docx")
+            .unwrap();
+        db.upsert_metadata(&uploaded).unwrap();
+    }));
+    assert_eq!(recover_dirty_uploads(&test.db, &test.backend).unwrap(), 1);
+    assert!(
+        test.db.get_by_path(ORIGINAL).unwrap().is_none(),
+        "cloud echo left a duplicate at the pre-rename name"
+    );
+    assert!(
+        test.db
+            .get_by_remote_id(LOCAL)
+            .unwrap()
+            .unwrap()
+            .cloud_remote_id
+            .is_some()
+    );
+    let reopened = Database::new(test.db.path());
+    reopened.init().unwrap();
+    assert_eq!(
+        crate::recover_pending_metadata_operations(&reopened, &test.backend).unwrap(),
+        1
+    );
+    assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 1);
+    assert!(
+        test.backend
+            .get_metadata_by_path(ORIGINAL)
+            .unwrap()
+            .is_none()
+    );
+    let current = reopened.get_by_remote_id(LOCAL).unwrap().unwrap();
+    assert_eq!(current.metadata.path, "/final proposal.docx");
+    assert_eq!(current.state, FileState::Cached);
+    assert_eq!(
+        test.backend
+            .download(current.cloud_remote_id.as_deref().unwrap())
+            .unwrap(),
+        EDIT
+    );
+    assert!(reopened.pending_deletes().unwrap().is_empty());
+}
+
+#[test]
+fn initial_upload_echo_that_has_been_edited_is_not_coalesced_or_deleted() {
+    let test = Test::unbound("rename-edited-echo");
+    let db = test.db.clone();
+    let edited_cache = test.root.join("edited-echo");
+    std::fs::write(&edited_cache, b"independent edit at the old name").unwrap();
+    let keep_cache = edited_cache.clone();
+    *test.backend.on_ack.lock().unwrap() = Some(Box::new(move |uploaded| {
+        db.move_subtree_and_queue(LOCAL, "/renamed.txt").unwrap();
+        db.upsert_metadata(&uploaded).unwrap();
+        db.mark_cached(&uploaded.remote_id, &edited_cache).unwrap();
+        db.mark_dirty_with_size(&uploaded.remote_id, 32).unwrap();
+    }));
+    assert!(recover_dirty_uploads(&test.db, &test.backend).is_err());
+    let owner = test.db.get_by_path(ORIGINAL).unwrap().unwrap();
+    assert_eq!(owner.state, FileState::Dirty);
+    assert_eq!(owner.cache_path.as_deref(), Some(keep_cache.as_path()));
+    assert_eq!(
+        std::fs::read(&keep_cache).unwrap(),
+        b"independent edit at the old name"
+    );
+    assert!(
+        test.db
+            .get_by_remote_id(LOCAL)
+            .unwrap()
+            .unwrap()
+            .cloud_remote_id
+            .is_none()
+    );
+    assert!(test.db.pending_deletes().unwrap().is_empty());
+    assert!(
+        test.backend
+            .get_metadata(owner.cloud_remote_id.as_deref().unwrap())
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn atomic_save_after_invalid_then_valid_rename_finishes_the_cloud_move() {
     let mut test = Test::new("rename-save-move");
     test.backend.reject_bound = false;

@@ -335,6 +335,39 @@ impl Database {
             .is_none_or(|remote_id| remote_id == uploaded.remote_id);
         let needs_cloud_move = current.metadata.path != normalize_cloud_path(requested_path)
             && current.cloud_remote_id.is_none();
+        if current.cloud_remote_id.is_none() {
+            // A first PUT can be visible to delta before its acknowledgement.
+            // If the user has already renamed the unbound local record, delta
+            // may import a clean alias at the old name. Coalesce only an exact
+            // server echo, never another edited/pinned/moving local identity.
+            let alias: Option<(String, Option<String>)> = tx
+                .query_row(
+                    "SELECT remote_id, cache_path FROM files
+                 WHERE cloud_remote_id = ?1 AND remote_id <> ?2 AND path = ?3
+                   AND etag = ?4 AND size = ?5 AND is_dir = 0 AND pin_explicit = 0
+                   AND state IN ('online_only', 'cached', 'pinned', 'hydrating')
+                   AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations op
+                       WHERE op.local_id = files.remote_id)",
+                    params![
+                        uploaded.remote_id,
+                        local_id,
+                        normalize_cloud_path(requested_path),
+                        uploaded.etag,
+                        uploaded.size as i64
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((alias_id, cache)) = alias {
+                if let Some(cache) = cache {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO retired_cache(cache_path) VALUES (?1)",
+                        params![cache],
+                    )?;
+                }
+                tx.execute("DELETE FROM files WHERE remote_id = ?1", params![alias_id])?;
+            }
+        }
         tx.execute(
             r#"
             UPDATE files
