@@ -485,11 +485,21 @@ fn mounted_untouched_writable_close_does_not_upload_but_real_write_does() {
     thread::sleep(Duration::from_millis(300));
     let after = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
     assert_eq!(after.state, FileState::Cached);
+    assert_eq!(after.cloud_remote_id, before.cloud_remote_id);
     assert_eq!(
         after.metadata.etag, before.metadata.etag,
         "untouched close uploaded a new cloud version"
     );
     assert_eq!(fs::read(&path).unwrap(), content);
+    assert_eq!(
+        backend
+            .get_metadata_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap()
+            .remote_id,
+        before.cloud_remote_id.as_deref().unwrap(),
+        "untouched closes must not create a mock cloud replacement"
+    );
     {
         let mut file = fs::OpenOptions::new()
             .read(true)
@@ -506,19 +516,22 @@ fn mounted_untouched_writable_close_does_not_upload_but_real_write_does() {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let saved = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
-        if saved.state == FileState::Cached && saved.metadata.etag != before.metadata.etag {
-            assert!(
-                backend
-                    .download(saved.cloud_remote_id.as_deref().unwrap())
-                    .unwrap()
-                    .starts_with(b"edited")
-            );
+        if saved.state == FileState::Cached
+            && backend
+                .download(saved.cloud_remote_id.as_deref().unwrap())
+                .unwrap()
+                .starts_with(b"edited")
+        {
             break;
         }
-        assert!(Instant::now() < deadline, "real writes must still upload");
+        assert!(
+            Instant::now() < deadline,
+            "real writes must still upload; state={:?}",
+            saved.state
+        );
         thread::sleep(Duration::from_millis(10));
     }
-    drop(session);
+    session.join();
     fs::remove_dir_all(root).unwrap();
 }
 
