@@ -609,14 +609,13 @@ fn legacy_state_migration_and_incremental_completion_preserve_unrelated_rows() {
 }
 
 #[test]
-fn rate_limited_uploads_remain_durable_and_retry_latest_source() {
+fn rate_limited_uploads_survive_restart_and_retry_latest_source() {
     let (root, paths) = test_paths("deferred-upload-rate");
     paths.ensure().unwrap();
     let db = Database::new(paths.db_path.clone());
     db.init().unwrap();
     let backend = MockBackend::new();
     let mut config = Config::default();
-    config.known_folders.upload_rate_window = "1s".into();
     config.known_folders.max_project_uploads_per_window = 2;
     let mut state = KnownFolderState::default();
     config.known_folders.upload_rate_roots = vec![root.to_string_lossy().into_owned()];
@@ -655,7 +654,10 @@ fn rate_limited_uploads_remain_durable_and_retry_latest_source() {
         .map(|(local, p)| (local.clone(), p.remote_path.clone()))
         .unwrap();
     fs::write(&local, b"latest contents while deferred").unwrap();
-    thread::sleep(Duration::from_millis(1100));
+    // Reload the durable queue rather than depending on runner disk speed and
+    // a one-second wall-clock window. Sliding expiry is tested with virtual time.
+    drop(state);
+    let mut state = KnownFolderState::load(&paths.data_dir).unwrap();
     retry_known_folder_uploads(&paths, &backend, &db, &config, &mut state).unwrap();
     assert!(state.pending.is_empty());
     let uploaded = backend.get_metadata_by_path(&remote).unwrap().unwrap();
