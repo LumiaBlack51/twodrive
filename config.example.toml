@@ -28,6 +28,14 @@ debounce = "5s"
 rescan_interval = "0s"
 startup_scan = false
 upload_deletes = false
+# Exact names apply to every component below a source, including old queues.
+exclude_names = ["node_modules"]
+# Sliding churn budgets; first uploads and admitted-generation retries are free.
+upload_rate_window = "20s"
+max_file_uploads_per_window = 25
+max_project_uploads_per_window = 180
+# Optional absolute/~ project roots. Otherwise detect only after a hot threshold.
+upload_rate_roots = []
 exclude_suffixes = [
     ".crdownload",
     ".part",

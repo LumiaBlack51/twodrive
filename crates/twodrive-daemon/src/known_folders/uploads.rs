@@ -1,12 +1,11 @@
 use super::activity::ActivityEntry;
-use super::scan::parent_cloud_path;
-use super::state::{
-    FileSnapshot, KnownFolderState, KnownFolderUploadJob, PendingKnownFolderUpload,
-};
+use super::scan::{parent_cloud_path, should_skip_source};
+use super::state::{FileSnapshot, KnownFolderState, KnownFolderUploadJob};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::{Duration, Instant};
 use twodrive_backend::CloudBackend;
 use twodrive_core::{AppPaths, Config, Database, join_cloud_path, normalize_cloud_path};
 
@@ -17,7 +16,23 @@ pub(super) fn retry_known_folder_uploads<B: CloudBackend>(
     config: &Config,
     state: &mut KnownFolderState,
 ) -> anyhow::Result<()> {
+    if state.pending.is_empty() {
+        state.rate_deferred = false;
+        return Ok(());
+    }
+    // Apply current exclusions to persisted work as well as new scans/events.
+    // This only retires local bookkeeping; source and cloud bytes are untouched.
+    let before = (state.files.len(), state.pending.len());
+    state
+        .pending
+        .retain(|local, _| !should_skip_source(std::path::Path::new(local), config));
+    state
+        .files
+        .retain(|local, _| !should_skip_source(std::path::Path::new(local), config));
     state.prune_missing_pending();
+    if before != (state.files.len(), state.pending.len()) {
+        state.save(&paths.data_dir)?;
+    }
     let jobs = state
         .pending
         .iter()
@@ -30,7 +45,7 @@ pub(super) fn retry_known_folder_uploads<B: CloudBackend>(
             })
         })
         .collect();
-    state.save(&paths.data_dir)?;
+    state.rate_deferred = false;
     process_known_folder_uploads(paths, backend, db, config, jobs, state)
 }
 
@@ -39,23 +54,28 @@ pub(super) fn process_known_folder_uploads<B: CloudBackend>(
     backend: &B,
     db: &Database,
     config: &Config,
-    jobs: Vec<KnownFolderUploadJob>,
+    mut jobs: Vec<KnownFolderUploadJob>,
     state: &mut KnownFolderState,
 ) -> anyhow::Result<()> {
+    jobs.retain(|job| !should_skip_source(&job.local_path, config));
     if jobs.is_empty() {
         return Ok(());
     }
-    for job in &jobs {
-        state.pending.insert(
-            job.local_path.to_string_lossy().into_owned(),
-            PendingKnownFolderUpload {
-                remote_path: job.remote_path.clone(),
-                snapshot: job.snapshot.clone(),
-            },
-        );
-    }
-    state.save(&paths.data_dir)?;
+    state.queue_uploads(&paths.data_dir, &jobs)?;
+    let rate_window = Duration::from_secs(config.known_folder_upload_rate_seconds()?);
+    let rate = Arc::clone(&state.rate);
+    let deferred = std::sync::atomic::AtomicUsize::new(0);
 
+    let jobs = jobs
+        .into_iter()
+        .map(|job| {
+            let changed = state
+                .files
+                .get(job.local_path.to_string_lossy().as_ref())
+                .is_some_and(|previous| previous != &job.snapshot);
+            (job, changed)
+        })
+        .collect::<Vec<_>>();
     let jobs = Arc::new(Mutex::new(jobs.into_iter()));
     let (result_tx, result_rx) = mpsc::channel();
     let concurrency = config.power.ac_upload_concurrency.max(1) as usize;
@@ -63,15 +83,27 @@ pub(super) fn process_known_folder_uploads<B: CloudBackend>(
         for _ in 0..concurrency {
             let jobs = Arc::clone(&jobs);
             let result_tx = result_tx.clone();
+            let rate = Arc::clone(&rate);
+            let deferred = &deferred;
             scope.spawn(move || {
                 loop {
                     let job = match jobs.lock() {
                         Ok(mut jobs) => jobs.next(),
                         Err(_) => return,
                     };
-                    let Some(job) = job else {
+                    let Some((job, changed)) = job else {
                         return;
                     };
+                    let allowed = rate
+                        .lock()
+                        .map(|mut rate| {
+                            rate.acquire(&job, changed, config, rate_window, Instant::now())
+                        })
+                        .unwrap_or(false);
+                    if !allowed {
+                        deferred.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    }
                     let result = upload_known_folder_file(paths, backend, db, &job);
                     let _ = result_tx.send((job, result));
                 }
@@ -84,8 +116,7 @@ pub(super) fn process_known_folder_uploads<B: CloudBackend>(
             match result {
                 Ok(uploaded) => {
                     db.upsert_metadata(&uploaded)?;
-                    state.files.insert(local_key.clone(), job.snapshot);
-                    state.pending.remove(&local_key);
+                    state.complete_upload(local_key, job.snapshot)?;
                 }
                 Err(err) => {
                     eprintln!(
@@ -94,10 +125,19 @@ pub(super) fn process_known_folder_uploads<B: CloudBackend>(
                     );
                 }
             }
-            state.save(&paths.data_dir)?;
         }
         Ok(())
     })?;
+    let deferred = deferred.load(std::sync::atomic::Ordering::Relaxed);
+    if deferred > 0 {
+        state.rate_deferred = true;
+        eprintln!(
+            "twodrive: known folder rate limit deferred {deferred} uploads; latest source contents remain queued"
+        );
+    }
+    if state.pending.is_empty() {
+        state.rate_deferred = false;
+    }
     Ok(())
 }
 
@@ -166,13 +206,23 @@ pub(super) fn ensure_remote_dir<B: CloudBackend>(
     let mut current = String::from("/");
     for part in remote_dir.trim_matches('/').split('/') {
         current = join_cloud_path(&current, part);
-        if db.get_by_path(&current)?.is_some() {
+        if let Some(record) = db.get_by_path(&current)? {
+            anyhow::ensure!(record.metadata.is_dir, "remote parent is a file");
+            continue;
+        }
+        if let Some(entry) = backend.get_metadata_by_path(&current)? {
+            anyhow::ensure!(entry.is_dir, "remote parent is a file");
+            db.upsert_metadata(&entry)?;
             continue;
         }
         match backend.create_folder(&current) {
             Ok(entry) => db.upsert_metadata(&entry)?,
             Err(err) => {
-                eprintln!("twodrive: create folder skipped for {current}: {err:#}");
+                // A concurrent creator can win after our lookup. Resolve the
+                // actual object and remember its identity; never swallow errors.
+                let entry = backend.get_metadata_by_path(&current)?.ok_or(err)?;
+                anyhow::ensure!(entry.is_dir, "remote parent is a file");
+                db.upsert_metadata(&entry)?;
             }
         }
     }
