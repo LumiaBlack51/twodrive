@@ -8,6 +8,7 @@ use std::{
 use twodrive_core::{Config, expand_known_folder_home};
 
 const MAX_PROJECT_DEPTH: usize = 8;
+const MAX_PROJECT_SEARCHES_PER_WINDOW: usize = 8;
 const PROJECT_MARKERS: &[&str] = &[
     ".git",
     "package.json",
@@ -29,6 +30,7 @@ pub(super) struct UploadRate {
     local_paths: HashMap<String, PathBuf>,
     repeat_history: HashMap<String, VecDeque<Instant>>,
     recent_repeats: VecDeque<Instant>,
+    project_searches: VecDeque<Instant>,
     last_prune: Option<Instant>,
     #[cfg(test)]
     metadata_probes: usize,
@@ -204,6 +206,14 @@ impl UploadRate {
             .filter_map(|folder| expand_known_folder_home(&folder.local).ok())
             .filter(|root| path.starts_with(root))
             .max_by_key(|root| root.components().count());
+        expire(&mut self.project_searches, now, window);
+        if source.is_some() {
+            if self.project_searches.len() >= MAX_PROJECT_SEARCHES_PER_WINDOW {
+                self.project_cache.insert(parent.to_path_buf(), (None, now));
+                return None;
+            }
+            self.project_searches.push_back(now);
+        }
         let found = source.and_then(|source| {
             for directory in parent.ancestors().take(MAX_PROJECT_DEPTH) {
                 if !directory.starts_with(&source) {
@@ -388,6 +398,30 @@ mod tests {
         let probes = rate.metadata_probes;
         assert!(!rate.acquire(&candidate(26), true, &config, window, now));
         assert_eq!(rate.metadata_probes, probes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_discovery_has_a_global_metadata_budget_during_churn() {
+        let (root, _) = crate::known_folders::tests::test_paths("project-search-budget");
+        fs::create_dir_all(&root).unwrap();
+        let mut config = Config::default();
+        config.known_folders.folders[0].local = root.to_string_lossy().into_owned();
+        let mut rate = UploadRate::default();
+        let now = Instant::now();
+        for index in 0..1000 {
+            rate.project_root(
+                &root.join(format!("unknown-{index}/file")),
+                &config,
+                Duration::from_secs(20),
+                now,
+            );
+        }
+        assert_eq!(rate.project_searches.len(), MAX_PROJECT_SEARCHES_PER_WINDOW);
+        assert!(
+            rate.metadata_probes
+                <= MAX_PROJECT_SEARCHES_PER_WINDOW * MAX_PROJECT_DEPTH * PROJECT_MARKERS.len()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

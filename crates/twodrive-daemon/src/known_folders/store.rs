@@ -6,7 +6,16 @@ use std::{fs, io::ErrorKind, path::Path, time::Duration};
 
 fn open(data_dir: &Path) -> anyhow::Result<Connection> {
     fs::create_dir_all(data_dir)?;
-    let conn = Connection::open(data_dir.join("known-folders-state.sqlite3"))?;
+    let path = data_dir.join("known-folders-state.sqlite3");
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    drop(options.open(&path)?);
+    let conn = Connection::open(path)?;
     conn.busy_timeout(Duration::from_secs(10))?;
     conn.execute_batch(
         "PRAGMA synchronous=FULL;
