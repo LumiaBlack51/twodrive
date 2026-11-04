@@ -16,6 +16,8 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
+#[path = "editor_locks.rs"]
+mod editor_locks;
 
 pub fn account_cache_directory() -> &'static str {
     if cfg!(target_os = "linux") {
@@ -38,6 +40,7 @@ pub(crate) struct Writer {
     state: State,
     observed: Mutex<HashMap<String, Version>>,
     mutation: Mutex<()>,
+    editor_locks: Option<Arc<editor_locks::EditorLocks>>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -68,7 +71,10 @@ pub fn recovery_status(directory: &Path) -> anyhow::Result<serde_json::Value> {
             }
         }
     }
-    Ok(json!({"files":count,"bytes":bytes,"directory":directory}))
+    let (locks, lock_bytes, failed_locks) = editor_locks::pending(directory)?;
+    Ok(
+        json!({"files":count + failed_locks,"bytes":bytes.saturating_add(lock_bytes),"directory":directory,"editor_pending":locks}),
+    )
 }
 
 fn resource(encoded: &str) -> anyhow::Result<String> {
@@ -91,7 +97,7 @@ pub(crate) async fn handle(
     writer: Arc<Writer>,
     request: http::Request<hyper::body::Incoming>,
     address: std::net::SocketAddr,
-) -> http::Response<dav_server::body::Body> {
+) -> (http::Response<dav_server::body::Body>, bool) {
     use http_body_util::BodyExt;
     let result = async {
         let path = resource(request.uri().path())?;
@@ -106,8 +112,12 @@ pub(crate) async fn handle(
                 .get("Content-Length")
                 .map(|h| h.to_str()?.parse::<u64>().map_err(anyhow::Error::from))
                 .transpose()?;
-            const LIMIT: u64 = 64 * 1024 * 1024 * 1024;
-            ensure!(expected.is_none_or(|n| n <= LIMIT), "写入过大");
+            let limit = if writer.editor_locks.is_some() && editor_locks::matches(&path) {
+                editor_locks::LIMIT
+            } else {
+                64 * 1024 * 1024 * 1024
+            };
+            ensure!(expected.is_none_or(|n| n <= limit), "写入过大");
             let (id, mut file) = writer.spool(&path)?;
             let mut body = request.into_body();
             let mut count = 0u64;
@@ -117,15 +127,15 @@ pub(crate) async fn handle(
                 let frame = frame?;
                 if let Ok(data) = frame.into_data() {
                     count = count.checked_add(data.len() as u64).context("写入过大")?;
-                    ensure!(count <= LIMIT, "写入过大");
+                    ensure!(count <= limit, "写入过大");
                     file.write_all(&data)?;
                 }
             }
             ensure!(expected.is_none_or(|n| n == count), "写入不完整");
             file.sync_all()?;
             drop(file);
-            tokio::task::spawn_blocking(move || writer.put(&id, &path)).await??;
-            return Ok::<_, anyhow::Error>(http::StatusCode::CREATED);
+            let local_only = tokio::task::spawn_blocking(move || writer.put(&id, &path)).await??;
+            return Ok::<_, anyhow::Error>((http::StatusCode::CREATED, !local_only));
         }
         let destination = if method == "MOVE" {
             let destination = url::Url::parse(
@@ -145,29 +155,43 @@ pub(crate) async fn handle(
         } else {
             None
         };
-        tokio::task::spawn_blocking(move || match method.as_str() {
-            "MKCOL" => writer.mkdir(&path),
+        let local_only = tokio::task::spawn_blocking(move || match method.as_str() {
+            "MKCOL" => writer.mkdir(&path).map(|()| false),
             "DELETE" => writer.delete(&path),
-            "MOVE" => writer.rename(&path, destination.as_deref().unwrap()),
+            "MOVE" => writer
+                .rename(&path, destination.as_deref().unwrap())
+                .map(|()| false),
             _ => anyhow::bail!("不支持的写入方法"),
         })
         .await??;
-        Ok(http::StatusCode::NO_CONTENT)
+        Ok((http::StatusCode::NO_CONTENT, !local_only))
     }
     .await;
-    let (status, body) = match result {
-        Ok(status) => (status, dav_server::body::Body::empty()),
+    let (status, body, invalidate) = match result {
+        Ok((status, invalidate)) => (status, dav_server::body::Body::empty(), invalidate),
         Err(_) => (
             http::StatusCode::CONFLICT,
             dav_server::body::Body::from(
                 "写入未完成；请检查连接或版本冲突；已接收的编辑内容可从本机恢复目录找回。",
             ),
+            // Even a failed cloud operation may have completed upstream.
+            true,
         ),
     };
-    http::Response::builder().status(status).body(body).unwrap()
+    (
+        http::Response::builder().status(status).body(body).unwrap(),
+        invalidate,
+    )
 }
 impl Writer {
     pub(crate) fn new(backend: Backend, directory: &Path) -> anyhow::Result<Arc<Self>> {
+        Self::new_with_editor_locks(backend, directory, false)
+    }
+    pub(crate) fn new_with_editor_locks(
+        backend: Backend,
+        directory: &Path,
+        local_locks: bool,
+    ) -> anyhow::Result<Arc<Self>> {
         let c = backend.capabilities();
         ensure!(
             c.upload && backend.manual_upload_supported() && c.mkdir && c.rename && c.delete,
@@ -184,7 +208,37 @@ impl Writer {
             state,
             observed: Mutex::new(observed),
             mutation: Mutex::default(),
+            editor_locks: local_locks
+                .then(|| editor_locks::EditorLocks::new(&directory.join("editor-locks")))
+                .transpose()?,
         }))
+    }
+    pub(crate) fn start_editor_worker(
+        self: &Arc<Self>,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        deleted: editor_locks::Deleted,
+    ) {
+        if let Some(locks) = &self.editor_locks {
+            locks.start(Arc::downgrade(self), stop, deleted);
+        }
+    }
+    pub(crate) fn editor_file(
+        &self,
+        path: &str,
+    ) -> anyhow::Result<Option<(MetadataEntry, Vec<u8>)>> {
+        self.editor_locks
+            .as_ref()
+            .map_or(Ok(None), |locks| locks.file(path))
+    }
+    pub(crate) fn editor_entries(&self, parent: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+        self.editor_locks
+            .as_ref()
+            .map_or_else(|| Ok(Vec::new()), |locks| locks.entries(parent))
+    }
+    pub(crate) fn editor_hidden(&self) -> anyhow::Result<std::collections::HashSet<String>> {
+        self.editor_locks
+            .as_ref()
+            .map_or_else(|| Ok(Default::default()), |locks| locks.hidden())
     }
     pub(crate) fn observe(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
         self.observe_many(std::slice::from_ref(entry))
@@ -281,37 +335,18 @@ impl Writer {
         )?;
         Ok((id, file))
     }
-    pub(crate) fn put(&self, id: &str, path: &str) -> anyhow::Result<MetadataEntry> {
-        let _guard = self
-            .mutation
-            .lock()
-            .map_err(|_| anyhow::anyhow!("写入锁不可用"))?;
+    pub(crate) fn put(&self, id: &str, path: &str) -> anyhow::Result<bool> {
         let content = self.state.dir.join(format!("{id}.content"));
-        let result = (|| {
-            let expected = self.expected(path)?;
-            ensure!(!expected.as_ref().is_some_and(|m| m.is_dir), "目标是目录");
-            let progress = Arc::new(|_, _| Ok(()));
-            let meta = match expected {
-                Some(m) => self.backend.manual_upload_snapshot(
-                    path,
-                    &content,
-                    &m.remote_id,
-                    &m.etag,
-                    progress,
-                )?,
-                None => self
-                    .backend
-                    .manual_upload_path(path, &content, None, progress)?,
-            };
-            self.observed
-                .lock()
-                .map_err(|_| anyhow::anyhow!("版本记录不可用"))?
-                .insert(path.into(), Version::from(&meta));
-            self.state
-                .save("observed.json", &*self.observed.lock().unwrap())?;
-            self.refresh_parents(path)?;
-            Ok(meta)
-        })();
+        let local_only = self.editor_locks.is_some() && editor_locks::matches(path);
+        let result = if let Some(locks) = self
+            .editor_locks
+            .as_ref()
+            .filter(|_| editor_locks::matches(path))
+        {
+            locks.put(self, id, path, &content)
+        } else {
+            self.put_content(path, &content)
+        };
         match &result {
             Ok(_) => {
                 std::fs::remove_file(content)?;
@@ -324,7 +359,36 @@ impl Writer {
                 )?;
             }
         }
-        result
+        result.map(|_| local_only)
+    }
+    fn put_content(&self, path: &str, content: &Path) -> anyhow::Result<MetadataEntry> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| anyhow::anyhow!("写入锁不可用"))?;
+        let expected = self.expected(path)?;
+        ensure!(!expected.as_ref().is_some_and(|m| m.is_dir), "目标是目录");
+        let progress = Arc::new(|_, _| Ok(()));
+        let meta = match expected {
+            Some(m) => self.backend.manual_upload_snapshot(
+                path,
+                content,
+                &m.remote_id,
+                &m.etag,
+                progress,
+            )?,
+            None => self
+                .backend
+                .manual_upload_path(path, content, None, progress)?,
+        };
+        self.observed
+            .lock()
+            .map_err(|_| anyhow::anyhow!("版本记录不可用"))?
+            .insert(path.into(), Version::from(&meta));
+        self.state
+            .save("observed.json", &*self.observed.lock().unwrap())?;
+        self.refresh_parents(path)?;
+        Ok(meta)
     }
     pub(crate) fn mkdir(&self, path: &str) -> anyhow::Result<()> {
         let _guard = self
@@ -342,7 +406,12 @@ impl Writer {
             .save("observed.json", &*self.observed.lock().unwrap())?;
         Ok(())
     }
-    pub(crate) fn delete(&self, path: &str) -> anyhow::Result<()> {
+    pub(crate) fn delete(&self, path: &str) -> anyhow::Result<bool> {
+        if let Some(locks) = &self.editor_locks
+            && locks.delete(path)?
+        {
+            return Ok(true);
+        }
         let _guard = self
             .mutation
             .lock()
@@ -362,9 +431,37 @@ impl Writer {
             .remove(path);
         self.state
             .save("observed.json", &*self.observed.lock().unwrap())?;
+        Ok(false)
+    }
+    fn delete_editor_version(&self, path: &str, id: &str, etag: &str) -> anyhow::Result<()> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| anyhow::anyhow!("写入锁不可用"))?;
+        if let Some(current) = self.backend.get_metadata_by_path(path)? {
+            ensure!(
+                !current.is_dir && current.remote_id == id && current.etag == etag,
+                "云端锁已改变，未删除其他编辑器的锁"
+            );
+            self.backend.delete(id)?;
+            self.refresh_parents(path)?;
+        }
+        self.observed
+            .lock()
+            .map_err(|_| anyhow::anyhow!("版本记录不可用"))?
+            .remove(path);
+        self.state
+            .save("observed.json", &*self.observed.lock().unwrap())?;
         Ok(())
     }
     pub(crate) fn rename(&self, path: &str, to: &str) -> anyhow::Result<()> {
+        ensure!(
+            self.editor_file(path)?.is_none()
+                && self.editor_file(to)?.is_none()
+                && !self.editor_hidden()?.contains(path)
+                && !self.editor_hidden()?.contains(to),
+            "请先关闭正在使用的Office临时锁"
+        );
         let _guard = self
             .mutation
             .lock()

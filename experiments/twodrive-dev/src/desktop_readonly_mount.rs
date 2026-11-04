@@ -339,7 +339,16 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     if writable && dirty_cache(&persistent.dir)? == 0 && recovery.join("observed.json").exists() {
         fs::remove_file(recovery.join("observed.json"))?;
     }
-    let bridge = if writable {
+    let bridge = if cfg!(target_os = "linux") && matches!(p.kind.as_str(), "icloud" | "baidu") {
+        Bridge::start_indexed(
+            backend,
+            &cache.dir,
+            writable.then_some(recovery.as_path()),
+            p.kind == "icloud",
+        )?
+    } else if writable && p.kind == "icloud" {
+        Bridge::start_writable_editor_locks(backend, &cache.dir, &recovery)?
+    } else if writable {
         Bridge::start_writable(backend, &cache.dir, &recovery)?
     } else {
         Bridge::start(backend, &cache.dir)?
@@ -413,7 +422,13 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if unmount_requested {
-            if writable && dirty_cache(&persistent.dir)? > 0 {
+            if writable
+                && (dirty_cache(&persistent.dir)? > 0
+                    || twodrive_dev::mount_write::recovery_status(&recovery)?["editor_pending"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        > 0)
+            {
                 continue;
             }
             lifecycle("worker-unmount-rpc");
@@ -602,7 +617,7 @@ pub(super) fn cache_status(app: &App, p: &Profile) -> anyhow::Result<Value> {
         directories.push(PathBuf::from(p.option(key)).join("recovery"));
     }
     Ok(
-        json!({"bytes":recovery["bytes"],"pending":pending,"write_error":report["error"]==true,"status_error":report["status_error"]==true,
+        json!({"bytes":recovery["bytes"],"pending":pending + recovery["editor_pending"].as_u64().unwrap_or(0),"write_error":report["error"]==true,"status_error":report["status_error"]==true,
         "recovery_files":recovery["files"],"recovery_directories":directories,"released":0}),
     )
 }

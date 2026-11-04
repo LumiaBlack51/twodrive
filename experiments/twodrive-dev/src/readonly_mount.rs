@@ -74,6 +74,81 @@ struct DirectoryCache {
     samples: VecDeque<DirectorySample>,
     pending: HashSet<String>,
     generation: u64,
+    retain_directories: bool,
+}
+impl DirectoryCache {
+    fn prune(&mut self) {
+        let retain_directories = self.retain_directories;
+        self.samples
+            .retain(|sample| retain_directories || sample.checked.elapsed() < DIRECTORY_MAX_AGE);
+    }
+    fn invalidate_changed_children(&mut self, path: &str, entries: &DirectoryEntries) {
+        if !self.retain_directories {
+            return;
+        }
+        let old = self
+            .samples
+            .iter()
+            .find(|sample| sample.path == path)
+            .map(|sample| sample.entries.clone());
+        let prefix = format!("{}/", path.trim_end_matches('/'));
+        let invalid: HashSet<String> = self
+            .samples
+            .iter()
+            .map(|s| &s.path)
+            .chain(self.pending.iter())
+            .filter_map(|candidate| {
+                let child = candidate.strip_prefix(&prefix)?.split('/').next()?;
+                (!child.is_empty()).then(|| format!("{prefix}{child}"))
+            })
+            .filter(|child| {
+                match (
+                    old.as_ref().and_then(|old| old.get(child)),
+                    entries.get(child),
+                ) {
+                    (Some(before), Some(after)) => {
+                        !before.is_dir || !after.is_dir || before.remote_id != after.remote_id
+                    }
+                    _ => true,
+                }
+            })
+            .collect();
+        if !invalid.is_empty() {
+            // A verified parent change also fences older child reads already
+            // in flight. A retained snapshot must not resurrect a removed or
+            // replaced directory, even when its parent was evicted earlier.
+            self.generation = self.generation.wrapping_add(1);
+            self.samples.retain(|sample| {
+                !invalid.iter().any(|child| {
+                    sample.path == *child || sample.path.starts_with(&format!("{child}/"))
+                })
+            });
+        }
+    }
+    fn forget_editor_lock(&mut self, path: &str, id: &str, etag: &str) -> anyhow::Result<()> {
+        let parent = path
+            .rsplit_once('/')
+            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+            .context("Office临时锁缺少父目录")?;
+        // Reject any older in-flight listing, without discarding other cached
+        // directories or extending their freshness. The queue still exposes its
+        // tombstone while this exact confirmed cloud version is removed.
+        self.generation = self.generation.wrapping_add(1);
+        for sample in self
+            .samples
+            .iter_mut()
+            .filter(|sample| sample.path == parent)
+        {
+            if sample
+                .entries
+                .get(path)
+                .is_some_and(|entry| entry.remote_id == id && entry.etag == etag && !entry.is_dir)
+            {
+                Arc::make_mut(&mut sample.entries).remove(path);
+            }
+        }
+        Ok(())
+    }
 }
 struct Inner {
     backend: Backend,
@@ -210,6 +285,21 @@ impl RemoteFs {
     }
     fn metadata_entry(&self, path: &str) -> FsResult<MetadataEntry> {
         self.check().map_err(|_| FsError::GeneralFailure)?;
+        if let Some(writer) = &self.0.writer {
+            if let Some((entry, _)) = writer
+                .editor_file(path)
+                .map_err(|_| FsError::GeneralFailure)?
+            {
+                return Ok(entry);
+            }
+            if writer
+                .editor_hidden()
+                .map_err(|_| FsError::GeneralFailure)?
+                .contains(path)
+            {
+                return Err(FsError::NotFound);
+            }
+        }
         // A real GET must use live metadata before response headers, including
         // zero-byte files and conditional/range requests. Display caches are
         // only for HEAD/PROPFIND, never download validity or authentication.
@@ -234,15 +324,15 @@ impl RemoteFs {
         let parent = path
             .rsplit_once('/')
             .map(|(p, _)| if p.is_empty() { "/" } else { p });
+        let mut indexed = false;
         if path != "/" {
             let mut directories = self
                 .0
                 .directories
                 .lock()
                 .map_err(|_| FsError::GeneralFailure)?;
-            directories
-                .samples
-                .retain(|sample| sample.checked.elapsed() < DIRECTORY_MAX_AGE);
+            directories.prune();
+            indexed = directories.retain_directories;
             if let Some(index) = directories
                 .samples
                 .iter()
@@ -255,8 +345,28 @@ impl RemoteFs {
                 let sample = directories.samples.remove(index).unwrap();
                 let entry = sample.entries.get(path).cloned().ok_or(FsError::NotFound);
                 directories.samples.push_front(sample);
+                if indexed {
+                    drop(directories);
+                    // Attribute-only traffic must also refresh stale parents.
+                    // Use the same per-directory coalescing as readdir.
+                    return self
+                        .directory_snapshot(parent.unwrap())
+                        .and_then(|entries| entries.get(path).cloned().ok_or(FsError::NotFound));
+                }
                 return entry;
             }
+        }
+        if path != "/" && (parent == Some("/") || indexed) {
+            // Nautilus probes mount-root children (notably .Trash) before its
+            // first readdir. Coalesce those cold display lookups with the same
+            // complete root listing that the directory request will consume.
+            // Indexed mounts can share one shallow parent listing at any
+            // depth. Never walk the whole tree or use display data for GET.
+            if let Ok(entries) = self.directory_snapshot(parent.unwrap()) {
+                return entries.get(path).cloned().ok_or(FsError::NotFound);
+            }
+            // An unavailable/invalid listing cannot prove absence. Preserve
+            // the existing live lookup when that independent operation works.
         }
         self.entry(path)
     }
@@ -281,9 +391,9 @@ impl RemoteFs {
         Ok(Arc::new(result))
     }
     fn remember(cache: &mut DirectoryCache, path: String, entries: DirectoryEntries) {
-        cache
-            .samples
-            .retain(|s| s.path != path && s.checked.elapsed() < DIRECTORY_MAX_AGE);
+        cache.invalidate_changed_children(&path, &entries);
+        cache.prune();
+        cache.samples.retain(|s| s.path != path);
         cache.samples.push_front(DirectorySample {
             path,
             checked: Instant::now(),
@@ -294,7 +404,12 @@ impl RemoteFs {
             && (cache.samples.len() > DIRECTORY_CACHE_LIMIT
                 || cache.samples.iter().map(|s| s.entries.len()).sum::<usize>() > 100000)
         {
-            cache.samples.pop_back();
+            let index = cache
+                .samples
+                .iter()
+                .rposition(|sample| !cache.retain_directories || sample.path != "/")
+                .unwrap_or(cache.samples.len() - 1);
+            cache.samples.remove(index);
         }
     }
     fn invalidate_display(&self) {
@@ -303,6 +418,16 @@ impl RemoteFs {
             cache.samples.clear();
             self.0.directory_ready.notify_all();
         }
+    }
+    fn forget_editor_lock(&self, path: &str, id: &str, etag: &str) -> anyhow::Result<()> {
+        let mut cache = self
+            .0
+            .directories
+            .lock()
+            .map_err(|_| anyhow::anyhow!("目录缓存不可用"))?;
+        cache.forget_editor_lock(path, id, etag)?;
+        self.0.directory_ready.notify_all();
+        Ok(())
     }
     fn fetch_directory(&self, path: &str) -> FsResult<DirectoryEntries> {
         let generation = self
@@ -357,9 +482,7 @@ impl RemoteFs {
                 .directories
                 .lock()
                 .map_err(|_| FsError::GeneralFailure)?;
-            cache
-                .samples
-                .retain(|s| s.checked.elapsed() < DIRECTORY_MAX_AGE);
+            cache.prune();
             if let Some(index) = cache.samples.iter().position(|s| s.path == path) {
                 let sample = &cache.samples[index];
                 let entries = sample.entries.clone();
@@ -393,6 +516,17 @@ impl RemoteFs {
         }
     }
     fn materialize(&self, entry: MetadataEntry) -> anyhow::Result<Arc<Cached>> {
+        if let Some(writer) = &self.0.writer
+            && let Some((current, bytes)) = writer.editor_file(&entry.path)?
+        {
+            ensure!(same(&entry, &current), "Office临时锁已改变");
+            let mut file = tempfile::NamedTempFile::new_in(self.0.directory.path())?;
+            file.write_all(&bytes)?;
+            return Ok(Arc::new(Cached {
+                meta: current,
+                file,
+            }));
+        }
         // Coalesce one object/version, without holding the shared cache lock
         // across a remote download. A slow preview must not stall other files.
         let gate = {
@@ -619,9 +753,23 @@ impl DavFileSystem for RemoteFs {
                 Some(entries) => entries,
                 None => self.directory_snapshot(&path)?,
             };
+            let mut entries = (*entries).clone();
+            if let Some(writer) = &self.0.writer {
+                for hidden in writer
+                    .editor_hidden()
+                    .map_err(|_| FsError::GeneralFailure)?
+                {
+                    entries.remove(&hidden);
+                }
+                for local in writer
+                    .editor_entries(&path)
+                    .map_err(|_| FsError::GeneralFailure)?
+                {
+                    entries.insert(local.path.clone(), local);
+                }
+            }
             let result: Vec<FsResult<Box<dyn DavDirEntry>>> = entries
-                .values()
-                .cloned()
+                .into_values()
                 .map(|entry| Ok(Box::new(Entry(Meta(entry))) as _))
                 .collect();
             Ok(Box::pin(futures_util::stream::iter(result)) as _)
@@ -712,7 +860,7 @@ pub struct Bridge {
 }
 impl Bridge {
     pub fn start(backend: Backend, cache_parent: &Path) -> anyhow::Result<Self> {
-        Self::start_inner(backend, cache_parent, None)
+        Self::start_inner(backend, cache_parent, None, false)
     }
     pub fn start_writable(
         backend: Backend,
@@ -720,18 +868,62 @@ impl Bridge {
         spool: &Path,
     ) -> anyhow::Result<Self> {
         let writer = crate::mount_write::Writer::new(backend.clone(), spool)?;
-        Self::start_inner(backend, cache_parent, Some(writer))
+        Self::start_inner(backend, cache_parent, Some(writer), false)
+    }
+    /// Opt in for the slow iCloud adapter; ordinary files keep the original
+    /// synchronous version/recovery contract. Other providers are unchanged.
+    pub fn start_writable_editor_locks(
+        backend: Backend,
+        cache_parent: &Path,
+        spool: &Path,
+    ) -> anyhow::Result<Self> {
+        let writer =
+            crate::mount_write::Writer::new_with_editor_locks(backend.clone(), spool, true)?;
+        Self::start_inner(backend, cache_parent, Some(writer), false)
+    }
+    /// Compatibility entry point for the indexed iCloud mount with local
+    /// advisory-lock acknowledgement. See start_indexed for directory policy.
+    pub fn start_icloud(
+        backend: Backend,
+        cache_parent: &Path,
+        spool: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        Self::start_indexed(backend, cache_parent, spool, true)
+    }
+    /// Retain verified visited directories within the existing LRU/entry
+    /// budgets and refresh in the background. Only iCloud opts in to local
+    /// advisory-lock acknowledgement; Baidu retains synchronous writes.
+    pub fn start_indexed(
+        backend: Backend,
+        cache_parent: &Path,
+        spool: Option<&Path>,
+        local_editor_locks: bool,
+    ) -> anyhow::Result<Self> {
+        let writer = spool
+            .map(|spool| {
+                crate::mount_write::Writer::new_with_editor_locks(
+                    backend.clone(),
+                    spool,
+                    local_editor_locks,
+                )
+            })
+            .transpose()?;
+        Self::start_inner(backend, cache_parent, writer, true)
     }
     fn start_inner(
         backend: Backend,
         cache_parent: &Path,
         writer: Option<Arc<crate::mount_write::Writer>>,
+        retain_directories: bool,
     ) -> anyhow::Result<Self> {
         let directory = tempfile::Builder::new()
             .prefix("readonly-mount-")
             .tempdir_in(cache_parent)?;
         let stop = Arc::new(AtomicBool::new(false));
-        let mut directories = DirectoryCache::default();
+        let mut directories = DirectoryCache {
+            retain_directories,
+            ..DirectoryCache::default()
+        };
         if let Some((checked, entries)) = backend
             .initial_directory_listing()
             .filter(|(checked, _)| checked.elapsed() < DIRECTORY_MAX_AGE)
@@ -760,6 +952,18 @@ impl Bridge {
             directory,
             stop: stop.clone(),
         }));
+        if let Some(writer) = &writer {
+            let weak = Arc::downgrade(&fs.0);
+            writer.start_editor_worker(
+                stop.clone(),
+                Arc::new(move |path, id, etag| {
+                    if let Some(inner) = weak.upgrade() {
+                        RemoteFs(inner).forget_editor_lock(path, id, etag)?;
+                    }
+                    Ok(())
+                }),
+            );
+        }
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -864,7 +1068,7 @@ impl Bridge {
                                         request.method().as_str(),
                                         "PUT" | "MKCOL" | "DELETE" | "MOVE"
                                     ) {
-                                        let response = crate::mount_write::handle(
+                                        let (response, invalidate) = crate::mount_write::handle(
                                             writer.unwrap(),
                                             request,
                                             address,
@@ -872,7 +1076,9 @@ impl Bridge {
                                         .await;
                                         // Invalidate on errors too: an upstream operation may
                                         // have completed before its acknowledgement failed.
-                                        fs.invalidate_display();
+                                        if invalidate {
+                                            fs.invalidate_display();
+                                        }
                                         return Ok::<_, Infallible>(response);
                                     }
                                     match tokio::time::timeout(
@@ -932,3 +1138,40 @@ impl Drop for Bridge {
 #[cfg(test)]
 #[path = "readonly_mount_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod editor_cache_tests {
+    use super::*;
+    #[test]
+    fn confirmed_lock_cleanup_keeps_newer_versions_and_other_cached_entries() {
+        let path = "/.~lock.book.xlsx#";
+        let lock = MetadataEntry::new_file("lock-id", path, 4, 1, "version-2");
+        let other = MetadataEntry::new_file("other-id", "/other.txt", 4, 1, "version-1");
+        let mut cache = DirectoryCache::default();
+        RemoteFs::remember(
+            &mut cache,
+            "/".into(),
+            Arc::new(BTreeMap::from([
+                (path.into(), lock),
+                ("/other.txt".into(), other),
+            ])),
+        );
+        let checked = cache.samples[0].checked;
+        let generation = cache.generation;
+        cache
+            .forget_editor_lock(path, "lock-id", "version-1")
+            .unwrap();
+        assert_ne!(cache.generation, generation);
+        assert!(cache.samples[0].entries.contains_key(path));
+        cache
+            .forget_editor_lock(path, "different-id", "version-2")
+            .unwrap();
+        assert!(cache.samples[0].entries.contains_key(path));
+        cache
+            .forget_editor_lock(path, "lock-id", "version-2")
+            .unwrap();
+        assert!(!cache.samples[0].entries.contains_key(path));
+        assert!(cache.samples[0].entries.contains_key("/other.txt"));
+        assert_eq!(cache.samples[0].checked, checked);
+    }
+}

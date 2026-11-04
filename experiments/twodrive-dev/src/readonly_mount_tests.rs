@@ -27,6 +27,7 @@ struct Fixture {
     fail_quota: Arc<AtomicBool>,
     quota_scale: u64,
     include_slow_file: bool,
+    probe_metadata_delay: Duration,
 }
 impl Fixture {
     fn new(bytes: &[u8]) -> Self {
@@ -51,6 +52,7 @@ impl Fixture {
             fail_quota: Arc::default(),
             quota_scale: 1,
             include_slow_file: false,
+            probe_metadata_delay: Duration::ZERO,
         }
     }
     fn meta(&self) -> MetadataEntry {
@@ -130,6 +132,9 @@ impl CloudBackend for Fixture {
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         self.metadata_reads.fetch_add(1, Ordering::SeqCst);
+        if matches!(path, "/.Trash" | "/.Trash-1000") {
+            thread::sleep(self.probe_metadata_delay);
+        }
         Ok(if path == "/" {
             Some(MetadataEntry::new_dir("root", "/", 1, "root"))
         } else if path == format!("/{NAME}") {
@@ -206,6 +211,71 @@ impl CloudBackend for Fixture {
         panic!("mount must never write")
     }
 }
+#[test]
+fn cold_root_display_probes_share_one_complete_listing_before_enumeration() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"contents");
+    fixture.probe_metadata_delay = Duration::from_millis(600);
+    let bridge = Bridge::start(Backend::new(fixture.clone()), root.path()).unwrap();
+    let c = client();
+    let started = Instant::now();
+    for path in ["/.Trash", "/.Trash-1000"] {
+        assert_eq!(
+            request(&c, &bridge, "HEAD", path).send().unwrap().status(),
+            404
+        );
+    }
+    assert_eq!(
+        fixture.metadata_reads.load(Ordering::SeqCst),
+        0,
+        "cold display probes must not perform separate cloud stat calls before readdir"
+    );
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert_eq!(root_count(&c, &bridge), 1);
+    assert_eq!(fixture.listings.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn failed_root_display_warmup_falls_back_to_live_metadata_and_never_authorizes_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(b"original");
+    fixture.fail_listing.store(true, Ordering::SeqCst);
+    let bridge = Bridge::start(Backend::new(fixture.clone()), root.path()).unwrap();
+    let c = client();
+    assert_eq!(
+        c.head(file_url(&bridge))
+            .bearer_auth(&bridge.token)
+            .send()
+            .unwrap()
+            .status(),
+        200
+    );
+    assert!(fixture.metadata_reads.load(Ordering::SeqCst) > 0);
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        request(&c, &bridge, "PROPFIND", "/")
+            .header("Depth", "1")
+            .send()
+            .unwrap()
+            .status(),
+        503,
+        "a failed listing cannot be treated as a complete empty root"
+    );
+    fixture.fail_listing.store(false, Ordering::SeqCst);
+    assert_eq!(root_count(&c, &bridge), 1);
+    fixture.change(b"fresh remote contents");
+    assert_eq!(
+        c.get(file_url(&bridge))
+            .bearer_auth(&bridge.token)
+            .send()
+            .unwrap()
+            .bytes()
+            .unwrap(),
+        b"fresh remote contents"[..]
+    );
+}
+
 #[test]
 fn directory_snapshot_avoids_per_file_probes_and_head_never_downloads() {
     let root = tempfile::tempdir().unwrap();
@@ -1056,6 +1126,333 @@ fn refresh_failure_preserves_snapshot_but_a_verified_empty_result_replaces_it() 
     );
 }
 #[test]
+fn indexed_subdirectory_stays_visible_after_expiry_and_parent_refresh_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"current contents");
+    fixture.named_directories = vec!["章节 空格%2F".into()];
+    let bridge = Bridge::start_icloud(Backend::new(fixture.clone()), root.path(), None).unwrap();
+    let path = "/章节 空格%2F";
+    bridge.fs.directory_snapshot("/").unwrap();
+    bridge.fs.directory_snapshot(path).unwrap();
+    expire_display(&bridge, DIRECTORY_MAX_AGE + Duration::from_secs(60));
+    {
+        let mut cache = bridge.fs.0.directories.lock().unwrap();
+        for sample in &mut cache.samples {
+            sample.checked = Instant::now() - DIRECTORY_MAX_AGE - Duration::from_secs(60);
+            sample.attempted = sample.checked;
+        }
+    }
+    fixture.fail_listing.store(true, Ordering::SeqCst);
+    const DISPLAY_PATH: &percent_encoding::AsciiSet =
+        &percent_encoding::CONTROLS.add(b' ').add(b'%');
+    let encoded = percent_encoding::utf8_percent_encode(path, DISPLAY_PATH).to_string();
+    let c = client();
+    let response = request(&c, &bridge, "PROPFIND", &encoded)
+        .header("Depth", "1")
+        .send()
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        207,
+        "a previously verified subdirectory must remain visible while offline"
+    );
+    let text = response.text().unwrap();
+    let xml = roxmltree::Document::parse(&text).unwrap();
+    assert_eq!(
+        xml.descendants()
+            .filter(|n| n.has_tag_name(("DAV:", "response")))
+            .count(),
+        2
+    );
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn indexed_nested_attribute_preflight_and_listing_share_shallow_parent_reads() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"contents");
+    fixture.named_directories = vec!["章节 空格%2F".into()];
+    let bridge =
+        Bridge::start_indexed(Backend::new(fixture.clone()), root.path(), None, false).unwrap();
+    const DISPLAY_PATH: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+        .add(b' ')
+        .add(b'%')
+        .add(b'&')
+        .add(b'<')
+        .add(b'>');
+    let folder = "/章节 空格%2F";
+    let file = percent_encoding::utf8_percent_encode(&format!("{folder}/{NAME}"), DISPLAY_PATH)
+        .to_string();
+    let encoded_folder = percent_encoding::utf8_percent_encode(folder, DISPLAY_PATH).to_string();
+    let c = client();
+    // Native navigation checks the directory before querying its children,
+    // establishing its identity in the complete parent index.
+    assert_eq!(
+        request(&c, &bridge, "PROPFIND", &encoded_folder)
+            .header("Depth", "0")
+            .send()
+            .unwrap()
+            .status(),
+        207
+    );
+    for _ in 0..3 {
+        assert_eq!(
+            request(&c, &bridge, "HEAD", &file).send().unwrap().status(),
+            200
+        );
+        assert_eq!(
+            request(&c, &bridge, "HEAD", &format!("{encoded_folder}/missing"))
+                .send()
+                .unwrap()
+                .status(),
+            404
+        );
+    }
+    assert_eq!(fixture.listings.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.metadata_reads.load(Ordering::SeqCst), 0);
+    let response = request(&c, &bridge, "PROPFIND", &encoded_folder)
+        .header("Depth", "1")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 207);
+    assert_eq!(
+        fixture.listings.load(Ordering::SeqCst),
+        2,
+        "only root and the requested child may be listed"
+    );
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+    fixture.change(b"live nested contents after a remote edit");
+    assert_eq!(
+        request(&c, &bridge, "GET", &file)
+            .send()
+            .unwrap()
+            .bytes()
+            .unwrap(),
+        b"live nested contents after a remote edit"[..]
+    );
+    assert!(fixture.metadata_reads.load(Ordering::SeqCst) > 0);
+}
+
+#[test]
+fn verified_parent_removal_or_replacement_invalidates_retained_child_snapshots() {
+    for replaced in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut fixture = Fixture::new(b"contents");
+        fixture.named_directories = vec!["folder".into()];
+        let bridge =
+            Bridge::start_indexed(Backend::new(fixture.clone()), root.path(), None, false).unwrap();
+        bridge.fs.directory_snapshot("/").unwrap();
+        bridge.fs.directory_snapshot("/folder").unwrap();
+        let entries = RemoteFs::validated_entries(
+            "/",
+            if replaced {
+                vec![MetadataEntry::new_dir(
+                    "replacement-directory",
+                    "/folder",
+                    1,
+                    "new",
+                )]
+            } else {
+                vec![]
+            },
+        )
+        .unwrap();
+        {
+            let mut cache = bridge.fs.0.directories.lock().unwrap();
+            let epoch = cache.generation;
+            RemoteFs::remember(&mut cache, "/".into(), entries);
+            assert_ne!(cache.generation, epoch);
+            assert!(!cache.samples.iter().any(|s| s.path == "/folder"));
+        }
+        fixture.fail_listing.store(true, Ordering::SeqCst);
+        assert_eq!(
+            request(&client(), &bridge, "PROPFIND", "/folder")
+                .header("Depth", "1")
+                .send()
+                .unwrap()
+                .status(),
+            if replaced { 503 } else { 404 }
+        );
+    }
+}
+
+#[test]
+fn parent_refresh_fences_a_child_listing_already_in_flight() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"contents");
+    fixture.named_directories = vec!["folder".into()];
+    let bridge =
+        Bridge::start_indexed(Backend::new(fixture.clone()), root.path(), None, false).unwrap();
+    bridge.fs.directory_snapshot("/").unwrap();
+    fixture.hold_listing.store(true, Ordering::SeqCst);
+    let fs = bridge.fs.clone();
+    let child = thread::spawn(move || fs.directory_snapshot("/folder"));
+    wait_until(|| fixture.listings.load(Ordering::SeqCst) == 2);
+    {
+        let mut cache = bridge.fs.0.directories.lock().unwrap();
+        RemoteFs::remember(
+            &mut cache,
+            "/".into(),
+            RemoteFs::validated_entries("/", vec![]).unwrap(),
+        );
+    }
+    fixture.hold_listing.store(false, Ordering::SeqCst);
+    assert!(
+        child.join().unwrap().is_err(),
+        "an old child response cannot undo a verified parent removal"
+    );
+    assert!(
+        !bridge
+            .fs
+            .0
+            .directories
+            .lock()
+            .unwrap()
+            .samples
+            .iter()
+            .any(|s| s.path == "/folder")
+    );
+}
+
+#[test]
+fn a_verified_parent_without_old_lineage_evicts_orphaned_cached_descendants() {
+    let mut cache = DirectoryCache {
+        retain_directories: true,
+        ..DirectoryCache::default()
+    };
+    RemoteFs::remember(
+        &mut cache,
+        "/parent/child/grandchild".into(),
+        Arc::new(BTreeMap::new()),
+    );
+    let parent = RemoteFs::validated_entries(
+        "/parent",
+        vec![MetadataEntry::new_dir(
+            "unknown-child-id",
+            "/parent/child",
+            1,
+            "1",
+        )],
+    )
+    .unwrap();
+    RemoteFs::remember(&mut cache, "/parent".into(), parent);
+    assert!(
+        !cache
+            .samples
+            .iter()
+            .any(|s| s.path == "/parent/child/grandchild")
+    );
+}
+
+#[test]
+fn icloud_root_index_survives_idle_expiry_and_slow_refresh_without_blocking() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"contents");
+    fixture.seed_root = true;
+    fixture.hold_listing.store(true, Ordering::SeqCst);
+    let bridge = Bridge::start_icloud(Backend::new(fixture.clone()), root.path(), None).unwrap();
+    let c = client();
+    expire_display(&bridge, DIRECTORY_MAX_AGE + Duration::from_secs(60));
+    let start = Instant::now();
+    assert_eq!(root_count(&c, &bridge), 1);
+    wait_until(|| fixture.listings.load(Ordering::SeqCst) == 1);
+    for _ in 0..4 {
+        assert_eq!(root_count(&c, &bridge), 1);
+        assert_eq!(
+            request(&c, &bridge, "HEAD", "/.Trash")
+                .send()
+                .unwrap()
+                .status(),
+            404
+        );
+    }
+    assert!(start.elapsed() < Duration::from_millis(500));
+    assert_eq!(fixture.listings.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+    let start = Instant::now();
+    drop(bridge);
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_eq!(fixture.cancelled_listings.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn icloud_root_refresh_failure_preserves_names_but_live_bytes_and_verified_empty_win() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"original");
+    fixture.seed_root = true;
+    fixture.fail_listing.store(true, Ordering::SeqCst);
+    let bridge = Bridge::start_icloud(Backend::new(fixture.clone()), root.path(), None).unwrap();
+    let c = client();
+    expire_display(&bridge, DIRECTORY_MAX_AGE + Duration::from_secs(60));
+    assert_eq!(root_count(&c, &bridge), 1);
+    wait_until(|| {
+        fixture.listings.load(Ordering::SeqCst) == 1
+            && bridge.fs.0.directories.lock().unwrap().pending.is_empty()
+    });
+    assert_eq!(root_count(&c, &bridge), 1);
+    assert_eq!(fixture.listings.load(Ordering::SeqCst), 1);
+    fixture.change(b"live contents");
+    assert_eq!(
+        c.get(file_url(&bridge))
+            .bearer_auth(&bridge.token)
+            .send()
+            .unwrap()
+            .bytes()
+            .unwrap(),
+        b"live contents"[..]
+    );
+    fixture.fail_listing.store(false, Ordering::SeqCst);
+    fixture.invalid_listing.store(true, Ordering::SeqCst);
+    expire_display(&bridge, DIRECTORY_MAX_AGE + Duration::from_secs(60));
+    assert_eq!(root_count(&c, &bridge), 1);
+    wait_until(|| {
+        fixture.listings.load(Ordering::SeqCst) == 2
+            && bridge.fs.0.directories.lock().unwrap().pending.is_empty()
+    });
+    assert_eq!(root_count(&c, &bridge), 1);
+    fixture.invalid_listing.store(false, Ordering::SeqCst);
+    fixture.empty_listing.store(true, Ordering::SeqCst);
+    expire_display(&bridge, DIRECTORY_MAX_AGE + Duration::from_secs(60));
+    assert_eq!(root_count(&c, &bridge), 1);
+    wait_until(|| {
+        fixture.listings.load(Ordering::SeqCst) == 3
+            && bridge.fs.0.directories.lock().unwrap().pending.is_empty()
+    });
+    assert_eq!(root_count(&c, &bridge), 0);
+}
+
+#[test]
+fn icloud_root_index_keeps_budget_and_invalidation_after_browsing_many_children() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"contents");
+    fixture.seed_root = true;
+    fixture.child_directories = DIRECTORY_CACHE_LIMIT + 12;
+    let bridge = Bridge::start_icloud(Backend::new(fixture.clone()), root.path(), None).unwrap();
+    for index in 0..fixture.child_directories {
+        bridge
+            .fs
+            .directory_snapshot(&format!("/folder-{index}"))
+            .unwrap();
+    }
+    {
+        let cache = bridge.fs.0.directories.lock().unwrap();
+        assert!(cache.samples.iter().any(|s| s.path == "/"));
+        assert!(cache.samples.len() <= DIRECTORY_CACHE_LIMIT);
+        assert!(cache.samples.iter().map(|s| s.entries.len()).sum::<usize>() <= 100000);
+    }
+    bridge.fs.invalidate_display();
+    fixture.fail_listing.store(true, Ordering::SeqCst);
+    assert_eq!(
+        request(&client(), &bridge, "PROPFIND", "/")
+            .header("Depth", "1")
+            .send()
+            .unwrap()
+            .status(),
+        503
+    );
+}
+
+#[test]
 fn expired_or_invalid_listings_are_not_exposed_as_complete_directory_contents() {
     let root = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::new(b"data");
@@ -1219,7 +1616,8 @@ fn native_statfs_and_gio_return_while_cloud_quota_is_stalled() {
     .map(str::to_owned)
     .collect();
     fixture.hold_quota.store(true, Ordering::SeqCst);
-    let bridge = Bridge::start(Backend::new(fixture.clone()), root.path()).unwrap();
+    let bridge =
+        Bridge::start_indexed(Backend::new(fixture.clone()), root.path(), None, false).unwrap();
     let target = root.path().join("mount");
     std::fs::create_dir(&target).unwrap();
     let mut command = Command::new(
@@ -1314,6 +1712,46 @@ fn native_statfs_and_gio_return_while_cloud_quota_is_stalled() {
             b"synthetic mount bytes"
         );
     }
+    {
+        let mut cache = bridge.fs.0.directories.lock().unwrap();
+        for sample in &mut cache.samples {
+            sample.checked = Instant::now() - DIRECTORY_MAX_AGE - Duration::from_secs(60);
+            sample.attempted = sample.checked;
+        }
+    }
+    fixture.hold_listing.store(true, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(150));
+    let mut indexed = Command::new("/usr/bin/python3")
+        .args([
+            "-c",
+            "import os,sys; assert all(len(os.listdir(p))==1 for p in sys.argv[1:])",
+        ])
+        .args(
+            fixture
+                .named_directories
+                .iter()
+                .map(|name| target.join(name)),
+        )
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let timely = loop {
+        if let Some(status) = indexed.try_wait().unwrap() {
+            break status.success();
+        }
+        if start.elapsed() >= Duration::from_millis(1500) {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    fixture.hold_listing.store(false, Ordering::SeqCst);
+    assert!(
+        indexed.wait().unwrap().success() && timely,
+        "cached native subdirectories waited for a stalled cloud refresh after expiry"
+    );
+    wait_until(|| bridge.fs.0.directories.lock().unwrap().pending.is_empty());
     fixture.hold_download.store(true, Ordering::SeqCst);
     let mut reader = Command::new("/usr/bin/python3").args(["-c", "import pathlib,sys; assert pathlib.Path(sys.argv[1]).read_bytes() == b'synthetic mount bytes'"])
         .arg(target.join("slow.bin")).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
