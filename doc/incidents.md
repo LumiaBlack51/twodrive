@@ -44,6 +44,41 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20261104-03：PR47 的 iCloud 认证工作目录缺少 Unix 创建权限
+
+- 日期：2026-11-04；状态：已回移修复及回归，当前环境仅静态核对通过，最终提交的托管原生检查待执行。
+- 影响版本与环境：PR #47 的 `babf36a1d96a84fe472a8b84a81410ab5a87d123`，Linux/Unix 认证流程。
+- 关联历史故障：TD-20261029-30 是其他测试/状态目录的权限错误；本次定位到生产 `gui::action` 的认证临时目录。PR #50 已有同一生产路径的修复，此次仅回移该 helper 及其回归。
+
+### 症状与触发
+
+[Linux desktop job 123906538245](https://github.com/LumiaBlack51/twodrive/actions/runs/40873124420/job/123906538245) 在显式官方组件测试 `official_gui_questions_cancel_and_preserve_previous_login` 因 `state directory must have mode 0700` 失败，之后的 IPC/FUSE/Flutter/build 阶段未执行。当前 head 的七条 PR workflow 为六成功、一失败，不能再描述为等待批准或全通过；Windows 成功不替代 Linux。
+
+### 根因与证据
+
+认证工作目录使用 `tempfile::Builder::tempdir_in` 的默认创建权限，取决于 umask，随后 `State::new` 正确拒绝非 0700 目录。已重新读取原 head 源码及上述实际失败日志；没有独立重跑旧 Rust 用例。
+
+### 解决办法与恢复操作
+
+回移 PR #50 `3351792d8e6345b82262beb86d481d9bfb375b89` 的 `new_auth_work_state`：Unix 在创建目录时即指定 0700，在 State 检查成功后才保留临时目录。保留 State 的私密目录校验，不事后放宽权限，也不更改已有凭据或登录会话。用户可见变化仅为原先失败的 Unix 登录准备步骤能够继续；Windows 既有创建行为、登录问题/取消处理不变。未部署、重启客户端或访问真实网盘。
+
+### 验证结果与边界
+
+本次静态核对确认最终 `gui.rs` 与 #50 上述 SHA 的该文件逐字节一致，回归 `gui_auth_work_directory_is_private_and_can_be_reopened` 检查父目录、精确 0700 及重新打开。原 #50 的 hosted Linux job 已通过，但其历史结果不能计作本次 #47 最终提交通过。当前执行环境无 Cargo/Rust/Flutter；Rustfmt、Clippy、Rust 回归、官方组件与原生挂载未在此执行，需检查新提交的 hosted CI。
+
+### 防复发措施与后续
+
+保留新目录权限回归、官方认证取消/旧登录保留回归，以及严格 State 校验。#47/#50 仍是分叉候选，本补丁不完成跨分支整合，iCloud 真实目录/创建时间/浏览缓存与 Linux 挂载/单会话改名仍需在未来统一候选验证。
+
+### 交付记录
+
+修复与此记录同次提交到现有 PR #47 源分支；提交哈希与最终 CI 结果待生成后复核。不合并、不发布、不改变用户运行环境。
+
+
+
+
+
+
 
 
 ## TD-20261029-36：iCloud 新建目录显示 2000 年且挂载操作卡顿

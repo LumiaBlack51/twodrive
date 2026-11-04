@@ -20,6 +20,22 @@ fn system_route() -> String {
     "system".into()
 }
 
+fn new_auth_work_state(state: &State) -> anyhow::Result<State> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("gui-auth-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Tempfile directories otherwise use the platform default (0777 before
+        // umask). Set this at creation; do not relax State's private-dir check.
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    let temporary = builder.tempdir_in(&state.dir)?;
+    let work = State::new(temporary.path().to_path_buf())?;
+    let _ = temporary.keep();
+    Ok(work)
+}
+
 // RC errors also contain the entire request under `input`. Never forward the
 // body or arbitrary error text: only classify the error into fixed messages.
 fn rpc_error(status: u16, body: &[u8]) -> String {
@@ -403,11 +419,7 @@ fn run_action(
             )?;
         }
         let pass = password(&state)?;
-        let path = tempfile::Builder::new()
-            .prefix("gui-auth-")
-            .tempdir_in(&state.dir)?
-            .keep();
-        let work = State::new(path)?;
+        let work = new_auth_work_state(&state)?;
         if state.dir.join(CONFIG).exists() {
             work.write_bytes(CONFIG, &fs::read(state.dir.join(CONFIG))?)?;
         }
@@ -551,6 +563,20 @@ fn run_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn gui_auth_work_directory_is_private_and_can_be_reopened() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let account = State::new(root.path().join("account")).unwrap();
+        let work = new_auth_work_state(&account).unwrap();
+        assert_eq!(work.dir.parent(), Some(account.dir.as_path()));
+        assert_eq!(
+            fs::metadata(&work.dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        State::new(work.dir).unwrap();
+    }
 
     #[test]
     #[ignore = "official Rclone required; stops before post-config and never contacts Apple"]
