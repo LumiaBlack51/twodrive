@@ -647,7 +647,10 @@ async fn handle_read(
     let metadata_only = matches!(request.method().as_str(), "HEAD" | "PROPFIND" | "OPTIONS");
     let response = DISPLAY_METADATA_ONLY.scope(metadata_only, async move {
         let prepared = if propfind && request.headers().get("Depth").is_some_and(|v| v == "1") {
-            let path = match DavPath::from_uri(request.uri())
+            // Match DavHandler's URL-path normalization. from_uri keeps raw
+            // percent escapes, which would query a different cloud path for
+            // Unicode, spaces and literal percent signs. Decode exactly once.
+            let path = match DavPath::new(request.uri().path())
                 .map_err(|_| FsError::Forbidden)
                 .and_then(|p| resource(&p))
             {

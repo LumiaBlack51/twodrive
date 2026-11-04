@@ -387,6 +387,7 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     });
     let mut unmount_requested = false;
     let mut sample = Instant::now() - Duration::from_secs(2);
+    let mut last_write_status = (0, false);
     loop {
         #[cfg(target_os = "linux")]
         if WORKER_TERMINATING.load(Ordering::Relaxed) {
@@ -394,17 +395,15 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
         }
         ensure!(component.0.try_wait()?.is_none(), "挂载组件已退出");
         if writable && sample.elapsed() >= Duration::from_secs(1) {
-            let result = control.call("vfs/stats", json!({}));
-            let (pending, error) = match result {
-                Ok(v) => (
-                    v["diskCache"]["uploadsInProgress"].as_u64().unwrap_or(0)
-                        + v["diskCache"]["uploadsQueued"].as_u64().unwrap_or(0),
-                    v["diskCache"]["erroredFiles"].as_u64().unwrap_or(0) > 0
-                        || v["diskCache"]["outOfSpace"] == true,
-                ),
-                Err(_) => (1, true),
-            };
-            persistent.save("status.json", &json!({"pending":pending,"error":error}))?;
+            // vfs/stats walks and locks the entire directory tree. A slow
+            // directory can then stall unrelated browsing and the status UI.
+            let (pending, error, status_error) =
+                sampled_write_status(last_write_status, control.call("vfs/queue", json!({})));
+            last_write_status = (pending, error);
+            persistent.save(
+                "status.json",
+                &json!({"pending":pending,"error":error,"status_error":status_error}),
+            )?;
             sample = Instant::now();
         }
         match receive.recv_timeout(Duration::from_millis(200)) {
@@ -558,6 +557,28 @@ fn dirty_cache(root: &Path) -> anyhow::Result<u64> {
     }
     Ok(pending)
 }
+
+fn sampled_write_status(previous: (u64, bool), reply: anyhow::Result<Value>) -> (u64, bool, bool) {
+    let status = reply.and_then(|value| {
+        let queue = value["queue"].as_array().context("missing upload queue")?;
+        ensure!(queue.len() <= 100000, "upload queue exceeds budget");
+        let mut error = false;
+        for item in queue {
+            let tries = item["tries"].as_u64().context("invalid upload attempts")?;
+            let uploading = item["uploading"]
+                .as_bool()
+                .context("invalid upload state")?;
+            error |= tries > 1 || tries > 0 && !uploading;
+        }
+        Ok((queue.len() as u64, error))
+    });
+    match status {
+        Ok((pending, error)) => (pending, error, false),
+        // Preserve a known write problem, but never invent one from a failed
+        // status read. Dirty caches and recovery files are checked separately.
+        Err(_) => (previous.0, previous.1, true),
+    }
+}
 pub(super) fn cache_status(app: &App, p: &Profile) -> anyhow::Result<Value> {
     let binding = app
         .saved_session(p)
@@ -581,7 +602,7 @@ pub(super) fn cache_status(app: &App, p: &Profile) -> anyhow::Result<Value> {
         directories.push(PathBuf::from(p.option(key)).join("recovery"));
     }
     Ok(
-        json!({"bytes":recovery["bytes"],"pending":pending,"write_error":report["error"]==true,
+        json!({"bytes":recovery["bytes"],"pending":pending,"write_error":report["error"]==true,"status_error":report["status_error"]==true,
         "recovery_files":recovery["files"],"recovery_directories":directories,"released":0}),
     )
 }
@@ -589,6 +610,39 @@ pub(super) fn cache_status(app: &App, p: &Profile) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn upload_status_distinguishes_normal_work_failed_upload_and_unavailable_probe() {
+        assert_eq!(
+            sampled_write_status((0, false), Ok(json!({"queue":[]}))),
+            (0, false, false)
+        );
+        for (tries, uploading, failed) in [
+            (0, false, false),
+            (1, true, false),
+            (1, false, true),
+            (2, true, true),
+        ] {
+            assert_eq!(
+                sampled_write_status(
+                    (0, false),
+                    Ok(json!({"queue":[{"tries":tries,"uploading":uploading}]}))
+                ),
+                (1, failed, false)
+            );
+        }
+        assert_eq!(
+            sampled_write_status((0, false), Err(anyhow::anyhow!("timeout"))),
+            (0, false, true)
+        );
+        assert_eq!(
+            sampled_write_status((2, true), Err(anyhow::anyhow!("timeout"))),
+            (2, true, true)
+        );
+        assert_eq!(
+            sampled_write_status((0, false), Ok(json!({"queue":[{}]}))),
+            (0, false, true)
+        );
+    }
     #[test]
     #[cfg(target_os = "linux")]
     fn linux_mount_target_preserves_existing_data_and_owned_empty_directory() {

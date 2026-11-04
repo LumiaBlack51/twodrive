@@ -17,6 +17,7 @@ struct Fixture {
     cancelled_listings: Arc<AtomicUsize>,
     seed_root: bool,
     child_directories: usize,
+    named_directories: Vec<String>,
     metadata_reads: Arc<AtomicUsize>,
     change_during_read: Arc<AtomicBool>,
     hold_download: Arc<AtomicBool>,
@@ -40,6 +41,7 @@ impl Fixture {
             cancelled_listings: Arc::default(),
             seed_root: false,
             child_directories: 0,
+            named_directories: Vec::new(),
             metadata_reads: Arc::default(),
             change_during_read: Arc::default(),
             hold_download: Arc::default(),
@@ -67,9 +69,37 @@ impl Fixture {
         data.1 += 1;
     }
     fn child(&self, path: &str) -> Option<MetadataEntry> {
+        if let Some(index) = self
+            .named_directories
+            .iter()
+            .position(|name| path == format!("/{name}"))
+        {
+            return Some(MetadataEntry::new_dir(
+                format!("named-folder-{index}"),
+                path,
+                1,
+                "1",
+            ));
+        }
         let number = path.strip_prefix("/folder-")?.parse::<usize>().ok()?;
         (number < self.child_directories)
             .then(|| MetadataEntry::new_dir(format!("folder-object-{number}"), path, 1, "1"))
+    }
+    fn nested_file(&self, path: &str) -> Option<MetadataEntry> {
+        let (parent, name) = path.rsplit_once('/')?;
+        let index = self
+            .named_directories
+            .iter()
+            .position(|dir| parent == format!("/{dir}"))?;
+        (name == NAME).then(|| {
+            MetadataEntry::new_file(
+                format!("nested-object-{index}"),
+                path,
+                self.data.lock().unwrap().0.len() as u64,
+                1,
+                "1",
+            )
+        })
     }
 }
 impl CloudBackend for Fixture {
@@ -83,6 +113,12 @@ impl CloudBackend for Fixture {
         panic!("delta not needed")
     }
     fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        for name in &self.named_directories {
+            let entry = self.nested_file(&format!("/{name}/{NAME}")).unwrap();
+            if entry.remote_id == id {
+                return Ok(Some(entry));
+            }
+        }
         ensure!(id == "opaque-id-never-a-path" || id == "slow-object");
         let mut metadata = self.meta();
         if id == "slow-object" {
@@ -105,7 +141,7 @@ impl CloudBackend for Fixture {
             metadata.remote_id = "slow-object".into();
             Some(metadata)
         } else {
-            self.child(path)
+            self.child(path).or_else(|| self.nested_file(path))
         })
     }
     fn download(&self, _: &str) -> anyhow::Result<Vec<u8>> {
@@ -117,7 +153,11 @@ impl CloudBackend for Fixture {
         writer: &mut dyn Write,
         progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
     ) -> anyhow::Result<u64> {
-        ensure!(id == "opaque-id-never-a-path" || id == "slow-object");
+        ensure!(
+            id == "opaque-id-never-a-path"
+                || id == "slow-object"
+                || id.starts_with("nested-object-")
+        );
         self.downloads.fetch_add(1, Ordering::SeqCst);
         if id == "slow-object" {
             self.download_started.store(true, Ordering::SeqCst);
@@ -345,23 +385,30 @@ impl Provider for Fixture {
             !self.fail_listing.load(Ordering::SeqCst),
             "synthetic listing failure"
         );
-        Ok(
-            if path != "/" || self.empty_listing.load(Ordering::SeqCst) {
-                vec![]
-            } else if self.invalid_listing.load(Ordering::SeqCst) {
-                vec![self.meta(), self.meta()]
-            } else {
-                let mut entries = vec![self.meta()];
-                if self.include_slow_file {
-                    entries.push(self.get_metadata("slow-object")?.unwrap());
-                }
-                entries.extend(
-                    (0..self.child_directories)
-                        .map(|number| self.child(&format!("/folder-{number}")).unwrap()),
-                );
-                entries
-            },
-        )
+        Ok(if self.empty_listing.load(Ordering::SeqCst) {
+            vec![]
+        } else if path != "/" {
+            self.nested_file(&format!("{path}/{NAME}"))
+                .into_iter()
+                .collect()
+        } else if self.invalid_listing.load(Ordering::SeqCst) {
+            vec![self.meta(), self.meta()]
+        } else {
+            let mut entries = vec![self.meta()];
+            if self.include_slow_file {
+                entries.push(self.get_metadata("slow-object")?.unwrap());
+            }
+            entries.extend(
+                (0..self.child_directories)
+                    .map(|number| self.child(&format!("/folder-{number}")).unwrap()),
+            );
+            entries.extend(
+                self.named_directories
+                    .iter()
+                    .map(|name| self.child(&format!("/{name}")).unwrap()),
+            );
+            entries
+        })
     }
     fn upload_controlled(
         &self,
@@ -399,6 +446,87 @@ fn request(
         format!("http://{}{path}", bridge.address),
     )
     .bearer_auth(&bridge.token)
+}
+
+#[test]
+fn encoded_subdirectory_propfind_uses_the_same_decoded_path_as_the_handler() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"nested synthetic bytes");
+    fixture.named_directories = [
+        "中文 目录",
+        "space folder",
+        "hash#percent%",
+        "literal%2F..%2F",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let bridge = Bridge::start(Backend::new(fixture.clone()), root.path()).unwrap();
+    let c = client();
+    assert_eq!(root_count(&c, &bridge), 5);
+    for name in &fixture.named_directories {
+        let encoded =
+            percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
+        for suffix in ["", "/"] {
+            let path = format!("/{encoded}{suffix}");
+            let response = request(&c, &bridge, "PROPFIND", &path)
+                .header("Depth", "1")
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), 207, "encoded directory: {name}");
+            let xml = response.text().unwrap();
+            let document = roxmltree::Document::parse(&xml).unwrap();
+            let hrefs: Vec<_> = document
+                .descendants()
+                .filter(|node| node.has_tag_name(("DAV:", "href")))
+                .map(|node| {
+                    percent_encoding::percent_decode_str(node.text().unwrap())
+                        .decode_utf8()
+                        .unwrap()
+                        .into_owned()
+                })
+                .collect();
+            assert_eq!(hrefs.len(), 2);
+            assert!(hrefs.contains(&format!("/{name}/{NAME}")));
+        }
+    }
+    assert_eq!(
+        fixture.downloads.load(Ordering::SeqCst),
+        0,
+        "listing must not read file content"
+    );
+    for name in &fixture.named_directories {
+        let path = format!("/{name}/{NAME}");
+        let encoded = path
+            .split('/')
+            .map(|segment| {
+                percent_encoding::utf8_percent_encode(segment, percent_encoding::NON_ALPHANUMERIC)
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        let response = request(&c, &bridge, "GET", &encoded).send().unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.bytes().unwrap().as_ref(),
+            b"nested synthetic bytes"
+        );
+    }
+}
+
+#[test]
+fn directory_preflight_rejects_encoded_separators_and_invalid_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(b"synthetic bytes");
+    let bridge = Bridge::start(Backend::new(fixture.clone()), root.path()).unwrap();
+    for path in ["/a%2Fb", "/%00", "/%FF", "/%2e%2e/private"] {
+        let response = request(&client(), &bridge, "PROPFIND", path)
+            .header("Depth", "1")
+            .send()
+            .unwrap();
+        assert!(!response.status().is_success());
+    }
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
 }
 #[test]
 fn loopback_auth_readonly_methods_depth_and_xml_escaping() {
@@ -1081,6 +1209,15 @@ fn native_statfs_and_gio_return_while_cloud_quota_is_stalled() {
     let mut fixture = Fixture::new(b"synthetic mount bytes");
     fixture.quota_scale = 1024 * 1024;
     fixture.include_slow_file = true;
+    fixture.named_directories = [
+        "中文 目录",
+        "space folder",
+        "hash#percent%",
+        "literal%2F..%2F",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
     fixture.hold_quota.store(true, Ordering::SeqCst);
     let bridge = Bridge::start(Backend::new(fixture.clone()), root.path()).unwrap();
     let target = root.path().join("mount");
@@ -1136,7 +1273,7 @@ fn native_statfs_and_gio_return_while_cloud_quota_is_stalled() {
     // Include GIO's filesystem classification, not just readdir. This was the
     // missing native boundary in the earlier directory navigation regression.
     let mut probe = Command::new("/usr/bin/python3").args(["-c",
-        "import os,sys; from gi.repository import Gio; p=sys.argv[1]; assert len(os.listdir(p)) == 2; os.statvfs(p); Gio.File.new_for_path(p).query_filesystem_info('filesystem::remote,filesystem::type',None)"])
+        "import os,sys; from gi.repository import Gio; p=sys.argv[1]; assert len(os.listdir(p)) == 6; os.statvfs(p); Gio.File.new_for_path(p).query_filesystem_info('filesystem::remote,filesystem::type',None)"])
         .arg(&target).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
     let start = Instant::now();
     let timely = loop {
@@ -1165,6 +1302,18 @@ fn native_statfs_and_gio_return_while_cloud_quota_is_stalled() {
         "native quota must eventually replace the unknown fallback"
     );
     assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+    for name in &fixture.named_directories {
+        let directory = target.join(name);
+        let names = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![std::ffi::OsString::from(NAME)]);
+        assert_eq!(
+            std::fs::read(directory.join(NAME)).unwrap(),
+            b"synthetic mount bytes"
+        );
+    }
     fixture.hold_download.store(true, Ordering::SeqCst);
     let mut reader = Command::new("/usr/bin/python3").args(["-c", "import pathlib,sys; assert pathlib.Path(sys.argv[1]).read_bytes() == b'synthetic mount bytes'"])
         .arg(target.join("slow.bin")).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
@@ -1173,7 +1322,7 @@ fn native_statfs_and_gio_return_while_cloud_quota_is_stalled() {
     let mut listing = Command::new("/usr/bin/python3")
         .args([
             "-c",
-            "import os,sys; assert len(os.listdir(sys.argv[1])) == 2",
+            "import os,sys; assert len(os.listdir(sys.argv[1])) == 6",
         ])
         .arg(&target)
         .stdout(Stdio::null())

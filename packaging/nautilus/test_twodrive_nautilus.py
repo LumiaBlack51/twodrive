@@ -292,7 +292,7 @@ class PinEmblemTests(unittest.TestCase):
         self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.db_states_for([path])[path]),
                          ["emblem-twodrive-pinned"])
         self.assertEqual(EXTENSION.emblems_for_state(EXTENSION.db_states_for(["/project/plain"])["/project/plain"]),
-                         ["emblem-twodrive-syncing"])
+                         ["emblem-twodrive-downloading"])
         for state, release_pending, expected in [("error", 0, ["emblem-twodrive-error"]),
                                                   ("conflict", 0, ["emblem-twodrive-error"]),
                                                   ("uploading", 0, ["emblem-twodrive-syncing"]),

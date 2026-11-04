@@ -2,6 +2,8 @@
 
 当前 `dev` 中，底部任务栏的 TwoDrive 状态面板以图标实际矩形的中心水平对齐，底边距任务栏保留工作区边界 8 个逻辑像素。顶部任务栏向下展开；图标过于靠近屏幕边缘时，仅为防止面板出屏而限位。定位不再跟随鼠标的纵向位置，也不使用偏向一侧的 `x + 20 - width` 公式。
 
+2026-11-04 更新：为使状态面板隐藏 Dock/任务栏图标，启动器在 DISPLAY 可用时默认使用 X11/XWayland。显式 GDK_BACKEND 仍优先；原生 GTK 3 Wayland 的定位支持不代表其支持隐藏任务栏提示。验证和边界见 [TD-20261103-06](incidents.md#td-20261103-06打开托盘状态小窗口时出现额外-dock-图标)。
+
 GNOME/Zorin 同时支持 GTK X11 和原生 GTK Wayland。TwoDrive 专用 GNOME 组件读取 Shell 中 TwoDrive 托盘 actor 的矩形及所在显示器工作区，不修改系统 AppIndicator 扩展。X11 在原生窗口映射后应用位置；Wayland 由 compositor 定位该进程自己的 TwoDrive 无装饰面板。发送者 PID、窗口 PID 和窗口类必须匹配，没有通用窗口移动或任意脚本执行接口。原生 Wayland 的 TwoDrive SNI 图标通过本组件保留单击展开，其他指示器不受影响。
 
 安装源码构建时增加组件路径：

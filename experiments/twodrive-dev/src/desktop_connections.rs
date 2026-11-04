@@ -73,6 +73,10 @@ pub(super) fn aggregate_accounts(accounts: &[Value]) -> Value {
                 "挂载写入需要处理；编辑内容保留在本机，请打开该网盘的写入恢复目录",
             ),
             (
+                account["mounted"] == true && account["cache"]["status_error"] == true,
+                "暂时无法读取挂载状态，请稍后重试",
+            ),
+            (
                 account["backup_failed"] == true || account["backup"]["state"] == "error",
                 "备份需要处理，请查看该网盘的备份状态",
             ),
@@ -658,6 +662,23 @@ mod tests {
         assert_eq!(summary["waiting"][0]["profile"], "a");
         assert_eq!(summary["waiting"][1]["profile"], "b");
         assert_eq!(summary["issues"].as_array().unwrap().len(), 2);
+    }
+    #[test]
+    fn unavailable_mount_status_never_claims_editor_content_needs_recovery() {
+        let summary = aggregate_accounts(&[json!({"profile":"a","mounted":true,
+            "cache":{"pending":0,"write_error":false,"status_error":true,"recovery_files":0}})]);
+        assert_eq!(summary["syncing"], false);
+        let issues = summary["issues"].as_array().unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0]["message"], "暂时无法读取挂载状态，请稍后重试");
+        let actual_recovery = aggregate_accounts(&[json!({"profile":"a","mounted":true,
+            "cache":{"pending":1,"write_error":true,"status_error":false,"recovery_files":1}})]);
+        assert!(
+            actual_recovery["issues"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("写入恢复")
+        );
     }
     #[test]
     fn selecting_retained_connections_keeps_identity_data_and_other_connection_online() {

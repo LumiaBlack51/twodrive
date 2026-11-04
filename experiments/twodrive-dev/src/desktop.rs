@@ -335,7 +335,12 @@ impl App {
         {
             let native = native_mount::cache_status(self, p)?;
             result["pending"] = json!(pending as u64 + native["pending"].as_u64().unwrap_or(0));
-            for key in ["write_error", "recovery_files", "recovery_directories"] {
+            for key in [
+                "write_error",
+                "status_error",
+                "recovery_files",
+                "recovery_directories",
+            ] {
                 result[key] = native[key].clone();
             }
         }

@@ -15,6 +15,7 @@ import 'local_file_preflight.dart';
 import 'native_local_files.dart';
 import 'connection_card.dart';
 import 'mount_card.dart';
+import 'workspace_navigation.dart';
 
 String bytes(num value) {
   if (value < 1024) {
@@ -403,7 +404,6 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         onSignOut: signOut,
       );
     }
-    final titles = ['文件', '传输', '连接', '备份', '共享', '设置'];
     return Scaffold(
       body: Row(
         children: [
@@ -441,7 +441,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           style: TextStyle(color: Colors.blueGrey),
                         ),
                       ),
-                      for (var i = 0; i < titles.length; i++)
+                      for (final destination in WorkspacePage.values)
                         Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -449,23 +449,15 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           ),
                           child: ListTile(
                             dense: true,
-                            selected: page == i,
+                            selected: page == destination.index,
                             selectedTileColor: const Color(0xffedf3ff),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            leading: Icon(
-                              [
-                                Icons.folder_outlined,
-                                Icons.swap_vert,
-                                Icons.dns_outlined,
-                                Icons.backup_outlined,
-                                Icons.share_outlined,
-                                Icons.tune,
-                              ][i],
-                            ),
-                            title: Text(titles[i]),
-                            onTap: () => setState(() => page = i),
+                            leading: Icon(destination.icon),
+                            title: Text(destination.label),
+                            onTap: () =>
+                                setState(() => page = destination.index),
                           ),
                         ),
                     ],
@@ -499,7 +491,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   Row(
                     children: [
                       Text(
-                        titles[page],
+                        WorkspacePage.values[page].label,
                         style: const TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.w700,
@@ -604,13 +596,16 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                       ],
                     ),
                   Expanded(
-                    child: switch (page) {
-                      0 => filesPage(),
-                      1 => transfersPage(),
-                      2 => connectionsPage(),
-                      3 => BackupPage(key: ValueKey(c.selected), client: c),
-                      4 => SharingPage(client: c),
-                      _ => settingsPage(),
+                    child: switch (WorkspacePage.values[page]) {
+                      WorkspacePage.files => filesPage(),
+                      WorkspacePage.transfers => transfersPage(),
+                      WorkspacePage.connections => connectionsPage(),
+                      WorkspacePage.backup => BackupPage(
+                        key: ValueKey(c.selected),
+                        client: c,
+                      ),
+                      WorkspacePage.sharing => SharingPage(client: c),
+                      WorkspacePage.settings => settingsPage(),
                     },
                   ),
                   if (c.updates.available)

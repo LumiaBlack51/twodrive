@@ -38,6 +38,22 @@ class InstallerTests(unittest.TestCase):
             launcher = (root/'bin/twodrive-dav').read_text()
             compile(launcher, 'launcher', 'exec')
             self.assertIn('os.environ.setdefault("TWODRIVE_TRAY_BACKEND", "sni")', launcher)
+            # A loaded positioning component does not make GTK's Wayland
+            # taskbar-hiding hint effective. Exercise the generated launcher.
+            for variables, expected in [
+                ({'DISPLAY': ':test', 'WAYLAND_DISPLAY': 'wayland-test'}, 'x11'),
+                ({'DISPLAY': ':test'}, 'x11'),
+                ({'WAYLAND_DISPLAY': 'wayland-test'}, None),
+                ({'DISPLAY': ':test', 'GDK_BACKEND': 'wayland'}, 'wayland'),
+            ]:
+                with self.subTest(environment=variables), \
+                     patch.dict(installer.os.environ, variables, clear=True), \
+                     patch('sys.argv', ['twodrive-dav', '--background']), \
+                     patch.object(installer.os, 'execv') as execute, \
+                     patch.object(installer.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+                    exec(compile(launcher, 'launcher', 'exec'), {})
+                    self.assertEqual(installer.os.environ.get('GDK_BACKEND'), expected)
+                    self.assertEqual(execute.call_args.args[1][-1], '--background')
             self.assertEqual((app/'runtime/twodrive-provider-login').read_bytes(), b'new-executable')
             desktop = (root/'data/applications/app.twodrive.twodrive_dav.desktop').read_text()
             self.assertIn('Name=TwoDrive\n', desktop)

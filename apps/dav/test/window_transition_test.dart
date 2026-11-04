@@ -123,7 +123,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     client.dispose();
   });
-  testWidgets('tray settings dismisses the popup and selects settings', (
+  testWidgets('tray Dashboard dismisses the popup and opens the workspace', (
     tester,
   ) async {
     final client = StorageClient();
@@ -143,11 +143,11 @@ void main() {
     );
     await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('设置'));
+    await tester.tap(find.text('Dashboard'));
     await tester.pump();
-    expect(destination, 5);
+    expect(destination, 0);
     await tester.pump();
-    expect(find.text('管理备份文件夹'), findsNothing);
+    expect(find.byType(PopupMenuItem<String>), findsNothing);
     await tester.pumpWidget(const SizedBox());
     client.dispose();
   });

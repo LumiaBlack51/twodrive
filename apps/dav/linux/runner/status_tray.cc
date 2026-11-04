@@ -97,6 +97,11 @@ gboolean position_mapped_panel(gpointer data) {
 }
 gboolean mapped(GtkWidget*, GdkEvent*, gpointer data) {
   auto* tray = static_cast<Tray*>(data);
+  if (tray->panel) {
+    // Keep the mapped utility surface out of the taskbar and window switcher.
+    gtk_window_set_skip_taskbar_hint(tray->window, TRUE);
+    gtk_window_set_skip_pager_hint(tray->window, TRUE);
+  }
   if (tray->panel && !tray->reposition) {
     tray->placement_attempts = 0;
     tray->reposition = g_timeout_add(25, position_mapped_panel, tray);
@@ -256,6 +261,13 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
     if (panel && !tray->anchor.valid) capture_anchor(tray, 0, 0);
     const auto bounds = tray->anchor.panel();
     if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray bounds: %d,%d %dx%d", bounds.x, bounds.y, bounds.width, bounds.height);
+    // This surface alternates between a tray utility and the dashboard.
+    // Apply its role before mapping, and restore normal window participation
+    // when returning to the dashboard. Do not rely only on the Dart hint.
+    gtk_window_set_type_hint(tray->window,
+        panel ? GDK_WINDOW_TYPE_HINT_UTILITY : GDK_WINDOW_TYPE_HINT_NORMAL);
+    gtk_window_set_skip_taskbar_hint(tray->window, panel);
+    gtk_window_set_skip_pager_hint(tray->window, panel);
     gtk_window_set_decorated(tray->window, !panel);
     gtk_window_set_resizable(tray->window, TRUE);
     GdkGeometry geometry = {};

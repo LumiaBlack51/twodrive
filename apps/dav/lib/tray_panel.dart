@@ -208,14 +208,10 @@ class TrayPanel extends StatelessWidget {
                       icon: const Icon(Icons.settings_outlined),
                       onSelected: (value) async {
                         switch (value) {
-                          case 'settings':
-                            await onManage(5);
-                          case 'backups':
-                            await onManage(3);
+                          case 'dashboard':
+                            await onManage();
                           case 'pause':
                             await c.pauseToggle();
-                          case 'connect':
-                            await onManage(2);
                           case 'signout':
                             if (onSignOut != null) {
                               await onSignOut!();
@@ -228,22 +224,26 @@ class TrayPanel extends StatelessWidget {
                       },
                       itemBuilder: (_) => [
                         const PopupMenuItem(
-                          value: 'settings',
-                          child: Text('设置'),
+                          value: 'dashboard',
+                          child: Row(
+                            children: [
+                              Icon(Icons.dashboard_outlined, size: 20),
+                              SizedBox(width: 12),
+                              Text('Dashboard'),
+                            ],
+                          ),
                         ),
-                        const PopupMenuItem(
-                          value: 'backups',
-                          child: Text('管理备份文件夹'),
-                        ),
+                        const PopupMenuDivider(),
                         PopupMenuItem(
                           value: 'pause',
                           enabled: c.connected && !c.busy,
                           child: Text(c.paused ? '恢复同步' : '暂停同步'),
                         ),
-                        PopupMenuItem(
-                          value: c.connected ? 'signout' : 'connect',
-                          child: Text(c.connected ? '退出登录…' : '连接账号'),
-                        ),
+                        if (c.connected)
+                          const PopupMenuItem(
+                            value: 'signout',
+                            child: Text('退出登录…'),
+                          ),
                         const PopupMenuDivider(),
                         const PopupMenuItem(
                           value: 'quit',

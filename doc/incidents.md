@@ -44,6 +44,205 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+
+2026-11-04 分支交付：用户在本机测试后授权上传 GitHub 分支。下列条目中的“未提交、推送或上传”保留各阶段验收时的事实；本批最终保留范围、验证结果和边界见 [Linux 桌面修复交付记录](linux-desktop-fixes-2026-11-04.md)。云端回收站功能已撤回，不包含在最终源码改动中。
+
+## TD-20261103-06：打开托盘状态小窗口时出现额外 Dock 图标
+
+- 日期：2026-11-03 报告，2026-11-04 完成；状态：已修复、本机部署，隔离 GNOME X11 往返及安装后只读复核通过，用户物理 Dock 待使用验收。
+- 环境：用户 Zorin / Wayland 会话，当前客户端使用 GTK X11 后端。
+- 关联：TD-20261103-03 的 Dashboard 菜单、TD-20261014-06 的定位和 TD-20261013-09 的 Windows 初始化；尚无证据属于同一根因。
+
+### 症状、证据及当前范围
+
+用户单击托盘后状态小窗口正常显示，但底部 Dock 还出现 TwoDrive 应用图标；期望保留小窗口，隐藏其 Dock / 任务栏图标。Dart 打开面板前已调用 setSkipTaskbar(true)，原生面板设置仅处理尺寸、装饰与显示，正在核对映射后的实际窗口标记和生命周期。只读检查时用户窗口已隐藏，不能用隐藏状态推断截图时的窗口属性。没有用户文件或挂载数据操作。
+
+### 根因与范围
+
+隔离 GNOME 46 原生 GTK Wayland 下，三次展开的 Meta.Window.skip_taskbar 均为 false，尽管 Dart 已设置隐藏任务栏；X11 下对应标记有效。原安装器在定位组件可用时自动选用 Wayland，将“可定位”等同于“可隐藏任务栏”，遗漏 GTK 3 Wayland 后端的窗口提示限制。新增安装器回归在模拟已加载组件的环境中实际执行生成启动器：旧版选 wayland 而非预期 x11 并失败。截图当时的后端未记录；用户当前进程只读核对为 X11，且窗口已隐藏，不能断言截图必为 Wayland，也不能把未映射属性当作图标出现时的证据。
+
+### 修复、验证与边界
+
+启动器有 DISPLAY 时默认使用 X11/XWayland，保留显式 GDK_BACKEND；移除以定位组件探测结果自动切换原生 Wayland的分支。原生面板在映射前设置 UTILITY 类型和 skip-taskbar / skip-pager，映射时重新确认排除标记；退出面板切换 Dashboard 时恢复 NORMAL 类型并取消两项排除。小窗口定位、内容、托盘单击和 Dashboard 菜单保留。显式强制原生 GTK Wayland 或没有 XWayland 时，仍不能保证隐藏 Dock 图标，安装说明已同步此边界。
+
+2 项安装器测试（含4种生成启动器环境、已有运行目录和账号保留）通过，Linux release 构建、C++ 和 GJS 定位/身份回归通过。准确安装组合在私有 GNOME 46 / Xvfb 中完成三轮实际菜单点击：展开小窗口 → Dashboard → 返回小窗口 → 收起；每次面板可见、UTILITY(7)、skip_taskbar=true，主窗口 NORMAL(0)、skip_taskbar=false，后台启动保持隐藏。未向用户桌面发送测试输入。
+
+私有 Wayland compositor 的 XWayland组合测试无法启动 X11 显示：缺少其私有 systemd X11 session 服务，旧版与候选均未获得托盘；不作为产品失败或通过。首次 X11 菜单回归因 GNOME 初始处于概览而点到概览背景，关闭私有概览后通过；此为测试设置修正。未实测用户物理 Dock、Windows 或实际云端传输。
+
+本机恢复操作：原部署预检发现当前只有百度/Google 两个挂载，四挂载前置断言停止了更新且没有修改运行文件；随后改为只恢复当前已连接集合。私密备份后，仅原子更新原生 `twodrive_dav` 和启动器，正常退出/静默重启，两个现有读写挂载恢复，四个账号配置、绑定、自启动、Dashboard 界面库、所有后端和角标摘要保持。安装后复核新原生程序/启动器摘要、X11 后端、后台窗口隐藏及两个活动挂载正常，百度无 pending/error/status_error 或恢复正文，Google 本地数据库正常、无未完成文件操作。未删除、上传或修改用户文件。
+
+### 防复发与交付
+
+保留生成启动器后端选择回归和 `verify-tray-taskbar-local.py` 的私有合成桌面往返验证。原生 Wayland 的旧版结果见 `twodrive-taskbar-wayland-before.json`，修复组合的 X11 结果见 `twodrive-taskbar-x11-fixed.json`；验证、部署和安装后结果见 `twodrive-taskbar-validation.json`、`twodrive-taskbar-deployment.json`、`twodrive-taskbar-live-validation.json`。未提交、推送或上传 GitHub。
+
+## TD-20261103-05：挂载统计等待目录锁并将超时误报为写入恢复
+
+- 日期：2026-11-03；状态：已修复、本机部署，真实百度目录与当前写入状态复核通过。
+- 影响环境：本机 TwoDrive DAV / Linux / Rclone 1.75.2 / Nautilus 46.4；未验证 Windows。
+- 关联：TD-20261103-04 修复后真实目录已与上游4项匹配；TD-20261103-02 角标和已有 worker 均读取 vfs/stats。
+
+### 症状、证据及根因
+
+用户补充托盘“挂载写入需要处理”截图。实测上传队列0、本机恢复正文0、VFS 元数据8项均 clean；core/pid 与 vfs/queue 立即返回，vfs/stats 超时。私有桥根目录和目标目录 PROPFIND 均立即207，后者包含4个子项。挂载读取曾超过25秒，之后恢复并与官方列表一致；错误标记随后也从 true 恢复为 false。
+
+仅保留函数符号的本机 Go 诊断显示 Stats → Dir.walk 等待目录锁，目录线程在 WebDAV PROPFIND；固定 Rclone 1.75.2 的 Stats 源码会递归遍历元数据树。原 worker 每秒调用该接口，Nautilus 角标也调用它确认当前缓存；该查询会占用父目录锁等待慢子目录。worker 将任何查询失败硬编码为 pending=1/error=true，UI 因而误称存在待恢复编辑内容。读取超时不等于写入失败。
+
+### 解决与验证
+
+worker 改用不遍历目录的 vfs/queue，按真实上传尝试/排队状态区分首次上传、重试失败和空队列。查询失败保留之前已知的写入状态，单独报告 status_error，不凭超时制造 pending=1 或写入恢复提示；实际 Dirty 元数据和恢复正文仍独立统计保护。角标从已核验 PID 的 mount/listmounts 获取当前缓存命名空间，继续核对账号缓存根，不再读取 vfs/stats，也不回退到旧会话缓存。目录和状态读取之外的文件逻辑保持原约束。
+
+155 项后端测试、40 项 Nautilus 回归、严格 Clippy、格式、release 构建通过。真实固定 Rclone + 临时只读 FUSE + 合成 WebDAV 对照：扣住一个子目录时，旧 vfs/stats 确实使另一个目录一起等待；新 vfs/queue 约0.8毫秒返回，另一个目录在慢目录仍被扣住时正常访问。测试没有使用用户账号或凭据。现有 GUI + 新后端的准确组合在私有 Xvfb / D-Bus 中再次验证8秒静默启动、托盘注册及空状态引擎正常。未重测原生 Windows 或大规模实际云端性能。
+
+本机恢复操作：私密备份原运行文件，原子更新角标辅助读取器及三个后端文件，正常退出并静默重启客户端，四个读写挂载和原文件管理器位置恢复。IPC 格式、GUI/托盘导航、自启动、配置和账号绑定保持。没有清理用户缓存或恢复文件。
+
+安装后真实只读复核：百度目标目录挂载4项、官方列表4项，名称完全一致，私有桥207/4个子项；四个挂载均为读写。百度和 iCloud 的新 worker 状态均为 pending=0/error=false/status_error=false、上传队列0、Dirty 缓存0、恢复正文0；当前角标缓存命名空间确认成功，读取各约50毫秒。OneDrive 和 Google 原生挂载的账号绑定、数据库完整性及待处理操作0通过。已安装后端摘要和辅助读取器内容与验证构建一致；本次复核没有读取或修改用户文件正文。后台触发截图警告的条件已清除，未对用户当前托盘面板另行截图验收。
+
+### 防复发与交付
+
+保留 `upload_status_distinguishes_normal_work_failed_upload_and_unavailable_probe`、`unavailable_mount_status_never_claims_editor_content_needs_recovery`、角标的当前命名空间/禁用 vfs/stats 回归，以及本地 `verify-vfs-status-local.py` 原生对照工具。摘要见工作目录 `twodrive-safe-status-validation.json` 和 `twodrive-safe-status-native-validation.json`；安装与最终实机结果见 `twodrive-safe-status-deployment.json`、`twodrive-safe-status-live-validation.json` 和 `twodrive-directory-live-validation.json`。未提交、推送或发布。
+
+### 协议依据
+
+- 固定 Stats：https://github.com/rclone/rclone/blob/v1.75.2/vfs/vfs.go#L302
+- 只读上传队列：https://github.com/rclone/rclone/blob/v1.75.2/vfs/rc.go#L475
+
+## TD-20261103-04：百度挂载子目录显示为空但上游仍有内容
+
+- 日期：2026-11-03；状态：已修复、本机部署，真实百度目标目录与上游4项完全匹配；后续统计误报独立见 TD-20261103-05。
+- 环境：本机 TwoDrive DAV / Linux fuse.rclone / Nautilus。
+- 关联：TD-20261029-33/35 的 PROPFIND 与目录缓存，TD-20261103-03 只更新 Flutter 导航，后端摘要保持不变。
+
+### 症状与证据
+
+用户截图显示百度挂载内一个中文子目录为空。只读实测挂载根目录43项、该子目录0项；使用现有授权对官方 list 接口执行相同路径查询，根目录43项、该子目录4项，errno 均为0。仅记录数量，不保存用户文件清单或认证内容。私有桥根目录 PROPFIND 为207并包含该目录，子目录 Depth:0 为207，Depth:1 却为404；加/不加尾斜杠均可复现。
+
+根因是 `handle_read` 的 Depth:1 预检调用 `DavPath::from_uri`，在固定 dav-server 0.11.0 中它保留原始 URL 编码；真正 DavHandler 使用的解析却会解码和规范化路径。预检将编码后的中文/空格/百分号作为文件名查询，导致合法目录误报不存在；Rclone 已知该目录存在时显示空内容。现有回归覆盖特殊字符文件的 GET 以及 ASCII 子目录，遗漏编码后的子目录枚举。
+
+### 解决、验证与边界
+
+预检改用 `DavPath::new(request.uri().path())`，与 DavHandler 使用相同规范化逻辑，只解码一次，不手工再次解码。新增真实 HTTP 回归在旧代码复现中文目录应207、实际404；修复后通过，覆盖中文、空格、#、%、字面 %2F 目录名、尾斜杠、嵌套列表及读取，以及编码分隔符/非法字节拒绝。扩展实际 FUSE/GIO 回归以验证同类子目录和原字节读取。
+
+本项阶段验证：153 项后端测试通过，8 项默认忽略不计；另外显式运行 FUSE/GIO 特殊字符子目录读取与可编辑桥两项均通过，全部为合成数据。严格 Clippy、格式、三个后端 release 构建、准确运行组合的8秒隔离静默启动通过。正常退出并备份更新三个后端，四个读写挂载恢复，GUI/托盘导航、角标、配置、账号绑定、自启动保留；部署凭据见 `twodrive-directory-deployment.json`。
+
+真实只读复核：目标挂载4项、官方列表4项，名称集合完全一致；私有桥 Depth:1 为207且4个子项，四个挂载都在。第一次复核曾等待超过25秒，后续证据定位为统计接口的跨目录锁等待，见 TD-20261103-05，不能隐去此阶段等待。第二次复核通过，结果见 `twodrive-directory-live-validation.json`。未删除、移动、上传或独立下载用户文件正文，未清理用户缓存；不以合成内容读取冒充真实云端完整下载验收。
+
+### 防复发与交付
+
+保留 `encoded_subdirectory_propfind_uses_the_same_decoded_path_as_the_handler`、`directory_preflight_rejects_encoded_separators_and_invalid_paths` 和实际 FUSE 特殊字符目录覆盖。修复位于共享只读显示桥，对可编辑桥同样生效；真实 iCloud、Windows 和所有百度目录未逐项扫描。仅本机处理，未提交、推送或上传 GitHub。
+
+## TD-20261103-03：托盘齿轮菜单与侧边导航不一致
+
+- 日期：2026-11-03；状态：已修复并在本机部署；Linux 隔离原生界面与导航回归通过，实际使用待用户验收。
+- 影响环境：本机 TwoDrive DAV / Linux 桌面。
+- 关联：TD-20261103-01 已撤回云端回收站；本条只调整导航，不恢复该功能。
+
+### 症状、触发与根因证据
+
+用户从托盘面板打开齿轮菜单，发现列表不全且顺序与主窗口左侧不一致。`tray_panel.dart` 单独写死设置、管理备份文件夹、暂停、连接或退出登录及退出；`workspace.dart` 的侧栏另写文件、传输、连接、备份、共享、设置，二者没有共享定义。
+
+### 解决办法与恢复操作
+
+将页面名称、图标及顺序集中于 `WorkspacePage`，侧栏与托盘菜单共同使用。托盘前六项严格对应文件、传输、连接、备份、共享、设置；暂停同步、退出登录和退出客户端保留在其后，通过分隔线区分。离线时仍保留完整导航，通过连接页进入账号管理。页面跳转沿用现有窗口切换逻辑；页面内容使用穷尽的枚举分支，增加页面需同时提供对应内容。
+
+本机部署：确认原生数据库、桥缓存和恢复目录无未完成写入后，正常关闭空闲文件管理器，通过客户端 quit 动作完成卸载和退出，只原子替换 `lib/libapp.so`。旧文件保存于用户私有 maintenance 目录。使用 `--background` 重启并恢复四个读写挂载及原选中账号；原文件管理器位置在恢复后重开。profiles 字节、session 账号绑定、所有其他运行文件、启动器、自启动项、Nautilus 角标扩展及图标哈希均核对保留。未强制结束客户端或强制卸载，未新增云端文件增删改操作。部署凭据见工作目录 `twodrive-tray-navigation-deployment.json`，只在本机验收，未上传 GitHub。
+
+### 验证结果与边界
+
+新增测试在旧代码上确认实际列表为设置、管理备份文件夹、暂停同步、连接账号、退出 TwoDrive，与侧栏六项断言不符；修复后同一测试通过。4 项针对性测试验证实际侧栏/菜单的名称、图标、顺序、每项回调页码、菜单关闭、忙碌时导航仍可用及原有窗口切换。完整 Flutter 测试95项、静态分析、Linux release 编译通过；本条不改动云端接口、缓存和文件角标。
+
+准确安装组合（现有运行文件加新 `libapp.so`）在私有 Xvfb / D-Bus 中运行：静默启动8秒无可见主窗口，托盘和独立空状态引擎正常。通过 SNI ContextMenu 及私有显示器输入打开齿轮，实际渲染截图确认六项名称、图标及顺序。初次使用默认私有总线时，自动激活的门户服务延迟使8秒观察未见托盘；改用禁止服务自动激活的专用总线后通过，非生产程序失败。未向用户显示器发送测试输入。截图为 `twodrive-tray-menu-preview.png`，摘要为 `twodrive-tray-navigation-validation.json`。
+
+本轮未重测原生 Windows、实体 HiDPI/多显示器或云端传输；原生托盘代码未变，不能以隔离 Linux 的结果替代其他平台验证。
+
+### 防复发与交付
+
+将以实际侧栏和弹出菜单的名称、图标、顺序及跳转回调作为回归断言。未提交或发布。
+
+### 后续界面要求变更（2026-11-03）
+
+用户验收后要求将托盘齿轮菜单的六个页面入口合并为一个 `Dashboard`，保留暂停/恢复同步、退出登录及退出 TwoDrive；这是新的界面要求，并非原顺序修复回归。主窗口侧栏六页保留，Dashboard 沿用已有主窗口切换流程，打开文件页。
+
+现有导航和窗口切换测试已随新要求调整：完整 Flutter 95 项测试、静态分析、Linux release 构建通过。准确安装组合在私有 Xvfb / D-Bus 中验证静默启动8秒、原生托盘注册和实际齿轮菜单截图，连接态四项顺序由组件测试验证；隔离原生截图使用未登录状态，退出登录依现有规则隐藏。未重测原生 Windows 或云端传输。
+
+已在本机私密备份并仅更新 `lib/libapp.so`，正常重启客户端、恢复四个读写挂载及原文件管理器位置。所有后端、已有目录/状态修复、账号配置、绑定、自启动和角标保持并校验。安装后只读复核四个挂载正常，百度与 iCloud 无状态查询错误、待上传或待恢复内容；原生挂载待处理操作0。摘要、部署凭据和隔离截图见工作目录 `twodrive-dashboard-validation.json`、`twodrive-dashboard-deployment.json`、`twodrive-dashboard-menu-preview.png`。未提交、推送或上传 GitHub，实际使用待用户验收。
+
+## TD-20261103-02：当前四账号挂载缺少文件状态角标
+
+- 日期：2026-11-03；状态：已验证本地状态读取、Nautilus 显示/刷新和本机安装；真实云端完整传输仍待用户验收。
+- 影响环境：本机 TwoDrive DAV，Nautilus 46.4 / nautilus-python 4.0。
+- 关联：TD-20261103-01 的客户端云端回收站功能已撤回，本条不更改删除流程。
+
+### 症状、触发与根因证据
+
+用户希望挂载文件显示云端、下载和同步状态。已安装扩展只匹配旧版 `~/TwoDrive/OneDrive`，读取旧版单账号数据库；当前四个 DAV profile 的挂载路径和状态目录均不同，因此没有被纳入状态角标。旧版异步机制可复用，此前处理 Nautilus 卡顿的约束仍保留。
+
+用户重新执行“移到回收站”成功，并于本轮提供截图确认两个 MP3 出现在系统回收站。此前一次失败没有复现，不能推断所有挂载都不支持系统回收站。系统回收站可汇总挂载盘自身的 `.Trash-UID`；界面显示不表示文件正文必然复制到本机磁盘。保留现有回收站流程，不改写回收信息、不执行删除、恢复或清空。
+
+### 解决办法与恢复操作
+
+扩展按 profile ID、revision、挂载根目录及相对路径隔离状态，读取当前 profile/session，核对实际挂载类型和账号绑定。OneDrive / Google 读取当前本地 SQLite 和已发布缓存；百度 / iCloud 只连接本机已验证 PID 的运行组件，通过只读状态接口确认挂载路径和当前 VFS 缓存，避免把同账号遗留会话缓存误作当前缓存。RC 禁用代理和跳转，仅允许本机状态操作，不记录本地认证内容。
+
+云端文件显示云朵，下载中显示向下箭头，完整缓存文件显示绿色勾，待上传显示同步箭头，已知错误显示红色叉。稀疏或部分缓存不显示完整下载；目录不因一个子文件有缓存就显示整体离线。退出账号、重新绑定或卸载后移除旧角标。所有磁盘、配置、SQLite 和 RC 读取继续通过有超时的批量辅助进程执行，不阻塞 Nautilus 的文件回调；DAV 账号不显示调用旧版 CLI 的保留/释放菜单。
+
+本地恢复操作：客户端回收站已按原 SHA-256 恢复，四个读写挂载已恢复，具体见工作目录 `cloud-trash-rollback.json`。角标扩展已安装于用户级 Nautilus 扩展目录，六个 SVG 放于用户图标主题；保留系统扩展原件，不更新 TwoDrive 主程序或重启挂载。
+
+重载时两次安装校验过早结束：第一次正常退出超过最初的10秒等待，第二次扩展已加载但窗口位置属性尚未异步恢复；两次安装器都回退了文件。随后确认正常退出已完成、回收站窗口已恢复、当前 Nautilus 已加载准确的新扩展，复用这次重载重新安装同字节文件，未再关闭窗口。修正安装器等待与恢复检查。最终扩展哈希一致，四个 mountinfo 条目、profiles、自启动和运行文件哈希不变。未强制终止 Nautilus、卸载挂载或修改回收站内容。
+
+### 验证结果与边界
+
+39 项 Python 回归测试通过，包含旧版行为、四挂载路由、同路径跨账号隔离、绑定/版本/卸载、主线程无磁盘读取、缓存范围/空文件/脏数据/活动下载、旧缓存拒绝、只读本机 RC 限制。Python 编译及 SVG XML 检查通过。同一组四挂载路径，在禁止文件系统探测的比较中，旧版识别0/4、新版4/4。
+
+私有 Xvfb / D-Bus 中运行实际 Nautilus，五种模拟状态的 FileInfo.add_emblem 和 GTK 渲染均确认，下载中 → 已缓存的 SQLite 状态变化自动刷新成功，截图见工作目录 `twodrive-emblems-preview.png`。两个配置/挂载边界在测试副本中替换为临时夹具，未读取或修改云盘正文。
+
+安装后的真实辅助进程再次完成四挂载路由和只读状态抽样：OneDrive / Google 各10个普通文件、百度 / iCloud 各一个根目录，均为合理云端状态；两家桥的当前 VFS 识别成功，桌面 GTK 主题能解析全部六个角标。验证约1.13秒，未主动读取云端文件正文以制造下载。安装、隔离 UI、真实只读检查分别记录于工作目录的 `twodrive-emblems-deployment.json`、`twodrive-emblems-ui-validation.json`、`twodrive-emblems-live-validation.json`。
+
+真实四家云盘的上传/下载完整生命周期未执行，模拟状态不充当云端端到端验证。原先回收站失败根因仍未确认，用户此次成功为实测反馈。
+
+### 防复发与交付
+
+新增 `packaging/nautilus/test_dav_emblems.py`，保留旧版 Nautilus 事件循环回归；以后修改挂载目录、profile 身份或缓存布局需运行本套测试。未提交、推送、创建 PR 或上传 GitHub，仅用于本机验收。
+
+## TD-20261103-01：挂载删除与客户端云端回收站入口缺失
+
+- 日期：2026-11-03；状态：已按用户要求撤回；界面和引擎恢复原版。
+- 影响版本与环境：本机 TwoDrive DAV 0.1.7，Zorin / Nautilus 46，四家云盘。
+- 关联历史：TD-20261028-21 为可编辑挂载空目录删除，与本次回收站入口缺失不同。
+
+### 症状与证据
+
+用户报告百度挂载中“移到回收站”失败，随后请求直接删除菜单和客户端云端回收站。只读检查发现该挂载为 fuse.rclone，存在 .Trash-1000 及 info/files，GIO 对抽样条目标记 can-trash=true。未复现用户原操作，不能把失败根因定为不支持回收站或跨设备移动。系统回收站目录不是网盘原生回收站。
+
+本机已启用 Nautilus 的 show-delete-permanently；这是系统范围的新增菜单，不移除“移到回收站”，未执行任何用户文件删除。菜单显示“永久删除”代表绕过系统回收站；云端结果由 Provider 决定。
+
+### 实现与范围
+
+新增只读回收站页和账号选择。Google 使用既有 OAuth / Drive v2 files.list、trashed=true、100项分页，沿用原账号绑定；只接受标记为 trashed 的结果，校验ID、重复项、分页、结果上限与取消。后台读取通过所属 profile/revision 校验及独立读取任务；账号切换不触发重新登录或挂载。界面区分加载、空、失败、未连接和未接入，不把失败显示为空；旧账号的迟到响应不能覆盖新账号。缺失的删除时间显示未提供，不借用修改时间。
+
+Google 现有删除为 files/{id}/trash；OneDrive 使用 Graph 普通 DELETE；固定 Rclone 1.75.2 iCloud 使用 MoveItemToTrashByID。百度使用 xpan filemanager opera=delete，本轮没有以用户数据验证最终回收归属。保留这些差异，不对所有云盘承诺可恢复。
+
+OneDrive个人账号回收站枚举不能用 SharePoint Embedded 的 recycleBin API 替代；百度及固定 iCloud 组件尚无本轮确认可接入的列表接口。三者明确显示未接入状态及官方网页入口；不把本地删除历史冒充完整云端回收站。官方网页使用浏览器的登录状态，界面提示核对账号。
+
+### 验证与交付
+
+Rust离线release测试共170项通过，10项环境依赖检查默认忽略，不算通过；其中库119项、引擎26项。严格release Clippy通过。Flutter全套99项通过；最终补充空中间分页回归后，针对性7项、静态分析和Linux release构建通过。首轮新测试曾因字段名与父类fail方法冲突而无法编译，已改名；新工作副本首次运行也因缺少package_graph.json失败，通过既有缓存的pub get --offline生成配置后解决，未升级依赖。模拟结果不充当真实云端删除验收。
+
+真实Google验证仅调用一次同字段的GET files.list，返回0项且无后续页，实际响应明确为空；未记录文件名/ID/令牌。新版完整bundle及“现有运行库+新libapp.so/引擎”的准确安装组合分别在私有Xvfb和D-Bus中验证8秒：无可见应用窗口，托盘和独立空状态引擎正常，只有屏幕外1×1图形辅助窗口。
+
+本机部署前检查原生队列和私有VFS无未完成写入，正常关闭空闲文件管理器并通过应用quit动作退出客户端，无强制卸载或终止；只原子更新lib/libapp.so和twodrive-dav-engine。重启使用--background，四个读写挂载恢复，profiles字节、session账号绑定、其他运行文件、图标、启动器和静默自启动项均核对保留。旧运行文件留在用户私有maintenance目录，具体回退凭据仅见本机cloud-trash-deployment.json。
+
+用户明确要求先本机测试，不上传GitHub；本轮未提交、推送、创建PR或发布。实际界面体验仍待用户验收；若不合适可使用已保留旧程序回退。未执行真实云端删除、恢复或清空，不新增恢复/彻底删除接口。原百度“移到系统回收站”失败根因仍未确认。本轮工作副本来自原Linux部署提交3351792，未修改原分支；账号配置、凭据、缓存和私人日志不加入源码。
+
+### 追加撤回（2026-11-03）
+
+用户要求取消客户端云端回收站功能，并反馈重新尝试“移到系统回收站”成功。本机已按原摘要恢复两个运行文件，正常退出并恢复四个读写挂载；账户、静默自启动和新增的系统右键删除菜单保留。工作副本中的功能代码同步撤回，记录及验证结果保留；未上传GitHub。转而处理系统回收站可见性和文件状态角标，见TD-20261103-02。
+
+### 协议依据
+
+- Google v2 files.list / files.trash：https://developers.google.com/workspace/drive/api/reference/rest/v2/files/list
+- Microsoft普通删除移入回收站：https://learn.microsoft.com/en-us/graph/api/driveitem-delete
+- SharePoint Embedded回收站范围：https://learn.microsoft.com/en-us/graph/api/resources/recyclebin
+- 固定iCloud组件：https://github.com/rclone/rclone/blob/v1.75.2/backend/iclouddrive/iclouddrive.go
+
 ## TD-20261029-41：减少重复查询后 iCloud 改名仍约二十秒
 
 - 日期：2026-10-29；状态：已部署并获用户“明显变快”的反馈，仍有显著远程等待；不能以 TD-20261029-40 的隔离请求预算通过代替性能验收。

@@ -38,7 +38,7 @@ connection or synchronization failures keep the error icon.
 Requirements: Flutter 3.41.8, Rust 1.96, GTK 3 development files, clang, CMake,
 Ninja, pkg-config, FUSE 3 and a session D-Bus StatusNotifierItem host. Current
 native acceptance now includes isolated GNOME 46 GTK X11 and native GTK Wayland.
-The optional TwoDrive-only GNOME component provides actual icon geometry and compositor positioning; first installation may need the next desktop login to load. The launcher selects native Wayland when that component is available, preserving explicit GDK_BACKEND. Other Wayland compositors are not verified. See [positioning, installation and boundaries](tray-positioning-2026-10-14.md).
+The optional TwoDrive-only GNOME component provides actual icon geometry and compositor positioning; first installation may need the next desktop login to load. The launcher prefers X11/XWayland when DISPLAY is available so the tray utility can stay out of the taskbar and window switcher, preserving explicit GDK_BACKEND. GTK 3 native Wayland cannot apply taskbar-hiding hints, so forcing that backend does not guarantee a hidden Dock icon. Other Wayland compositors are not verified. See [positioning, installation and boundaries](tray-positioning-2026-10-14.md).
 
 ```bash
 cargo build --locked --release --manifest-path experiments/twodrive-dev/Cargo.toml --features mount
