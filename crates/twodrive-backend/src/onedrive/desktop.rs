@@ -265,4 +265,160 @@ mod tests {
             "replace"
         );
     }
+
+    fn saved_create(graph: &GraphBackend, server: &Server, create_only: bool, size: u64) {
+        graph
+            .save_upload_session(
+                "/file".into(),
+                super::super::upload::PersistedUploadSession {
+                    upload_url: format!("http://{}/private-session", server.server_addr()),
+                    source_size: size,
+                    source_modified_unix: 1,
+                    remote_id: None,
+                    if_match: None,
+                    create_only,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn desktop_backup_resumes_only_the_original_create_session_after_snapshot_rebuild() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("rebuilt-snapshot");
+        std::fs::write(&source, b"data").unwrap();
+        saved_create(&graph, &server, true, 4);
+        let serving = std::thread::spawn(move || {
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            assert_eq!(q.url(), "/v1.0/me/drive/root:/file");
+            q.respond(Response::from_string(r#"{"id":"placeholder","name":"file","size":0,"file":{},"eTag":"placeholder-version"}"#)).unwrap();
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            assert_eq!(q.url(), "/private-session");
+            q.respond(Response::from_string(r#"{"nextExpectedRanges":["2-"]}"#))
+                .unwrap();
+            let mut q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "PUT");
+            assert_eq!(q.url(), "/private-session");
+            assert!(
+                q.headers()
+                    .iter()
+                    .any(|h| h.field.equiv("Content-Range") && h.value.as_str() == "bytes 2-3/4")
+            );
+            let mut body = Vec::new();
+            q.as_reader().read_to_end(&mut body).unwrap();
+            assert_eq!(body, b"ta");
+            q.respond(
+                Response::from_string(
+                    r#"{"id":"completed-id","name":"file","size":4,"file":{},"eTag":"finished"}"#,
+                )
+                .with_status_code(201),
+            )
+            .unwrap();
+        });
+        let mut progress = Vec::new();
+        let uploaded = graph
+            .resume_desktop_create_upload("/file", &source, &mut |done, total| {
+                progress.push((done, total));
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        serving.join().unwrap();
+        assert_eq!(uploaded.etag, "finished");
+        assert_eq!(progress.first(), Some(&(2, 4)));
+        assert_eq!(progress.last(), Some(&(4, 4)));
+        assert!(graph.upload_sessions.lock().unwrap().sessions.is_empty());
+    }
+
+    #[test]
+    fn desktop_backup_resume_rejects_unowned_sessions_and_changed_or_committed_targets() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("source");
+        std::fs::write(&source, b"data").unwrap();
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        for (owned, size) in [(false, 4), (true, 5)] {
+            saved_create(&graph, &server, owned, size);
+            assert!(
+                graph
+                    .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(
+            server.try_recv().unwrap().is_none(),
+            "unowned source queried remote"
+        );
+        saved_create(&graph, &server, true, 4);
+        let serving = std::thread::spawn(move || {
+            for body in [
+                r#"{"id":"other","name":"file","size":4,"file":{},"eTag":"other-version"}"#,
+                r#"{"id":"directory","name":"file","size":0,"folder":{},"eTag":"folder-version"}"#,
+            ] {
+                let q = server.recv().unwrap();
+                assert_eq!(q.method().as_str(), "GET");
+                assert_eq!(q.url(), "/v1.0/me/drive/root:/file");
+                q.respond(Response::from_string(body)).unwrap();
+            }
+            assert!(
+                server
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .unwrap()
+                    .is_none(),
+                "changed target triggered session mutation"
+            );
+        });
+        for _ in 0..2 {
+            assert!(
+                graph
+                    .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        serving.join().unwrap();
+        assert_eq!(graph.upload_sessions.lock().unwrap().sessions.len(), 1);
+    }
+
+    #[test]
+    fn expired_backup_session_does_not_create_a_replacement_or_overwrite_placeholder() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("source");
+        std::fs::write(&source, b"data").unwrap();
+        saved_create(&graph, &server, true, 4);
+        let serving = std::thread::spawn(move || {
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            q.respond(Response::from_string(r#"{"id":"placeholder","name":"file","size":0,"file":{},"eTag":"placeholder-version"}"#)).unwrap();
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            assert_eq!(q.url(), "/private-session");
+            q.respond(Response::empty(404)).unwrap();
+            assert!(
+                server
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .unwrap()
+                    .is_none(),
+                "expired session mutated cloud"
+            );
+        });
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        serving.join().unwrap();
+        assert_eq!(graph.upload_sessions.lock().unwrap().sessions.len(), 1);
+    }
 }

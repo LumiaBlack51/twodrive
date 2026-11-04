@@ -55,6 +55,18 @@ impl OneDrive {
     }
 }
 impl Provider for OneDrive {
+    fn resume_create_upload(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.check_write()?;
+        Ok(self
+            .graph
+            .resume_desktop_create_upload(path, source, &mut |d, t| progress(d, t))?
+            .map(entry))
+    }
     fn storage_usage(
         &self,
         check: &mut dyn FnMut() -> anyhow::Result<()>,

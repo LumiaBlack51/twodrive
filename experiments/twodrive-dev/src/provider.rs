@@ -51,6 +51,17 @@ impl Capabilities {
 
 pub trait Provider: CloudBackend {
     fn capabilities(&self) -> Capabilities;
+    /// The backup journal has already verified the source against its saved
+    /// intent digest. Resume only the original owned create-only session;
+    /// returning None must not mutate or adopt an existing remote object.
+    fn resume_create_upload(
+        &self,
+        _path: &str,
+        _source: &Path,
+        _progress: Progress,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        Ok(None)
+    }
     fn storage_usage(
         &self,
         check: &mut dyn FnMut() -> anyhow::Result<()>,
@@ -298,6 +309,27 @@ impl Backend {
         });
         self.inner
             .manual_upload(path, source, Some(id), Some(version), progress)
+    }
+    pub fn resume_create_upload(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        valid_path(path)?;
+        self.check_pause()?;
+        self.check_write()?;
+        ensure!(self.capabilities().backup(), "此连接不支持安全的文件夹备份");
+        let owner = self.clone();
+        self.inner.resume_create_upload(
+            path,
+            source,
+            Arc::new(move |done, total| {
+                owner.check_pause()?;
+                owner.check_write()?;
+                progress(done, total)
+            }),
+        )
     }
     pub fn upload_path(
         &self,

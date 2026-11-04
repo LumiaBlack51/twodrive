@@ -440,6 +440,61 @@ impl GraphBackend {
     ) -> anyhow::Result<MetadataEntry> {
         self.upload_file_with_policy(path, source, remote_id, version, progress, true)
     }
+
+    /// Resume only a previously persisted create-only session. The caller must
+    /// first match the immutable source to its durable upload-intent digest.
+    /// Never adopt an existing nonempty item or create a replacement session.
+    pub fn resume_desktop_create_upload(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        validate_graph_file_path(path)?;
+        let key = normalize_cloud_path(path);
+        let size = fs::metadata(source)?.len();
+        let saved = self
+            .upload_sessions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("upload session store lock is poisoned"))?
+            .sessions
+            .get(&key)
+            .cloned();
+        let Some(saved) = saved.filter(|s| {
+            s.create_only
+                && s.remote_id.is_none()
+                && s.if_match.is_none()
+                && s.source_size == size
+                && size > 0
+        }) else {
+            return Ok(None);
+        };
+        let Some(item) = self.get_metadata_by_path(path)? else {
+            return Ok(None);
+        };
+        if item.is_dir || item.size != 0 {
+            return Ok(None);
+        }
+        let Some(offset) = query_upload_offset(&self.client, &saved.upload_url)
+            .map_err(|_| anyhow::anyhow!("无法检查原上传会话，请稍后重试"))?
+            .filter(|offset| *offset < size)
+        else {
+            return Ok(None);
+        };
+        let uploaded = upload_session_file(
+            &self.client,
+            &saved.upload_url,
+            path,
+            source,
+            size,
+            offset,
+            progress,
+        )
+        .map_err(|_| anyhow::anyhow!("原上传会话续传失败，请检查网络和备份状态"))?;
+        self.remove_upload_session(&key)?;
+        Ok(Some(uploaded))
+    }
+
     fn upload_file_with_policy(
         &self,
         path: &str,

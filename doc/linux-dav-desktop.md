@@ -69,6 +69,14 @@ it never replays a file mutation, opens a login prompt or discards cached data.
 Other errors are reported immediately. An exhausted retry budget still requires
 checking the connection or login; startup does not retry indefinitely.
 
+After an interrupted Linux desktop session, startup can recover an abandoned
+native mount only when its filesystem/source and user match, its account binding
+is unchanged, no worker holds its private lock, and a directory request confirms
+ENOTCONN. The mount identity is checked again before a normal unmount. Live,
+foreign, stacked or unverified mounts remain untouched; local cached edits stay
+in place for the existing worker recovery. This does not require changing FUSE
+system permissions or enabling access for other users.
+
 ## Safety and recovery
 
 File actions bind both profile ID and revision before any remote request. Cache
@@ -88,6 +96,13 @@ The confirmation shows the destination account and folder. Pending choices and
 new settings requests bind profile ID plus revision; stale choices are discarded,
 and failed settings reads block edits until reloaded. The engine checks a supplied
 revision while retaining compatibility with older unversioned settings clients.
+An interrupted new OneDrive backup can resume its original persisted create-only
+upload session after the rebuilt snapshot matches the durable intent digest.
+Only a still-active session and its empty target are eligible; a changed source,
+nonempty target, old-version update or expired session retains conflict protection.
+Recovery sends the remaining fragments through the same session, without creating
+a replacement session or deleting the unfinished target. Recent completion records
+remain visible while subsequent files upload.
 A private snapshot is streamed with bounded memory; durable upload intent is
 written before PUT. A restarted worker reconciles an ambiguous committed PUT by
 remote content hash before accepting its new ETag. Remote version conflicts stop

@@ -43,6 +43,9 @@ mod mount_paths;
 mod native_mount;
 #[path = "desktop_sharing.rs"]
 mod sharing;
+#[cfg(all(target_os = "linux", feature = "mount"))]
+#[path = "desktop_stale_mount.rs"]
+mod stale_mount;
 
 #[derive(Parser)]
 struct Args {
@@ -419,11 +422,18 @@ impl App {
             );
             ensure!(self.mounted.is_none(), "已经挂载");
             let p = self.connected.as_ref().context("请先连接")?;
+            ensure!(self.capabilities()["mount"] == true, "此连接不支持安全挂载");
+            #[cfg(all(target_os = "linux", feature = "mount"))]
+            if !providers::uses_readonly_bridge(p)
+                && let Some(session) = self.saved_session(p)
+                && let Some(binding) = session["binding"].as_str()
+            {
+                stale_mount::recover(&p.mount_path, &self.mount_state(p), binding)?;
+            }
             ensure!(
                 !is_mount(&p.mount_path)?,
                 "目录已被其他进程挂载，请使用另一个空目录"
             );
-            ensure!(self.capabilities()["mount"] == true, "此连接不支持安全挂载");
             #[cfg(all(target_os = "linux", feature = "mount"))]
             if providers::uses_readonly_bridge(p) {
                 let process = native_mount::start(self, p, cancel)?;
