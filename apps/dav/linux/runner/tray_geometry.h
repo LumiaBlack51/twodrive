@@ -8,6 +8,22 @@ namespace twodrive {
 struct Rectangle {
   int x, y, width, height;
 };
+enum class DockEdge { top, bottom, left, right };
+// Intersect the reported workarea with a monitor's occupied dock band.
+// Taking min/max against the monitor edge avoids subtracting a reserved dock
+// twice, and also handles intellihide docks that reserve no workarea at all.
+inline Rectangle reserve_dock(Rectangle area, Rectangle monitor,
+                              DockEdge edge, int thickness) {
+  if (thickness <= 0) return area;
+  const int right = area.x + area.width, bottom = area.y + area.height;
+  if (edge == DockEdge::top) area.y = std::min(bottom - 1, std::max(area.y, monitor.y + thickness));
+  if (edge == DockEdge::left) area.x = std::min(right - 1, std::max(area.x, monitor.x + thickness));
+  area.width = std::max(1, (edge == DockEdge::right
+      ? std::min(right, monitor.x + monitor.width - thickness) : right) - area.x);
+  area.height = std::max(1, (edge == DockEdge::bottom
+      ? std::min(bottom, monitor.y + monitor.height - thickness) : bottom) - area.y);
+  return area;
+}
 struct TrayAnchor {
   int x = 0, y = 0;
   Rectangle area = {};
@@ -36,14 +52,20 @@ struct TrayAnchor {
   }
 
   Rectangle panel() const {
-    const int width = std::min(390, std::max(1, area.width - 16));
-    const int height = std::min(570, std::max(1, area.height - 16));
-    const int left = std::max(area.x + 8,
-        std::min(x - width / 2, area.x + area.width - width - 8));
+    const int mx = std::min(8, std::max(0, (area.width - 1) / 2));
+    const int my = std::min(8, std::max(0, (area.height - 1) / 2));
+    const int width = std::min(390, std::max(1, area.width - 2 * mx));
+    const int height = std::min(570, std::max(1, area.height - 2 * my));
+    const int left = std::max(area.x + mx,
+        std::min(x - width / 2, area.x + area.width - width - mx));
     // Anchor to the reserved taskbar edge, never to the cursor's vertical
     // position. A bottom icon opens above it; a top icon opens below it.
-    const int top = y < area.y ? area.y + 8
-        : area.y + area.height - height - 8;
+    const bool side = x < area.x || x >= area.x + area.width;
+    const int top = side
+        ? std::max(area.y + my, std::min(y - height / 2,
+            area.y + area.height - height - my))
+        : y < area.y + area.height / 2 ? area.y + my
+        : area.y + area.height - height - my;
     return {left, top, width, height};
   }
 };

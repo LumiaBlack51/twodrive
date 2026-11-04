@@ -1,5 +1,6 @@
 #include "status_tray.h"
 #include "tray_geometry.h"
+#include "tray_workarea.h"
 #include <unistd.h>
 #include <string>
 #include <algorithm>
@@ -74,11 +75,6 @@ gboolean position_mapped_panel(gpointer data) {
   if (tray->panel && gtk_widget_get_visible(GTK_WIDGET(tray->window))) {
     ++tray->placement_attempts;
     const auto bounds = tray->anchor.panel();
-#ifdef GDK_WINDOWING_X11
-    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->window))))
-      gdk_window_move_resize(gtk_widget_get_window(GTK_WIDGET(tray->window)),
-          bounds.x, bounds.y, bounds.width, bounds.height);
-#endif
     // Wayland does not accept application-selected absolute window positions.
     // GNOME places only this PID's panel using the actual compositor tray actor.
     if (tray->host_anchor) {
@@ -90,6 +86,13 @@ gboolean position_mapped_panel(gpointer data) {
       if (result && tray->placement_attempts < 20 &&
           (!placed || tray->placement_attempts < 4)) return G_SOURCE_CONTINUE;
     }
+#ifdef GDK_WINDOWING_X11
+    // A session may still have an older positioning component loaded. Apply
+    // our dock-safe bounds after its reply, so it cannot reintroduce overlap.
+    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->window))))
+      gdk_window_move_resize(gtk_widget_get_window(GTK_WIDGET(tray->window)),
+          bounds.x, bounds.y, bounds.width, bounds.height);
+#endif
     gtk_widget_set_opacity(GTK_WIDGET(tray->window), 1.0);
   }
   tray->reposition = 0;
@@ -115,7 +118,11 @@ void capture_anchor(Tray* tray, gint x, gint y) {
   if (host) {
     g_variant_get(host, "(biiiiiiii)", &found, &ix, &iy, &iw, &ih, &ax, &ay, &aw, &ah);
     if (found && iw > 0 && ih > 0 && aw > 0 && ah > 0) {
-      tray->anchor.capture_icon({ix, iy, iw, ih}, {ax, ay, aw, ah});
+      auto* display = gtk_widget_get_display(GTK_WIDGET(tray->window));
+      auto* monitor = gdk_display_get_monitor_at_point(display, ix + iw / 2, iy + ih / 2);
+      const auto usable = twodrive::configured_dock_workarea(tray->bus, monitor,
+          {ax, ay, aw, ah});
+      tray->anchor.capture_icon({ix, iy, iw, ih}, usable);
       tray->host_anchor = true;
       return;
     }
@@ -129,7 +136,9 @@ void capture_anchor(Tray* tray, gint x, gint y) {
   auto* monitor = gdk_display_get_monitor_at_point(display, x, y);
   GdkRectangle area;
   gdk_monitor_get_workarea(monitor, &area);
-  tray->anchor.capture(x, y, {area.x, area.y, area.width, area.height});
+  const auto usable = twodrive::configured_dock_workarea(tray->bus, monitor,
+      {area.x, area.y, area.width, area.height});
+  tray->anchor.capture(x, y, usable);
   if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray anchor: point=%d,%d work=%d,%d,%d,%d", x, y, area.x, area.y, area.width, area.height);
 }
 const char* kXml = R"XML(

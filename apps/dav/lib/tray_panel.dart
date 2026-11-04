@@ -88,355 +88,404 @@ class TrayPanel extends StatelessWidget {
       backgroundColor: const Color(0xfffafbfe),
       body: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 18, 10, 12),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              border: Border(bottom: BorderSide(color: Color(0xffe5e9f0))),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      c.profile?['icon'] == 'devices'
-                          ? Icons.cloud_rounded
-                          : Icons.cloud_queue_rounded,
-                      color: const Color(0xff2877dc),
-                      size: 30,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          PopupMenuButton<String>(
-                            key: const ValueKey('cloud-switcher'),
-                            constraints: const BoxConstraints(
-                              minWidth: 260,
-                              maxWidth: 360,
-                            ),
-                            tooltip: '切换网盘',
-                            enabled: !c.busy && c.available,
-                            onSelected: (id) async {
-                              final profile = c.profiles
-                                  .where((p) => p['id'] == id)
-                                  .firstOrNull;
-                              if (profile?['login_required'] == true) {
-                                await onManage(2);
-                              } else {
-                                await c.connect(id);
-                              }
-                            },
-                            itemBuilder: (_) => [
-                              for (final p in c.profiles)
-                                PopupMenuItem(
-                                  value: p['id'] as String,
-                                  child: Row(
+          Expanded(
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(20, 18, 10, 12),
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          border: Border(
+                            bottom: BorderSide(color: Color(0xffe5e9f0)),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  c.profile?['icon'] == 'devices'
+                                      ? Icons.cloud_rounded
+                                      : Icons.cloud_queue_rounded,
+                                  color: const Color(0xff2877dc),
+                                  size: 30,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Icon(
-                                        c.isProfileConnected(p['id'] as String)
-                                            ? Icons.cloud_done_outlined
-                                            : Icons.cloud_off_outlined,
-                                        size: 18,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          p['name'] as String,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+                                      PopupMenuButton<String>(
+                                        key: const ValueKey('cloud-switcher'),
+                                        constraints: const BoxConstraints(
+                                          minWidth: 260,
+                                          maxWidth: 360,
+                                        ),
+                                        tooltip: '切换网盘',
+                                        enabled: !c.busy && c.available,
+                                        onSelected: (id) async {
+                                          final profile = c.profiles
+                                              .where((p) => p['id'] == id)
+                                              .firstOrNull;
+                                          if (profile?['login_required'] ==
+                                              true) {
+                                            await onManage(2);
+                                          } else {
+                                            await c.connect(id);
+                                          }
+                                        },
+                                        itemBuilder: (_) => [
+                                          for (final p in c.profiles)
+                                            PopupMenuItem(
+                                              value: p['id'] as String,
+                                              child: Row(
+                                                children: [
+                                                  Icon(
+                                                    c.isProfileConnected(
+                                                          p['id'] as String,
+                                                        )
+                                                        ? Icons
+                                                              .cloud_done_outlined
+                                                        : Icons
+                                                              .cloud_off_outlined,
+                                                    size: 18,
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  Expanded(
+                                                    child: Text(
+                                                      p['name'] as String,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 10),
+                                                  Text(
+                                                    p['id'] == c.selected
+                                                        ? '当前浏览'
+                                                        : c.isProfileConnected(
+                                                            p['id'] as String,
+                                                          )
+                                                        ? '已连接'
+                                                        : '未连接',
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.blueGrey,
+                                                    ),
+                                                  ),
+                                                  if (p['id'] == c.selected)
+                                                    const Padding(
+                                                      padding: EdgeInsets.only(
+                                                        left: 8,
+                                                      ),
+                                                      child: Icon(
+                                                        Icons.check,
+                                                        size: 18,
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                        ],
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                provider,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                            ),
+                                            const Icon(
+                                              Icons.expand_more,
+                                              size: 19,
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                      const SizedBox(width: 10),
                                       Text(
-                                        p['id'] == c.selected
-                                            ? '当前浏览'
-                                            : c.isProfileConnected(
-                                                p['id'] as String,
-                                              )
-                                            ? '已连接'
-                                            : '未连接',
+                                        '${c.accountLabel} · $label',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.blueGrey,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuButton<String>(
+                                  tooltip: '设置',
+                                  popUpAnimationStyle:
+                                      AnimationStyle.noAnimation,
+                                  icon: const Icon(Icons.settings_outlined),
+                                  onSelected: (value) async {
+                                    switch (value) {
+                                      case 'dashboard':
+                                        await onManage();
+                                      case 'pause':
+                                        await c.pauseToggle();
+                                      case 'signout':
+                                        if (onSignOut != null) {
+                                          await onSignOut!();
+                                        } else {
+                                          await onManage(2);
+                                        }
+                                      case 'quit':
+                                        await onQuit();
+                                    }
+                                  },
+                                  itemBuilder: (_) => [
+                                    const PopupMenuItem(
+                                      value: 'dashboard',
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            Icons.dashboard_outlined,
+                                            size: 20,
+                                          ),
+                                          SizedBox(width: 12),
+                                          Text('Dashboard'),
+                                        ],
+                                      ),
+                                    ),
+                                    const PopupMenuDivider(),
+                                    PopupMenuItem(
+                                      value: 'pause',
+                                      enabled: c.connected && !c.busy,
+                                      child: Text(c.paused ? '恢复同步' : '暂停同步'),
+                                    ),
+                                    if (c.connected)
+                                      const PopupMenuItem(
+                                        value: 'signout',
+                                        child: Text('退出登录…'),
+                                      ),
+                                    const PopupMenuDivider(),
+                                    const PopupMenuItem(
+                                      value: 'quit',
+                                      child: Text('退出 TwoDrive'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 15),
+                            Row(
+                              children: [
+                                Icon(
+                                  issue != null
+                                      ? Icons.error
+                                      : fallback
+                                      ? Icons.warning_amber_rounded
+                                      : c.paused
+                                      ? Icons.pause_circle_filled
+                                      : c.syncing
+                                      ? Icons.sync
+                                      : c.connected
+                                      ? Icons.check_circle
+                                      : Icons.cloud_off,
+                                  size: 19,
+                                  color: color,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    status,
+                                    style: TextStyle(
+                                      color: color,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            StorageUsageView(
+                              ring: true,
+                              value: c.quotas[c.selected],
+                              connected: c.connected,
+                              onRefresh: c.connected
+                                  ? () {
+                                      c.refreshQuota(c.selected!, force: true);
+                                    }
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (fallback)
+                        const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Text(
+                            '直连未能完成部分请求，已使用系统／代理兜底。',
+                            style: TextStyle(
+                              color: Color(0xff985800),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      if (issue != null)
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            issue,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.deepOrange,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      if (c.paused)
+                        const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Text(
+                            '新同步请求已暂停；正在执行的请求可能完成。',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blueGrey,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (all.isEmpty)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: Text(
+                        c.connected ? '暂无传输记录' : '连接账号后查看文件与备份状态',
+                        style: const TextStyle(
+                          color: Colors.blueGrey,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    sliver: SliverList.separated(
+                      itemCount: all.length,
+                      separatorBuilder: (_, index) =>
+                          const Divider(height: 1, indent: 58),
+                      itemBuilder: (_, index) {
+                        final item = all[index];
+                        final total = (item['bytes_total'] as num?) ?? 0;
+                        final done = (item['bytes_done'] as num?) ?? 0;
+                        final state = item['state']?.toString();
+                        final active = state == null || state == '传输中';
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 18,
+                            vertical: 11,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                item['kind'].toString().contains('download')
+                                    ? Icons.file_download_outlined
+                                    : Icons.file_upload_outlined,
+                                color: Colors.blueGrey,
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item['name']?.toString() ?? '文件',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    if (item['account'] != null)
+                                      Text(
+                                        item['account'] as String,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           fontSize: 11,
                                           color: Colors.blueGrey,
                                         ),
                                       ),
-                                      if (p['id'] == c.selected)
-                                        const Padding(
-                                          padding: EdgeInsets.only(left: 8),
-                                          child: Icon(Icons.check, size: 18),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    provider,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                ),
-                                const Icon(Icons.expand_more, size: 19),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            '${c.accountLabel} · $label',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.blueGrey,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    PopupMenuButton<String>(
-                      tooltip: '设置',
-                      popUpAnimationStyle: AnimationStyle.noAnimation,
-                      icon: const Icon(Icons.settings_outlined),
-                      onSelected: (value) async {
-                        switch (value) {
-                          case 'dashboard':
-                            await onManage();
-                          case 'pause':
-                            await c.pauseToggle();
-                          case 'signout':
-                            if (onSignOut != null) {
-                              await onSignOut!();
-                            } else {
-                              await onManage(2);
-                            }
-                          case 'quit':
-                            await onQuit();
-                        }
-                      },
-                      itemBuilder: (_) => [
-                        const PopupMenuItem(
-                          value: 'dashboard',
-                          child: Row(
-                            children: [
-                              Icon(Icons.dashboard_outlined, size: 20),
-                              SizedBox(width: 12),
-                              Text('Dashboard'),
-                            ],
-                          ),
-                        ),
-                        const PopupMenuDivider(),
-                        PopupMenuItem(
-                          value: 'pause',
-                          enabled: c.connected && !c.busy,
-                          child: Text(c.paused ? '恢复同步' : '暂停同步'),
-                        ),
-                        if (c.connected)
-                          const PopupMenuItem(
-                            value: 'signout',
-                            child: Text('退出登录…'),
-                          ),
-                        const PopupMenuDivider(),
-                        const PopupMenuItem(
-                          value: 'quit',
-                          child: Text('退出 TwoDrive'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 15),
-                Row(
-                  children: [
-                    Icon(
-                      issue != null
-                          ? Icons.error
-                          : fallback
-                          ? Icons.warning_amber_rounded
-                          : c.paused
-                          ? Icons.pause_circle_filled
-                          : c.syncing
-                          ? Icons.sync
-                          : c.connected
-                          ? Icons.check_circle
-                          : Icons.cloud_off,
-                      size: 19,
-                      color: color,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        status,
-                        style: TextStyle(
-                          color: color,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                StorageUsageView(
-                  ring: true,
-                  value: c.quotas[c.selected],
-                  connected: c.connected,
-                  onRefresh: c.connected
-                      ? () {
-                          c.refreshQuota(c.selected!, force: true);
-                        }
-                      : null,
-                ),
-              ],
-            ),
-          ),
-          if (fallback)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text(
-                '直连未能完成部分请求，已使用系统／代理兜底。',
-                style: TextStyle(color: Color(0xff985800), fontSize: 12),
-              ),
-            ),
-          if (issue != null)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                issue,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.deepOrange, fontSize: 12),
-              ),
-            ),
-          if (c.paused)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text(
-                '新同步请求已暂停；正在执行的请求可能完成。',
-                style: TextStyle(fontSize: 12, color: Colors.blueGrey),
-              ),
-            ),
-          Expanded(
-            child: all.isEmpty
-                ? Center(
-                    child: Text(
-                      c.connected ? '暂无传输记录' : '连接账号后查看文件与备份状态',
-                      style: const TextStyle(
-                        color: Colors.blueGrey,
-                        fontSize: 13,
-                      ),
-                    ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    itemCount: all.length,
-                    separatorBuilder: (_, index) =>
-                        const Divider(height: 1, indent: 58),
-                    itemBuilder: (_, index) {
-                      final item = all[index];
-                      final total = (item['bytes_total'] as num?) ?? 0;
-                      final done = (item['bytes_done'] as num?) ?? 0;
-                      final state = item['state']?.toString();
-                      final active = state == null || state == '传输中';
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 11,
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              item['kind'].toString().contains('download')
-                                  ? Icons.file_download_outlined
-                                  : Icons.file_upload_outlined,
-                              color: Colors.blueGrey,
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    item['name']?.toString() ?? '文件',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  if (item['account'] != null)
+                                    const SizedBox(height: 5),
                                     Text(
-                                      item['account'] as String,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                                      item['error'] != null
+                                          ? '未完成'
+                                          : state ??
+                                                (item['kind']
+                                                        .toString()
+                                                        .contains('download')
+                                                    ? '正在下载'
+                                                    : '正在上传'),
                                       style: const TextStyle(
                                         fontSize: 11,
                                         color: Colors.blueGrey,
                                       ),
                                     ),
-                                  const SizedBox(height: 5),
-                                  Text(
-                                    item['error'] != null
-                                        ? '未完成'
-                                        : state ??
-                                              (item['kind'].toString().contains(
-                                                    'download',
-                                                  )
-                                                  ? '正在下载'
-                                                  : '正在上传'),
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.blueGrey,
-                                    ),
-                                  ),
-                                  if (active) ...[
-                                    const SizedBox(height: 7),
-                                    LinearProgressIndicator(
-                                      value: total > 0
-                                          ? (done / total).clamp(0, 1)
-                                          : null,
-                                      minHeight: 3,
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      total > 0
-                                          ? '${(done / total * 100).clamp(0, 100).toStringAsFixed(0)}%'
-                                          : '准备中',
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.blueGrey,
+                                    if (active) ...[
+                                      const SizedBox(height: 7),
+                                      LinearProgressIndicator(
+                                        value: total > 0
+                                            ? (done / total).clamp(0, 1)
+                                            : null,
+                                        minHeight: 3,
                                       ),
-                                    ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        total > 0
+                                            ? '${(done / total * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                                            : '准备中',
+                                        style: const TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.blueGrey,
+                                        ),
+                                      ),
+                                    ],
                                   ],
-                                ],
+                                ),
                               ),
-                            ),
-                            if (!active && item['error'] == null)
-                              const Icon(
-                                Icons.check,
-                                size: 16,
-                                color: Colors.green,
-                              ),
-                          ],
-                        ),
-                      );
-                    },
+                              if (!active && item['error'] == null)
+                                const Icon(
+                                  Icons.check,
+                                  size: 16,
+                                  color: Colors.green,
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
                   ),
+              ],
+            ),
           ),
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+            child: Wrap(
+              key: const ValueKey('tray-actions'),
+              alignment: WrapAlignment.spaceAround,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 TextButton.icon(
                   onPressed: c.connected && !c.busy ? onOpenFolder : null,

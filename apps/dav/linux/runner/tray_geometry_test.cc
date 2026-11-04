@@ -33,4 +33,30 @@ int main() {
   // Point-only hosts still align with the taskbar edge and center horizontally.
   anchor.capture(860, 867, {0, 0, 1440, 843});
   assert(anchor.panel().x == first.x && anchor.panel().y == first.y);
+  // An autohide dock is absent from the system workarea. Reserve its actual
+  // 64px size plus two 4px margins before positioning the panel.
+  auto safe = twodrive::reserve_dock({0, 0, 1920, 1080}, {0, 0, 1920, 1080},
+      twodrive::DockEdge::bottom, 72);
+  assert(safe.height == 1008);
+  auto already = twodrive::reserve_dock(safe, {0, 0, 1920, 1080},
+      twodrive::DockEdge::bottom, 72);
+  assert(already.height == safe.height);
+  anchor.capture(885, 1040, safe);
+  assert(anchor.panel().y + anchor.panel().height == 1000);
+  auto short_area = twodrive::reserve_dock({0, 0, 800, 480}, {0, 0, 800, 480},
+      twodrive::DockEdge::bottom, 80);
+  anchor.capture(700, 450, short_area);
+  assert(anchor.panel().height == 384);
+  assert(anchor.panel().y == 8);
+  auto top_area = twodrive::reserve_dock({-1920, -1080, 1920, 1080},
+      {-1920, -1080, 1920, 1080}, twodrive::DockEdge::top, 64);
+  anchor.capture(-900, -1050, top_area);
+  assert(anchor.panel().y == -1008);
+  auto side_area = twodrive::reserve_dock({0, 0, 1920, 1080}, {0, 0, 1920, 1080},
+      twodrive::DockEdge::left, 80);
+  anchor.capture(40, 400, side_area);
+  assert(anchor.panel().x == 88 && anchor.panel().y == 115);
+  anchor.capture(1, 1, {0, 0, 1, 1});
+  assert(anchor.panel().x == 0 && anchor.panel().y == 0);
+  assert(anchor.panel().width == 1 && anchor.panel().height == 1);
 }
