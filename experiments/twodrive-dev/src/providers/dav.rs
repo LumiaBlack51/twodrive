@@ -14,7 +14,7 @@ use twodrive_dev::{
 
 pub fn descriptor() -> Value {
     json!({"id":"dav","label":"WebDAV / NAS","account_label":"账号","icon":"cloud",
-    "account_key":"username","summary_key":"url","identity_fields":["url","username"],"protected_paths":[],"capabilities":{"upload":true,"conditional_upload":true,"mkdir":true,"rename":true,"delete":true,"backup":true},"fields":[{"key":"url","label":"WebDAV 根地址 · https://…","required":true},
+    "account_key":"username","summary_key":"url","identity_fields":["url","username"],"protected_paths":[],"capabilities":{"mount":true,"upload":true,"conditional_upload":true,"mkdir":true,"rename":true,"delete":true,"backup":true},"fields":[{"key":"url","label":"WebDAV 根地址 · https://…","required":true},
         {"key":"username","label":"用户名"},{"key":"password","label":"密码","secret":true},{"key":"allow_private_http","label":"允许局域网 HTTP（连接不加密，须使用私有 IP）","type":"boolean","advanced":true}]})
 }
 fn credentials(p: &Profile) -> Option<Credentials> {

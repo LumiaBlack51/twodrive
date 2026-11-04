@@ -59,3 +59,16 @@ trusted.json
 
 # Cargo build settings are not runtime account configuration.
 !/.cargo/config.toml
+
+# Private desktop state, credentials and local validation output.
+/state/
+/accounts/
+/profiles.json
+/session-*.json
+/*.secret
+/observer.env
+/outputs/
+/validation-logs/
+/private-validation/
+*.sqlite3
+*.sqlite3-*

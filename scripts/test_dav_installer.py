@@ -23,10 +23,11 @@ class InstallerTests(unittest.TestCase):
             bundle = root/'bundle'
             (bundle/'data/flutter_assets/assets').mkdir(parents=True)
             (bundle/'twodrive_dav').write_bytes(b'new-gui')
-            (bundle/'data/flutter_assets/assets/cloud-connected.svg').write_bytes(b'svg')
+            (bundle/'data/flutter_assets/assets/cloud-connected.svg').write_bytes(b'status-svg')
+            (bundle/'data/flutter_assets/assets/app-icon.svg').write_bytes(b'plain-app-svg')
             engines = root/'engines'
             engines.mkdir()
-            for name in ['twodrive-dev', 'twodrive-dav-engine']:
+            for name in ['twodrive-dev', 'twodrive-dav-engine', 'twodrive-provider-login']:
                 (engines/name).write_bytes(b'new-executable')
             installer.install(bundle, engines, root/'data', root/'bin', preserve_runtime=True)
             retired = list(app.glob('runtime-before-*'))
@@ -34,7 +35,30 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual((retired[0]/'twodrive-dav-engine').read_bytes(), b'old-executable')
             self.assertEqual((app/'state/profiles.json').read_bytes(), b'private-account-fixture')
             self.assertEqual((app/'runtime/twodrive_dav').read_bytes(), b'new-gui')
-            compile((root/'bin/twodrive-dav').read_text(), 'launcher', 'exec')
+            launcher = (root/'bin/twodrive-dav').read_text()
+            compile(launcher, 'launcher', 'exec')
+            self.assertIn('os.environ.setdefault("TWODRIVE_TRAY_BACKEND", "sni")', launcher)
+            # A loaded positioning component does not make GTK's Wayland
+            # taskbar-hiding hint effective. Exercise the generated launcher.
+            for variables, expected in [
+                ({'DISPLAY': ':test', 'WAYLAND_DISPLAY': 'wayland-test'}, 'x11'),
+                ({'DISPLAY': ':test'}, 'x11'),
+                ({'WAYLAND_DISPLAY': 'wayland-test'}, None),
+                ({'DISPLAY': ':test', 'GDK_BACKEND': 'wayland'}, 'wayland'),
+            ]:
+                with self.subTest(environment=variables), \
+                     patch.dict(installer.os.environ, variables, clear=True), \
+                     patch('sys.argv', ['twodrive-dav', '--background']), \
+                     patch.object(installer.os, 'execv') as execute, \
+                     patch.object(installer.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+                    exec(compile(launcher, 'launcher', 'exec'), {})
+                    self.assertEqual(installer.os.environ.get('GDK_BACKEND'), expected)
+                    self.assertEqual(execute.call_args.args[1][-1], '--background')
+            self.assertEqual((app/'runtime/twodrive-provider-login').read_bytes(), b'new-executable')
+            desktop = (root/'data/applications/app.twodrive.twodrive_dav.desktop').read_text()
+            self.assertIn('Name=TwoDrive\n', desktop)
+            self.assertIn('Icon=twodrive-dav-minimal\n', desktop)
+            self.assertEqual((root/'data/icons/hicolor/scalable/apps/twodrive-dav-minimal.svg').read_bytes(), b'plain-app-svg')
 
     def test_unknown_gnome_component_queues_only_its_uuid_for_next_session(self):
         with tempfile.TemporaryDirectory() as tmp:

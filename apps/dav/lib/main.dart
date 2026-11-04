@@ -5,6 +5,7 @@ import 'package:window_manager/window_manager.dart';
 import 'client.dart';
 import 'workspace.dart';
 import 'platform_paths.dart';
+import 'app_theme.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -13,13 +14,14 @@ Future<void> main(List<String> args) async {
   // must not call setSkipTaskbar before that interface exists.
   await windowManager.waitUntilReadyToShow();
   await windowManager.setMinimumSize(const Size(840, 580));
-  await windowManager.setTitle('TwoDrive Development');
   final home = userHome;
   final data = userData;
   String option(String name, String fallback) {
     final index = args.indexOf(name);
     return index >= 0 && index + 1 < args.length ? args[index + 1] : fallback;
   }
+
+  await windowManager.setTitle(option('--window-title', 'TwoDrive'));
 
   final root = File(Platform.resolvedExecutable).parent.path;
   final client = StorageClient();
@@ -37,8 +39,13 @@ Future<void> main(List<String> args) async {
     ),
     nativeFixtureRoot: fixtureRoot.isEmpty ? null : fixtureRoot,
   );
-  if (client.selected != null && fixtureRoot.isEmpty) {
-    unawaited(client.connect());
+  if (fixtureRoot.isEmpty) {
+    final restore = option('--restore-connections', '');
+    unawaited(
+      restore.isEmpty
+          ? client.restoreOnStartup()
+          : client.restoreConnectionsAtStartup(restore.split(',')),
+    );
   }
   if (args.contains('--background') && trayReady) {
     await windowManager.hide();
@@ -51,17 +58,9 @@ class DavApp extends StatelessWidget {
   final bool desktop;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'TwoDrive Development',
+    title: 'TwoDrive',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff326bd6)),
-      scaffoldBackgroundColor: const Color(0xfff5f7fb),
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-        isDense: true,
-      ),
-    ),
+    theme: appTheme(),
     home: Workspace(client: client, desktop: desktop),
   );
 }

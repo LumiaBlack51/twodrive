@@ -26,7 +26,7 @@ pub fn descriptor() -> Value {
     "identity_fields":["peer_state"],"protected_paths":["peer_state"],
     "help":"扫描局域网中的 TwoDrive 设备，或直接导入可信的配对邀请。跨网络加密连接。修改已有文件时自动仅传输变化的内容，必要时使用整文件上传。普通 NAS 也可以选择 WebDAV。",
     "actions":[{"id":"discover","label":"发现局域网设备"},{"id":"import","label":"导入连接文件","input":"file"}],
-    "capabilities":{"upload":true,"conditional_upload":true,"mkdir":true,"rename":true,"delete":true,"backup":true},
+    "capabilities":{"mount":true,"upload":true,"conditional_upload":true,"mkdir":true,"rename":true,"delete":true,"backup":true},
     "fields":[{"key":"invitation_file","label":"配对邀请 JSON（首次连接需要）","type":"file","transient":true},
       {"key":"expected_device","label":"已选择的设备身份","advanced":true,"read_only":true},
       {"key":"peer_state","label":"本机配对目录（留空自动创建）","advanced":true},

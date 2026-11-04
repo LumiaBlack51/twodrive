@@ -18,3 +18,24 @@ flutter:
   uses-material-design: true
   assets:
     - assets/
+    - assets/fonts/Noto-LICENSE.txt
+    - assets/fonts/Roboto-LICENSE.txt
+    - assets/fonts/DejaVu-LICENSE.txt
+  fonts:
+    - family: TwoDriveSans
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
+    - family: TwoDriveCJK
+      fonts:
+        - asset: assets/fonts/NotoSansCJKSC-Regular.otf
+          weight: 400
+        - asset: assets/fonts/NotoSansCJKSC-Bold.otf
+          weight: 700
+    - family: TwoDriveMono
+      fonts:
+        - asset: assets/fonts/DejaVuSansMono.ttf

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
 import 'client.dart';
+import 'provider_auth_dialog.dart';
 
 class ProfileDialog extends StatefulWidget {
   const ProfileDialog({
@@ -9,10 +10,14 @@ class ProfileDialog extends StatefulWidget {
     this.original,
     required this.providers,
     this.client,
+    this.initialAction,
+    this.connectOnLogin = false,
   });
   final Json? original;
   final List<Json> providers;
   final StorageClient? client;
+  final String? initialAction;
+  final bool connectOnLogin;
   @override
   State<ProfileDialog> createState() => _ProfileDialogState();
 }
@@ -25,6 +30,8 @@ class _ProfileDialogState extends State<ProfileDialog> {
   late bool writable;
   late String route;
   bool runningAction = false;
+  bool authenticated = false;
+  int? activeActionRequest;
   String? actionMessage;
   String? selectionMessage;
   List<Json> actionItems = [];
@@ -33,6 +40,21 @@ class _ProfileDialogState extends State<ProfileDialog> {
       widget.providers.where((p) => p['id'] == kind).firstOrNull;
   List<Json> get providerFields =>
       ((provider?['fields'] as List?) ?? []).cast<Json>();
+  List<String> credentialFields(Json action) =>
+      ((action['credential_fields'] as List?) ?? [])
+          .cast<String>()
+          .where(
+            (key) => providerFields.any(
+              (f) =>
+                  f['key'] == key &&
+                  f['transient'] == true &&
+                  f['omit_from_profile'] == true,
+            ),
+          )
+          .toList();
+  bool get inlineCredentials => ((provider?['actions'] as List?) ?? [])
+      .cast<Json>()
+      .any((action) => credentialFields(action).isNotEmpty);
   List<String> get networkModes =>
       ((provider?['network_modes'] as List?) ?? ['auto', 'direct', 'system'])
           .cast<String>();
@@ -49,7 +71,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
     kind = widget.providers.any((d) => d['id'] == originalKind)
         ? originalKind
         : widget.providers.firstOrNull?['id'] as String?;
-    writable = p['writable'] == true;
+    writable = p['writable'] != false;
     final keys = <String>{
       'name',
       'mount_path',
@@ -67,6 +89,54 @@ class _ProfileDialogState extends State<ProfileDialog> {
       fields['name']!.text = provider?['label'] as String? ?? '';
     }
     normalizeRoute();
+    if (widget.initialAction != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final action = ((provider?['actions'] as List?) ?? [])
+            .cast<Json>()
+            .where((a) => a['id'] == widget.initialAction)
+            .firstOrNull;
+        if (mounted && action != null) providerAction(action);
+      });
+    }
+  }
+
+  void saveProfile([bool connect = false]) {
+    if (!form.currentState!.validate()) return;
+    Navigator.pop(context, {
+      if (connect ||
+          (widget.original == null &&
+              kind == 'peer' &&
+              fields['invitation_file']?.text.isNotEmpty == true))
+        '_connect': true,
+      'id': widget.original?['id'] ?? '',
+      'kind': kind,
+      'network_route': route,
+      'writable': writable,
+      'name': fields['name']!.text.trim(),
+      'mount_path': fields['mount_path']!.text.trim(),
+      for (final f in providerFields.where(
+        (f) => f['omit_from_profile'] != true,
+      ))
+        f['key'] as String: f['type'] == 'boolean'
+            ? (flags[f['key']] ?? false)
+            : (f['secret'] == true
+                  ? fields[f['key']]!.text
+                  : fields[f['key']]!.text.trim()),
+    });
+  }
+
+  Future<void> saveOrLogin() async {
+    final action = ((provider?['actions'] as List?) ?? [])
+        .cast<Json>()
+        .where((a) => credentialFields(a).isNotEmpty)
+        .firstOrNull;
+    if (!authenticated &&
+        action != null &&
+        credentialFields(action).any((key) => fields[key]!.text.isNotEmpty)) {
+      await providerAction(action, saveOnSuccess: true);
+    } else {
+      saveProfile(authenticated);
+    }
   }
 
   @override
@@ -87,8 +157,17 @@ class _ProfileDialogState extends State<ProfileDialog> {
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 14),
     child: TextFormField(
+      key: ValueKey('profile-$key'),
       controller: fields[key],
       obscureText: secret,
+      autocorrect: !secret,
+      enableSuggestions: !secret,
+      onChanged:
+          providerFields.any(
+            (f) => f['key'] == key && f['omit_from_profile'] == true,
+          )
+          ? (_) => setState(() => authenticated = false)
+          : null,
       readOnly: readOnly,
       decoration: InputDecoration(
         labelText: label,
@@ -146,8 +225,40 @@ class _ProfileDialogState extends State<ProfileDialog> {
     );
   }
 
-  Future<void> providerAction(Json action) async {
+  Future<Json> requestProviderAction(Json arguments) async {
+    final id = widget.client!.reserveRequestId();
+    if (mounted) setState(() => activeActionRequest = id);
+    try {
+      return await widget.client!.request('provider_action', arguments, id);
+    } finally {
+      if (mounted) setState(() => activeActionRequest = null);
+    }
+  }
+
+  Future<void> cancelProviderAction() async {
+    final id = activeActionRequest;
+    if (id == null) return;
+    try {
+      await widget.client!.request('cancel', {'id': id});
+    } catch (_) {
+      if (mounted) setState(() => actionMessage = '取消未完成，请稍后重试。');
+    }
+  }
+
+  Future<void> providerAction(Json action, {bool saveOnSuccess = false}) async {
     final targetKind = action['provider'] as String? ?? kind;
+    final credentials = targetKind == kind
+        ? credentialFields(action)
+        : <String>[];
+    for (final key in credentials) {
+      if (fields[key]!.text.isEmpty) {
+        final label = providerFields.firstWhere(
+          (f) => f['key'] == key,
+        )['label'];
+        setState(() => actionMessage = '请先填写$label。');
+        return;
+      }
+    }
     setState(() {
       runningAction = true;
       actionMessage = null;
@@ -164,17 +275,73 @@ class _ProfileDialogState extends State<ProfileDialog> {
         ))?.path;
         if (file == null || !mounted) return;
       }
-      final result = await widget.client!.request('provider_action', {
-        'kind': targetKind,
-        'action': action['id'],
-        'file': ?file,
-        if (targetKind == kind && fields.containsKey('expected_device'))
-          'expected_device': fields['expected_device']!.text,
-      });
+      Json result;
+      try {
+        result = await requestProviderAction({
+          'kind': targetKind,
+          'action': action['id'],
+          'network_route': route,
+          'file': ?file,
+          for (final key in credentials) key: fields[key]!.text,
+          for (final key
+              in ((action['input_fields'] as List?) ?? []).cast<String>())
+            if (targetKind == kind &&
+                fields.containsKey(key) &&
+                providerFields.any(
+                  (f) => f['key'] == key && f['secret'] != true,
+                ))
+              key: fields[key]!.text,
+          if (targetKind == kind && fields.containsKey('expected_device'))
+            'expected_device': fields['expected_device']!.text,
+        });
+      } finally {
+        for (final key in credentials) {
+          if (mounted &&
+              providerFields.any(
+                (f) => f['key'] == key && f['secret'] == true,
+              )) {
+            fields[key]!.clear();
+          }
+        }
+      }
+      Json? pendingAuth;
+      try {
+        while (result['auth'] is Map && mounted) {
+          final question = result['auth'] as Json;
+          pendingAuth = question;
+          if (!mounted) return;
+          var answer = await askProviderAuth(context, question);
+          if (!mounted) return;
+          result = await requestProviderAction({
+            'kind': targetKind,
+            'action':
+                question[answer == null ? 'cancel_action' : 'reply_action'],
+            ...((question['context'] as Json?) ?? {}),
+            'attempt': question['attempt'],
+            'answer': ?answer,
+          });
+          answer = null;
+          pendingAuth = null;
+        }
+      } finally {
+        if (pendingAuth != null) {
+          try {
+            await requestProviderAction({
+              'kind': targetKind,
+              'action': pendingAuth['cancel_action'],
+              ...((pendingAuth['context'] as Json?) ?? {}),
+              'attempt': pendingAuth['attempt'],
+            });
+          } catch (_) {
+            /* An expired attempt must not cancel a newer login. */
+          }
+        }
+      }
       if (!mounted) return;
       setState(() {
         actionItems = ((result['items'] as List?) ?? []).cast<Json>();
         actionMessage = result['message'] as String?;
+        authenticated = result['authenticated'] == true;
         selectionMessage = result['selection_message'] as String?;
         if (result['options'] is Map) {
           final previousLabel = provider?['label'];
@@ -200,8 +367,13 @@ class _ProfileDialogState extends State<ProfileDialog> {
           }
         }
       });
+      if (authenticated && (widget.connectOnLogin || saveOnSuccess)) {
+        saveProfile(true);
+      }
     } catch (e) {
-      if (mounted) setState(() => actionMessage = '$e');
+      if (mounted) {
+        setState(() => actionMessage = e is StateError ? e.message : '$e');
+      }
     } finally {
       if (mounted) setState(() => runningAction = false);
     }
@@ -282,6 +454,11 @@ class _ProfileDialogState extends State<ProfileDialog> {
                   padding: const EdgeInsets.only(bottom: 14),
                   child: Text(provider!['help'] as String),
                 ),
+              if (inlineCredentials)
+                for (final f in providerFields.where(
+                  (f) => f['advanced'] != true,
+                ))
+                  providerField(f),
               for (final action
                   in ((provider?['actions'] as List?) ?? []).cast<Json>())
                 Align(
@@ -330,9 +507,11 @@ class _ProfileDialogState extends State<ProfileDialog> {
                   }),
                 ),
               for (final f in providerFields.where(
-                (f) => f['advanced'] != true,
+                (f) => !inlineCredentials && f['advanced'] != true,
               ))
                 providerField(f),
+              if (((provider?['actions'] as List?) ?? []).isNotEmpty)
+                const SizedBox(height: 20),
               DropdownButtonFormField<String>(
                 key: ValueKey('route-$kind'),
                 initialValue: route,
@@ -359,15 +538,6 @@ class _ProfileDialogState extends State<ProfileDialog> {
                     : (value) => setState(() => route = value!),
               ),
               const SizedBox(height: 14),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('允许修改远端文件'),
-                subtitle: const Text('可用操作取决于提供者和远端授权。'),
-                value: writable,
-                onChanged: runningAction
-                    ? null
-                    : (value) => setState(() => writable = value),
-              ),
               ExpansionTile(
                 title: const Text('高级设置'),
                 tilePadding: EdgeInsets.zero,
@@ -376,7 +546,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
                     (f) => f['advanced'] == true,
                   ))
                     providerField(f),
-                  if (Platform.isLinux)
+                  if (Platform.isLinux || Platform.isWindows)
                     field('mount_path', '挂载目录 · 留空自动创建独立目录'),
                 ],
               ),
@@ -387,38 +557,18 @@ class _ProfileDialogState extends State<ProfileDialog> {
     ),
     actions: [
       TextButton(
-        onPressed: runningAction ? null : () => Navigator.pop(context),
-        child: const Text('取消'),
+        onPressed: runningAction
+            ? (activeActionRequest == null ? null : cancelProviderAction)
+            : () => Navigator.pop(context),
+        child: Text(runningAction ? '取消当前操作' : '取消'),
       ),
       FilledButton(
-        onPressed: provider == null || runningAction
-            ? null
-            : () {
-                if (form.currentState!.validate()) {
-                  Navigator.pop(context, {
-                    if (widget.original == null &&
-                        kind == 'peer' &&
-                        fields['invitation_file']?.text.isNotEmpty == true)
-                      '_connect': true,
-                    'id': widget.original?['id'] ?? '',
-                    'kind': kind,
-                    'network_route': route,
-                    'writable': writable,
-                    'name': fields['name']!.text.trim(),
-                    'mount_path': fields['mount_path']!.text.trim(),
-                    for (final f in providerFields)
-                      f['key'] as String: f['type'] == 'boolean'
-                          ? (flags[f['key']] ?? false)
-                          : (f['secret'] == true
-                                ? fields[f['key']]!.text
-                                : fields[f['key']]!.text.trim()),
-                  });
-                }
-              },
+        onPressed: provider == null || runningAction ? null : saveOrLogin,
         child: Text(
-          widget.original == null &&
-                  kind == 'peer' &&
-                  fields['invitation_file']?.text.isNotEmpty == true
+          authenticated ||
+                  (widget.original == null &&
+                      kind == 'peer' &&
+                      fields['invitation_file']?.text.isNotEmpty == true)
               ? '保存并连接'
               : '保存',
         ),

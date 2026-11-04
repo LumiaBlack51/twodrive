@@ -10,6 +10,9 @@ mod model;
 #[path = "../../twodrive-dev/src/provider.rs"]
 mod provider;
 #[cfg(all(windows, feature = "native-test-hooks"))]
+#[path = "../../twodrive-dev/src/provider_guard.rs"]
+mod provider_guard;
+#[cfg(all(windows, feature = "native-test-hooks"))]
 extern crate twodrive_cfapi_probe as twodrive_local_files;
 #[cfg(all(windows, feature = "native-test-hooks"))]
 #[path = "../../twodrive-dev/src/native_local_fixture.rs"]

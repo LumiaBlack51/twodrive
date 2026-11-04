@@ -17,11 +17,13 @@ type Files = BTreeMap<String, (MetadataEntry, Vec<u8>)>;
 pub struct OpaqueProvider {
     files: Arc<Mutex<Files>>,
     pub caps: Capabilities,
+    pub download_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 impl Default for OpaqueProvider {
     fn default() -> Self {
         Self {
             files: Arc::default(),
+            download_gate: None,
             caps: Capabilities {
                 upload: true,
                 mkdir: true,
@@ -106,6 +108,9 @@ impl CloudBackend for OpaqueProvider {
         Ok(self.files.lock().unwrap().get(id).map(|(m, _)| m.clone()))
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        if path == "/" {
+            return Ok(Some(MetadataEntry::new_dir("opaque-root", "/", 42, "1")));
+        }
         Ok(self.list_all()?.into_iter().find(|m| m.path == path))
     }
     fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
@@ -117,6 +122,14 @@ impl CloudBackend for OpaqueProvider {
         w: &mut dyn Write,
         progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
     ) -> anyhow::Result<u64> {
+        while self
+            .download_gate
+            .as_ref()
+            .is_some_and(|gate| !gate.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            progress(0)?;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let data = self.download(id)?;
         w.write_all(&data)?;
         progress(data.len() as u64)?;

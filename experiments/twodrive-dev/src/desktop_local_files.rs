@@ -2,10 +2,16 @@
 use anyhow::{Context, ensure};
 use serde_json::{Value, json};
 use std::path::Path;
-use twodrive_local_files::migration::{self, SourceKind};
+#[cfg(not(target_os = "linux"))]
+use twodrive_local_files::migration;
+use twodrive_local_files::migration::SourceKind;
+
+#[cfg(target_os = "linux")]
+#[path = "desktop_local_linux.rs"]
+mod linux;
 
 pub fn capabilities() -> Value {
-    json!({"schema_version":1,"metadata_preflight":cfg!(windows),
+    json!({"schema_version":1,"metadata_preflight":cfg!(any(windows,target_os="linux")),
         "native_mount":false,"import":false,"cloud_writes":false})
 }
 
@@ -97,7 +103,10 @@ impl NativeFixture {
 }
 
 pub fn preflight(args: &Value) -> anyhow::Result<Value> {
-    ensure!(cfg!(windows), "local metadata preflight requires Windows");
+    ensure!(
+        cfg!(any(windows, target_os = "linux")),
+        "local metadata preflight unavailable on this platform"
+    );
     ensure!(
         args["schema_version"] == 1,
         "unsupported local-file schema version"
@@ -111,8 +120,11 @@ pub fn preflight(args: &Value) -> anyhow::Result<Value> {
         !path.contains('\0') && path.len() <= 32767 && Path::new(path).is_absolute(),
         "source path must be absolute and bounded"
     );
-    let decision = migration::preflight(Path::new(path), kind)
-        .context("local metadata could not be inspected")?;
+    #[cfg(not(target_os = "linux"))]
+    let inspected = migration::preflight(Path::new(path), kind);
+    #[cfg(target_os = "linux")]
+    let inspected = linux::inspect(Path::new(path), kind);
+    let decision = inspected.context("local metadata could not be inspected")?;
     // No path, filenames, content, raw attributes or account identity echoed.
     Ok(
         json!({"schema_version":1,"decision":decision,"approval_required":true,
@@ -124,13 +136,37 @@ pub fn preflight(args: &Value) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_local_metadata_preflight_returns_only_decision_without_reading_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private-generated-name.txt");
+        std::fs::write(&path, b"generated preflight content").unwrap();
+        let report = preflight(
+            &json!({"schema_version":1,"source_path":path,"source_kind":"ordinary_directory"}),
+        )
+        .unwrap();
+        assert_eq!(report["decision"], "full_file_needs_approved_plan");
+        assert_eq!(report["content_read"], false);
+        assert_eq!(report["hydration_requested"], false);
+        assert_eq!(report["import_performed"], false);
+        assert!(capabilities()["metadata_preflight"].as_bool().unwrap());
+        assert!(!report.to_string().contains("private-generated-name"));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"generated preflight content"
+        );
+    }
     #[test]
     fn native_mount_is_not_implied_by_preflight() {
         assert_eq!(capabilities()["native_mount"], false);
         assert_eq!(capabilities()["import"], false);
-        assert_eq!(capabilities()["metadata_preflight"], cfg!(windows));
+        assert_eq!(
+            capabilities()["metadata_preflight"],
+            cfg!(any(windows, target_os = "linux"))
+        );
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     #[test]
     fn non_windows_preflight_is_explicitly_unsupported() {
         assert!(preflight(&json!({"schema_version":1})).is_err());

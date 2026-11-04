@@ -1,8 +1,10 @@
 # TwoDrive Development desktop
 
-The current dev Flutter desktop supports paired devices, WebDAV/NAS, OneDrive and Google Drive with separate private account state. See [connection setup and actual verification](storage-connections-dev.md). Its installer does not manage the stable OneDrive daemon. The linked 0.1.1 release is the earlier preview; later local/source changes are recorded separately.
+The current dev Flutter desktop supports paired devices, WebDAV/NAS, OneDrive, Google Drive, iCloud Drive and Baidu Netdisk with separate private account state. See [connection setup and actual verification](storage-connections-dev.md). Its installer does not manage the stable OneDrive daemon. The linked 0.1.1 release is the earlier preview; later local/source changes are recorded separately.
 
 Download the [Development 0.1.1 Linux/Windows release](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.1.1), then verify its SHA256SUMS before running. The stable Linux daemon is separately available in [0.2.12-1](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.12-1).
+
+Current Linux adaptation and explicitly scoped validation are recorded in [the PR47 Linux guide](linux-zorin-2026-10-29.md).
 
 ## Provider boundary (0.1.1)
 
@@ -36,7 +38,7 @@ connection or synchronization failures keep the error icon.
 Requirements: Flutter 3.41.8, Rust 1.96, GTK 3 development files, clang, CMake,
 Ninja, pkg-config, FUSE 3 and a session D-Bus StatusNotifierItem host. Current
 native acceptance now includes isolated GNOME 46 GTK X11 and native GTK Wayland.
-The optional TwoDrive-only GNOME component provides actual icon geometry and compositor positioning; first installation may need the next desktop login to load. The launcher selects native Wayland when that component is available, preserving explicit GDK_BACKEND. Other Wayland compositors are not verified. See [positioning, installation and boundaries](tray-positioning-2026-10-14.md).
+The optional TwoDrive-only GNOME component provides actual icon geometry and compositor positioning; first installation may need the next desktop login to load. The launcher prefers X11/XWayland when DISPLAY is available so the tray utility can stay out of the taskbar and window switcher, preserving explicit GDK_BACKEND. GTK 3 native Wayland cannot apply taskbar-hiding hints, so forcing that backend does not guarantee a hidden Dock icon. Other Wayland compositors are not verified. See [positioning, installation and boundaries](tray-positioning-2026-10-14.md).
 
 ```bash
 cargo build --locked --release --manifest-path experiments/twodrive-dev/Cargo.toml --features mount
@@ -44,6 +46,8 @@ cd apps/dav
 flutter pub get --enforce-lockfile
 flutter build linux --release
 cd ../..
+# Keep the pinned supporting component beside the portable runtime.
+python3 scripts/install-rclone-component.py --platform linux-amd64 --destination apps/dav/build/linux/x64/release/bundle
 python3 scripts/install-dav-desktop.py \
   --bundle apps/dav/build/linux/x64/release/bundle \
   --engine-dir experiments/twodrive-dev/target/release \
@@ -51,7 +55,7 @@ python3 scripts/install-dav-desktop.py \
 ~/.local/bin/twodrive-dav
 ```
 
-Public product name: **TwoDrive Development**. Internal `dav` paths and binary
+Public product name for this Linux source branch: **TwoDrive**. Internal `dav` paths and binary
 names are retained for isolation and do not rename the product. Runtime lives in
 `~/.local/share/twodrive-dav/runtime`; private profiles/cache/backup metadata live
 under `~/.local/share/twodrive-dav/state`. The autostart entry, if explicitly enabled,
