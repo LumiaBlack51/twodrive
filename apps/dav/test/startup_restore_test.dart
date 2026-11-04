@@ -85,6 +85,42 @@ class StartupClient extends StorageClient {
 
 void main() {
   test(
+    'normal startup restores four saved clouds even with only two previously online',
+    () async {
+      final c = StartupClient()
+        ..selected = 'onedrive'
+        ..profiles = [
+          for (final id in ['onedrive', 'icloud', 'baidu', 'google', 'new'])
+            {
+              'id': id,
+              'name': 'Drive $id',
+              'revision': 'rev-$id',
+              'startup_ready': id != 'new',
+            },
+        ];
+      // The normal path uses saved sessions, not the previous mount subset.
+      c.status['connections'] = [
+        {'id': 'baidu'},
+        {'id': 'google'},
+      ];
+      await c.restoreOnStartup();
+      expect(c.calls.where((v) => v['op'] == 'resume').map((v) => v['id']), [
+        'icloud',
+        'baidu',
+        'google',
+        'onedrive',
+      ]);
+      expect(
+        c.calls.where((v) => v['op'] == 'mount').map((v) => v['profile']),
+        ['icloud', 'baidu', 'google', 'onedrive'],
+      );
+      expect(c.mounts.length, 4);
+      expect(c.selected, 'onedrive');
+      expect(c.error, isNull);
+      c.dispose();
+    },
+  );
+  test(
     'startup resumes and mounts all saved accounts once, keeps preferred view and skips new login',
     () async {
       final c = StartupClient();
