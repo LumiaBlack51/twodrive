@@ -862,6 +862,14 @@ impl App {
             }
             "backups" | "save_backups" => {
                 let p = self.profile(string(a, "id")?)?;
+                // Older clients omit revision; new target selectors bind every
+                // pending read/save to the configuration the user actually saw.
+                if let Some(revision) = a.get("revision") {
+                    ensure!(
+                        revision.as_str() == Some(&p.revision),
+                        "备份目标配置已改变，请刷新后重试"
+                    );
+                }
                 if req.op == "save_backups" {
                     ensure!(
                         !self.online(&p.id)
@@ -1202,6 +1210,98 @@ mod test_provider;
 mod tests {
     use super::*;
     use test_provider::OpaqueProvider;
+    #[test]
+    fn backup_settings_bind_optional_revision_and_keep_other_accounts_unchanged() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = State::new(temp.path().join("private")).unwrap();
+        let profiles: Vec<Profile> = ["a", "b"]
+            .into_iter()
+            .map(|id| Profile {
+                id: id.into(),
+                revision: format!("rev-{id}"),
+                options: [("url".into(), json!("https://example.invalid/dav/"))].into(),
+                ..Default::default()
+            })
+            .collect();
+        let mut app = App {
+            args: Args {
+                state: state.dir.clone(),
+                peer_bin: PathBuf::new(),
+                launcher: PathBuf::new(),
+                mount_worker: None,
+                backup_worker: None,
+                native_local_fixture_root: None,
+            },
+            state,
+            config: Config {
+                profiles,
+                selected: Some("a".into()),
+            },
+            connected: None,
+            backend: None,
+            gateway: None,
+            mounted: None,
+            backup: None,
+            network: Arc::default(),
+            hosting: sharing::Hosting::default(),
+            inactive: HashMap::new(),
+            jobs: HashMap::new(),
+            native_fixture: local_files::NativeFixture::default(),
+        };
+        let out = Arc::new(Mutex::new(std::io::stdout()));
+        let call = |app: &mut App, op: &str, args: Value| {
+            app.handle(
+                &Request {
+                    id: 1,
+                    op: op.into(),
+                    args,
+                },
+                Arc::default(),
+                &out,
+            )
+        };
+        // Disabled synthetic sources require no cloud account or file reads.
+        for id in ["a", "b"] {
+            call(&mut app, "save_backups", json!({"id":id,"revision":format!("rev-{id}"),
+                "folders":[{"local":temp.path().join(id),"remote":format!("/Backups/{id}"),"enabled":false}]})).unwrap();
+        }
+        let before: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|id| {
+                let p = app.profile(id).unwrap();
+                serde_json::to_value(backup::folders(&app.state, &p).unwrap()).unwrap()
+            })
+            .collect();
+        for op in ["backups", "save_backups"] {
+            let error = call(
+                &mut app,
+                op,
+                json!({"id":"b","revision":"stale-b","folders":[]}),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("备份目标配置已改变"));
+        }
+        assert_eq!(
+            call(&mut app, "backups", json!({"id":"b","revision":"rev-b"})).unwrap()["folders"],
+            before[1]
+        );
+        assert_eq!(
+            call(&mut app, "backups", json!({"id":"a"})).unwrap()["folders"],
+            before[0]
+        );
+        // Legacy unversioned requests remain compatible, scoped to their ID.
+        call(&mut app, "save_backups", json!({"id":"b","folders":[]})).unwrap();
+        assert_eq!(
+            call(&mut app, "backups", json!({"id":"a"})).unwrap()["folders"],
+            before[0]
+        );
+        assert_eq!(
+            call(&mut app, "backups", json!({"id":"b"})).unwrap()["folders"],
+            json!([])
+        );
+        assert_eq!(app.config.selected.as_deref(), Some("a"));
+    }
+
     #[cfg(all(target_os = "linux", feature = "mount"))]
     #[test]
     fn remote_readonly_grant_remains_mountable_without_local_permission_controls() {

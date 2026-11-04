@@ -601,7 +601,9 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                       WorkspacePage.transfers => transfersPage(),
                       WorkspacePage.connections => connectionsPage(),
                       WorkspacePage.backup => BackupPage(
-                        key: ValueKey(c.selected),
+                        key: ValueKey(
+                          'backup:${c.selected}:${c.profile?['revision']}',
+                        ),
                         client: c,
                       ),
                       WorkspacePage.sharing => SharingPage(client: c),

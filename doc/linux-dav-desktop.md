@@ -79,6 +79,15 @@ no-clobber rename. Credentials are private and omitted from profile listing IPC.
 
 Folder backup configurations never delete source or remote files. Symlinks,
 overlapping mappings, home/root, mount and private-state sources are rejected.
+The backup page's **备份到** selector chooses a registered cloud account using
+the normal account-selection flow. Its tasks are stored and displayed separately;
+switching the target never migrates an existing task. Only accounts advertising
+automatic backup are selectable (currently OneDrive, Google Drive and compatible
+WebDAV/paired connections; iCloud and Baidu do not yet support automatic backup).
+The confirmation shows the destination account and folder. Pending choices and
+new settings requests bind profile ID plus revision; stale choices are discarded,
+and failed settings reads block edits until reloaded. The engine checks a supplied
+revision while retaining compatibility with older unversioned settings clients.
 A private snapshot is streamed with bounded memory; durable upload intent is
 written before PUT. A restarted worker reconciles an ambiguous committed PUT by
 remote content hash before accepting its new ETag. Remote version conflicts stop
