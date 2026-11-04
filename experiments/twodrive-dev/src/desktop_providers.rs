@@ -51,11 +51,13 @@ pub(super) fn descriptor(kind: &str) -> anyhow::Result<Value> {
         _ => anyhow::bail!("unsupported provider: {kind}"),
     }
 }
+#[cfg(not(windows))]
 pub fn mount_supported(p: &Profile) -> bool {
     descriptor(&p.kind)
         .map(|d| d["capabilities"]["mount"] == true)
         .unwrap_or(false)
 }
+#[cfg(not(windows))]
 pub fn uses_readonly_bridge(p: &Profile) -> bool {
     descriptor(&p.kind)
         .map(|d| {

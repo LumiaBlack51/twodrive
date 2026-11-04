@@ -44,6 +44,41 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20261104-04：Linux 适配分支的 Windows helper 和 CFAPI 测试依赖导致 CI 失败
+
+- 日期：2026-11-04；状态：两项编译机制已修正，静态契约核对通过，最终提交的托管原生检查待执行。
+- 影响版本与环境：PR #50 的 `3351792d8e6345b82262beb86d481d9bfb375b89` 及其 Linux 桌面修复后继 `4a58f81b9fae9e5ba8858d1ef3b8551ef273f51f`；Windows 引擎严格 Clippy、Linux CFAPI `desktop_contract`。
+- 关联历史故障：TD-20261029-30 的独立 CFAPI 测试依赖闭包问题；本次是新增 Linux FIFO 测试需要直接 libc 依赖，并非之前的 provider 模块缺失。
+
+### 症状、触发与根因
+
+[Windows desktop job 123906674035](https://github.com/LumiaBlack51/twodrive/actions/runs/40861841938/job/123906674035) 的实际日志确认 `mount_supported` 和 `uses_readonly_bridge` 因 dead_code 在 `-D warnings` 下失败。两函数定义编入 Windows，但实际调用位于非 Windows 或 Linux/mount 分支。Dev WebDAV Windows job 报同类错误。
+
+[Linux CFAPI job 123906677833](https://github.com/LumiaBlack51/twodrive/actions/runs/40861841955/job/123906677833) 的实际日志确认 E0433，位置是被 `desktop_contract.rs` 引入的真实 `desktop_local_linux.rs` 中 `libc::mkfifo`。消费源码的独立 CFAPI crate 没有 libc 直接测试依赖；另一个 crate 的依赖不会传递提供名称。
+
+### 解决办法与恢复操作
+
+给两个 helper 增加与宽度最广调用点一致的 `#[cfg(not(windows))]`，不将 `cfg!(...)` 误当成编译时删除，也不降低 Clippy 等级。CFAPI manifest 仅新增 Linux 目标的 `libc = "0.2"` dev-dependency；锁文件只增加该 crate 对已锁定 libc 0.2.190 的依赖边，不更新包版本或校验和。保留 FIFO 创建和拒绝行为测试原文。
+
+这两项修改只修编译范围及测试依赖，不改变正常登录、挂载、界面、权限、写入恢复或已有账号/缓存处理。未部署、重启客户端或操作真实云端。
+
+### 验证结果与边界
+
+本次用 Python TOML 解析、manifest/锁文件依赖匹配、目标 cfg 与调用范围静态核对确认补丁结构；原始快照缺少 guard/直接依赖，修订快照满足这些静态契约。没有把静态检查当作 Rust 编译或行为回归。当前执行环境没有 Cargo/Rust/Flutter，Rustfmt、Clippy、CFAPI 与桌面 Rust 测试未在此执行，最终提交需取得对应 hosted CI。
+
+原 head 的七条 PR workflow 为四成功、三失败：Linux desktop 已通过，Windows desktop/Dev WebDAV 失败，Linux CFAPI 失败及 Windows CFAPI cancelled。历史通过不替代新 SHA 检查，cancelled 不能算通过。
+
+### 防复发措施与后续
+
+保留现有跨平台 `--all-targets --locked -- -D warnings` 和 CFAPI `desktop_contract` 的真实源码/FIFO 测试。#47 后续 iCloud 元数据/创建时间/浏览缓存尚未整合，不将本次小补丁或 mergeable=true 视作跨分支整合完成。历史 TD-20261029-33/-34 重号在后续整合时仍需逐项消歧并更新引用，不能删除历史结论。
+
+### 交付记录
+
+用户要求将后续 Linux 桌面修复纳入现有 PR #50。已核对 `3351792` 是 `4a58f81` 的直接祖先，三个新增提交无分叉；仅快进该 PR 的源分支，保留提交历史、不创建重复 PR。本次两项构建修复与此记录同次追加提交；最终提交哈希及 CI 结果待生成后复核。未合并上游 dev/main、发布或部署，也未删除其他工作分支。
+
+
+
+
 
 2026-11-04 分支交付：用户在本机测试后授权上传 GitHub 分支。下列条目中的“未提交、推送或上传”保留各阶段验收时的事实；本批最终保留范围、验证结果和边界见 [Linux 桌面修复交付记录](linux-desktop-fixes-2026-11-04.md)。云端回收站功能已撤回，不包含在最终源码改动中。
 
