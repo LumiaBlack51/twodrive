@@ -29,6 +29,8 @@ use twodrive_dev::{
 
 #[path = "desktop_backup.rs"]
 mod backup;
+#[path = "desktop_connections.rs"]
+mod connections;
 #[path = "desktop_local_files.rs"]
 mod local_files;
 #[cfg(all(target_os = "linux", feature = "mount"))]
@@ -36,6 +38,9 @@ mod local_files;
 mod mount;
 #[path = "desktop_sharing.rs"]
 mod sharing;
+#[cfg(windows)]
+#[path = "desktop_windows_mount.rs"]
+mod windows_mount;
 
 #[derive(Parser)]
 struct Args {
@@ -84,6 +89,7 @@ fn string<'a>(args: &'a Value, key: &str) -> anyhow::Result<&'a str> {
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
 }
+#[cfg(not(windows))]
 fn is_mount(path: &Path) -> anyhow::Result<bool> {
     Ok(Command::new("mountpoint")
         .args(["-q", "--"])
@@ -107,9 +113,12 @@ impl Drop for Process {
         let _ = self.0.wait();
     }
 }
-fn spawn(mut command: Command) -> anyhow::Result<Process> {
+fn spawn(command: Command) -> anyhow::Result<Process> {
+    spawn_with_input(command, false)
+}
+fn spawn_with_input(mut command: Command, input: bool) -> anyhow::Result<Process> {
     command
-        .stdin(Stdio::null())
+        .stdin(if input { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // No gateway or mount worker should outlive a crashed desktop engine.
@@ -156,6 +165,8 @@ fn drain_errors(process: &mut Process, network: Arc<Diagnostics>) {
 }
 
 struct App {
+    inactive: HashMap<String, connections::Parked>,
+    jobs: connections::Jobs,
     native_fixture: local_files::NativeFixture,
     args: Args,
     state: State,
@@ -169,6 +180,13 @@ struct App {
     hosting: sharing::Hosting,
 }
 impl App {
+    fn saved_session(&self, p: &Profile) -> Option<Value> {
+        let session: Value = self.state.read(&format!("session-{}.json", p.id)).ok()?;
+        (session["kind"].as_str() == Some(&p.kind)
+            && session["revision"].as_str() == Some(&p.revision)
+            && session["binding"].as_str().is_some_and(|s| !s.is_empty()))
+        .then_some(session)
+    }
     fn profile(&self, id: &str) -> anyhow::Result<Profile> {
         self.config
             .profiles
@@ -197,6 +215,8 @@ impl App {
             .map(|p| {
                 let mut public = providers::public_profile(p);
                 public["account_name"] = json!(self.account_name(p));
+                public["connected"] = json!(self.online(&p.id));
+                public["startup_ready"] = json!(self.saved_session(p).is_some());
                 public
             })
             .collect();
@@ -208,6 +228,9 @@ impl App {
     fn cache(&self, p: &Profile, clear: bool) -> anyhow::Result<Value> {
         let path = self.mount_state(p).join("mount.sqlite3");
         if !path.exists() {
+            #[cfg(windows)]
+            return windows_mount::cache_status(self, p);
+            #[cfg(not(windows))]
             return Ok(json!({"bytes":0,"pending":0,"released":0}));
         }
         let db = Database::new(path);
@@ -264,36 +287,127 @@ impl App {
             "state":if matches!(d.failure_kind, Some(twodrive_core::DeleteFailureKind::Permission | twodrive_core::DeleteFailureKind::Authentication | twodrive_core::DeleteFailureKind::Rejected)) {"云端删除被拒绝，任务已保留"} else {"本地已删除，云端删除待确认"},
             "next_retry_unix":d.next_retry_unix,"http_status":d.last_status
         })));
-        Ok(
-            json!({"bytes":bytes,"pending":pending,"released":released,"waiting":waiting,
-            "deletes_pending":deletes.len(),"deletes_deferred":deferred,"deletes_rejected":rejected,"delete_next_retry_unix":next_retry}),
-        )
+        let mut result = json!({"bytes":bytes,"pending":pending,"released":released,"waiting":waiting,
+            "deletes_pending":deletes.len(),"deletes_deferred":deferred,"deletes_rejected":rejected,"delete_next_retry_unix":next_retry});
+        result["legacy_pending"] = json!(pending);
+        #[cfg(windows)]
+        {
+            let native = windows_mount::cache_status(self, p)?;
+            result["pending"] = json!(pending as u64 + native["pending"].as_u64().unwrap_or(0));
+            for key in ["write_error", "recovery_files", "recovery_directories"] {
+                result[key] = native[key].clone();
+            }
+        }
+        Ok(result)
     }
     fn unmount(&mut self, check_pending: bool) -> anyhow::Result<()> {
         if self.mounted.is_none() {
             return Ok(());
         }
-        let p = self.connected.as_ref().context("missing mount profile")?;
-        if !is_mount(&p.mount_path)? {
+        #[cfg(windows)]
+        {
+            if check_pending
+                && let Some(p) = &self.connected
+                && providers::editable(p)
+            {
+                ensure!(
+                    windows_mount::cache_status(self, p)?["pending"] == 0,
+                    "挂载仍有未上传内容，请关闭编辑器并等待同步完成；本机缓存已保留"
+                );
+            }
+            windows_mount::stop(self.mounted.as_mut().unwrap())?;
             self.mounted.take();
-            return Ok(());
+            Ok(())
         }
-        if check_pending {
+        #[cfg(not(windows))]
+        {
+            let p = self.connected.as_ref().context("missing mount profile")?;
+            if !is_mount(&p.mount_path)? {
+                self.mounted.take();
+                return Ok(());
+            }
+            if check_pending && providers::editable(p) {
+                ensure!(
+                    self.cache(p, false)?["pending"] == 0,
+                    "挂载仍有未上传或冲突的数据，请先完成同步；缓存已保留"
+                );
+            }
+            let result = Command::new("fusermount3")
+                .arg("-u")
+                .arg(&p.mount_path)
+                .output()?;
             ensure!(
-                self.cache(p, false)?["pending"] == 0,
-                "挂载仍有未上传或冲突的数据，请先完成同步；缓存已保留"
+                result.status.success(),
+                "挂载仍被占用，请关闭使用该目录的程序后重试"
             );
+            self.mounted.take();
+            Ok(())
         }
-        let result = Command::new("fusermount3")
-            .arg("-u")
-            .arg(&p.mount_path)
-            .output()?;
-        ensure!(
-            result.status.success(),
-            "挂载仍被占用，请关闭使用该目录的程序后重试"
-        );
-        self.mounted.take();
-        Ok(())
+    }
+    fn mount_current(&mut self, cancel: &AtomicBool) -> anyhow::Result<()> {
+        #[cfg(windows)]
+        {
+            let profile = self.connected.as_ref().context("请先连接")?.clone();
+            ensure!(self.mounted.is_none(), "已经挂载");
+            let process = windows_mount::start(self, &profile, cancel)?;
+            self.mounted = Some(process);
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            ensure!(
+                cfg!(all(target_os = "linux", feature = "mount")),
+                "此平台暂不支持文件管理器挂载，请使用文件浏览与文件夹备份"
+            );
+            ensure!(self.mounted.is_none(), "已经挂载");
+            let p = self.connected.as_ref().context("请先连接")?;
+            ensure!(
+                !is_mount(&p.mount_path)?,
+                "目录已被其他进程挂载，请使用另一个空目录"
+            );
+            ensure!(self.capabilities()["mount"] == true, "此连接不支持安全挂载");
+            let mut cmd = Command::new(std::env::current_exe()?);
+            cmd.arg("--state")
+                .arg(&self.state.dir)
+                .arg("--peer-bin")
+                .arg(&self.args.peer_bin)
+                .arg("--launcher")
+                .arg(&self.args.launcher)
+                .arg("--mount-worker")
+                .arg(&p.id);
+            let mut child = spawn(cmd)?;
+            drain_errors(&mut child, self.network.clone());
+            if let Some(mut stdout) = child.0.stdout.take() {
+                thread::spawn(move || {
+                    let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+                });
+            }
+            let start = Instant::now();
+            let ready = (|| -> anyhow::Result<()> {
+                loop {
+                    ensure!(!cancel.load(Ordering::Relaxed), "挂载已取消");
+                    ensure!(
+                        child.0.try_wait()?.is_none(),
+                        "挂载失败，请检查目录为空、FUSE 可用、缓存绑定匹配"
+                    );
+                    if is_mount(&p.mount_path)? {
+                        break Ok(());
+                    }
+                    ensure!(
+                        start.elapsed() < providers::mount_startup_timeout(p),
+                        "挂载超时"
+                    );
+                    thread::sleep(Duration::from_millis(100));
+                }
+            })();
+            self.mounted = Some(child);
+            if let Err(error) = ready {
+                self.unmount(false)
+                    .context("挂载启动未完成且目录被占用，请先关闭占用程序再卸载")?;
+                return Err(error);
+            }
+            Ok(())
+        }
     }
     fn disconnect(&mut self) -> anyhow::Result<()> {
         self.unmount(true)?;
@@ -308,17 +422,48 @@ impl App {
         Ok(())
     }
     fn connect(&mut self, id: &str, cancel: &AtomicBool) -> anyhow::Result<Value> {
+        self.open_connection(id, cancel, false)
+    }
+    fn open_connection(
+        &mut self,
+        id: &str,
+        cancel: &AtomicBool,
+        resume: bool,
+    ) -> anyhow::Result<Value> {
+        self.refresh_inactive();
+        if let Some(result) = self.select_online(id)? {
+            return Ok(result);
+        }
+        if self.inactive.contains_key(id) || self.connected.as_ref().is_some_and(|p| p.id == id) {
+            self.disconnect_profile(id)?;
+        }
         let p = self.profile(id)?;
-        self.disconnect()?;
-        self.network = Arc::default();
-        let connection = providers::connect(&p, &self.args, cancel, self.network.clone())?;
-        let entries = connection.backend.list_directory("/")?;
+        let network: Arc<Diagnostics> = Arc::default();
+        let connection = if resume {
+            providers::resume(
+                &p,
+                &self.args,
+                &self
+                    .saved_session(&p)
+                    .context("没有可恢复的登录，请手动连接")?,
+                cancel,
+                network.clone(),
+            )?
+        } else {
+            providers::connect(&p, &self.args, cancel, network.clone())?
+        };
+        let entries = connection.backend.list_directory_checked("/", &mut || {
+            ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
+            Ok(())
+        })?;
         ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
         self.state.save(
             &format!("session-{}.json", p.id),
             &providers::session(&connection, &p),
         )?;
         let revision = p.revision.clone();
+        self.park_active();
+        self.network = network;
         self.backend = Some(connection.backend);
         self.gateway = connection.gateway;
         self.connected = Some(p);
@@ -387,15 +532,31 @@ impl App {
             .unwrap_or_default();
         let mut value = serde_json::to_value(c).unwrap();
         value["backup"] = json!(c.backup());
-        value["mount"] = json!(
-            self.backend.is_some()
-                && cfg!(all(target_os = "linux", feature = "mount"))
-                && (self.connected.as_ref().is_none_or(|p| !p.writable)
-                    || (c.backup() && c.rename && c.delete))
+        value["manual_upload"] = json!(
+            self.backend
+                .as_ref()
+                .is_some_and(|b| b.manual_upload_supported())
         );
+        #[cfg(windows)]
+        let supported_mount = windows_mount::installed();
+        #[cfg(not(windows))]
+        let supported_mount = cfg!(all(target_os = "linux", feature = "mount"))
+            && (!c.upload || (c.backup() && c.rename && c.delete));
+        value["mount"] = json!(self.backend.is_some() && supported_mount);
         value
     }
     fn status(&mut self) -> anyhow::Result<Value> {
+        self.refresh_inactive();
+        let accounts = self.account_states()?;
+        let overall = connections::aggregate_accounts(&accounts);
+        let mounts: Vec<_> = accounts
+            .iter()
+            .filter(|a| a["mounted"] == true)
+            .map(|a| {
+                json!({"profile":a["profile"],"revision":a["revision"],"name":a["name"],
+                "path":a["mount_path"],"writable":a["writable"],"failed":a["mount_failed"]})
+            })
+            .collect();
         let gateway_dead = self
             .gateway
             .as_mut()
@@ -429,11 +590,23 @@ impl App {
             .is_some_and(|p| p.0.try_wait().ok().flatten().is_some());
         let network = self.network.snapshot();
         let sharing = self.hosting.status(&self.state).unwrap_or_else(|_| json!({"supported":true,"running":false,"error":"共享配置无法读取，请检查私有状态目录"}));
+        let mount_support = {
+            #[cfg(windows)]
+            {
+                windows_mount::support()
+            }
+            #[cfg(not(windows))]
+            {
+                json!({"supported":cfg!(all(target_os = "linux", feature = "mount"))})
+            }
+        };
         Ok(
             json!({"providers":providers::catalog(),"capabilities":self.capabilities(),"route_fallback":self.network.fallback(),"paused":self.state.dir.join("paused").exists(),"backup":backup,"backup_failed":backup_failed,"mount_activity":mount_activity,
               "version":env!("CARGO_PKG_VERSION"),"sharing":sharing,"local_files":self.native_fixture.capabilities(),
             "connected":self.backend.is_some(),"profile":self.connected.as_ref().map(|p|&p.id),
-            "mounted":self.mounted.is_some(),"mount_failed":mount_dead,"gateway_failed":gateway_dead,
+            "multi_connection":true,"storage_usage":true,"connections":self.config.profiles.iter().filter(|p|self.online(&p.id)).map(|p|json!({"id":p.id,"revision":p.revision,"account_name":self.account_name(p)})).collect::<Vec<_>>(),
+            "mounted":self.mounted.is_some(),"mount_failed":mount_dead,"gateway_failed":gateway_dead,"mount_support":mount_support,
+            "accounts":accounts,"overall":overall,"mounts":mounts,
             "cache":cache,"network":network,
             "account_name": self.connected.as_ref().and_then(|p| self.account_name(p)),
             "autostart":self.autostart_path()?.exists()}),
@@ -484,12 +657,29 @@ impl App {
                 a["replace"] == true,
             ),
             "share_revoke" => self.hosting.revoke(&self.state, string(a, "device")?),
-            "provider_action" => {
-                providers::action(string(a, "kind")?, string(a, "action")?, a, &cancel)
-            }
+            "provider_action" => providers::action(
+                string(a, "kind")?,
+                string(a, "action")?,
+                a,
+                &self.state,
+                &cancel,
+            ),
             "profiles" => Ok(self.public_profiles()),
+            "write_recovery" => {
+                let p = self.profile(string(a, "profile")?)?;
+                let mut directories = vec![self.mount_state(&p).join("windows-accounts")];
+                if let Some(key) = providers::descriptor(&p.kind)?["write_recovery_field"].as_str()
+                {
+                    directories.push(PathBuf::from(p.option(key)).join("recovery"));
+                }
+                for directory in &directories {
+                    State::new(directory.clone())?;
+                }
+                Ok(json!({"directories":directories}))
+            }
             "save_profile" => {
                 let mut p: Profile = serde_json::from_value(a.clone())?;
+                p.writable = providers::editable(&p);
                 p.revision = twodrive_dev::state::random_secret();
                 if p.id.is_empty() {
                     p.id = format!(
@@ -504,10 +694,7 @@ impl App {
                     matches!(p.network_route.as_str(), "auto" | "direct" | "system"),
                     "invalid network route"
                 );
-                ensure!(
-                    self.connected.as_ref().is_none_or(|c| c.id != p.id),
-                    "请先断开连接再编辑配置"
-                );
+                ensure!(!self.online(&p.id), "请先断开连接再编辑配置");
                 ensure!(
                     !p.name.trim().is_empty() && p.name.len() <= 120,
                     "连接名称不能为空"
@@ -534,10 +721,7 @@ impl App {
             }
             "remove_profile" => {
                 let id = string(a, "id")?;
-                ensure!(
-                    self.connected.as_ref().is_none_or(|p| p.id != id),
-                    "请先断开连接"
-                );
+                ensure!(!self.online(id), "请先断开连接");
                 let p = self.profile(id)?;
                 ensure!(
                     self.cache(&p, false)?["pending"] == 0,
@@ -553,11 +737,27 @@ impl App {
                 Ok(json!({}))
             }
             "connect" => self.connect(string(a, "id")?, &cancel),
-            "disconnect" | "quit" => {
-                self.disconnect()?;
-                if req.op == "quit" {
-                    self.hosting.stop();
+            "resume" => {
+                let p = self.profile(string(a, "id")?)?;
+                ensure!(
+                    a["revision"].as_str() == Some(&p.revision),
+                    "连接配置已改变，请刷新后重试"
+                );
+                self.open_connection(&p.id, &cancel, true)
+            }
+            "disconnect" => {
+                let id = a["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .or_else(|| self.connected.as_ref().map(|p| p.id.clone()));
+                if let Some(id) = id {
+                    self.disconnect_profile(&id)?;
                 }
+                Ok(json!({}))
+            }
+            "quit" => {
+                self.disconnect_all()?;
+                self.hosting.stop();
                 Ok(json!({}))
             }
             "status" => self.status(),
@@ -573,6 +773,14 @@ impl App {
             "backups" | "save_backups" => {
                 let p = self.profile(string(a, "id")?)?;
                 if req.op == "save_backups" {
+                    ensure!(
+                        !self.online(&p.id)
+                            || self
+                                .connected
+                                .as_ref()
+                                .is_some_and(|current| current.id == p.id),
+                        "请先切换到此网盘再修改备份设置"
+                    );
                     providers::validate(&p)?;
                     let public = providers::public_profile(&p);
                     ensure!(
@@ -595,12 +803,14 @@ impl App {
             }
             "sign_out" => {
                 let id = string(a, "id")?.to_owned();
-                self.disconnect()?;
                 let p = self.profile(&id)?;
                 ensure!(self.cache(&p, false)?["pending"] == 0, "请先处理待上传缓存");
+                self.disconnect_profile(&id)?;
                 providers::sign_out(&p)?;
                 self.config.profiles.retain(|p| p.id != id);
-                self.config.selected = None;
+                if self.config.selected.as_deref() == Some(&id) {
+                    self.config.selected = None;
+                }
                 self.state.save("profiles.json", &self.config)?;
                 Ok(json!({}))
             }
@@ -660,152 +870,17 @@ impl App {
                 let p = self.profile(string(a, "id")?)?;
                 self.cache(&p, req.op == "clear_cache")
             }
-            "mount" => {
-                ensure!(
-                    cfg!(all(target_os = "linux", feature = "mount")),
-                    "此平台暂不支持文件管理器挂载，请使用文件浏览与文件夹备份"
-                );
-                ensure!(self.mounted.is_none(), "已经挂载");
-                let p = self.connected.as_ref().context("请先连接")?;
-                ensure!(
-                    !is_mount(&p.mount_path)?,
-                    "目录已被其他进程挂载，请使用另一个空目录"
-                );
-                ensure!(self.capabilities()["mount"] == true, "此连接不支持安全挂载");
-                let mut cmd = Command::new(std::env::current_exe()?);
-                cmd.arg("--state")
-                    .arg(&self.state.dir)
-                    .arg("--peer-bin")
-                    .arg(&self.args.peer_bin)
-                    .arg("--launcher")
-                    .arg(&self.args.launcher)
-                    .arg("--mount-worker")
-                    .arg(&p.id);
-                let mut child = spawn(cmd)?;
-                drain_errors(&mut child, self.network.clone());
-                if let Some(mut stdout) = child.0.stdout.take() {
-                    thread::spawn(move || {
-                        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
-                    });
-                }
-                let start = Instant::now();
-                let ready = (|| -> anyhow::Result<()> {
-                    loop {
-                        ensure!(!cancel.load(Ordering::Relaxed), "挂载已取消");
-                        ensure!(
-                            child.0.try_wait()?.is_none(),
-                            "挂载失败，请检查目录为空、FUSE 可用、缓存绑定匹配"
-                        );
-                        if is_mount(&p.mount_path)? {
-                            break Ok(());
-                        }
-                        ensure!(
-                            start.elapsed() < providers::mount_startup_timeout(p),
-                            "挂载超时"
-                        );
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                })();
-                self.mounted = Some(child);
-                if let Err(error) = ready {
-                    self.unmount(false)
-                        .context("挂载启动未完成且目录被占用，请先关闭占用程序再卸载")?;
-                    return Err(error);
-                }
-                self.status()
+            "mount" | "unmount" => self.mount_profile(a, req.op == "mount", &cancel),
+            "list" | "mkdir" | "rename" | "delete" | "upload" | "download" | "quota" => {
+                self.file_context(a)?.execute(req, &cancel, out)
             }
-            "unmount" => {
-                self.unmount(true)?;
-                self.status()
-            }
-            op => {
-                ensure!(
-                    self.connected
-                        .as_ref()
-                        .is_some_and(|p| a["profile"].as_str() == Some(p.id.as_str())),
-                    "文件操作所属连接已改变，请刷新后重试"
-                );
-                ensure!(
-                    self.connected
-                        .as_ref()
-                        .is_some_and(|p| a["revision"].as_str() == Some(p.revision.as_str())),
-                    "连接配置已更新，请刷新后重新选择文件"
-                );
-                let backend = self.backend.as_ref().context("请先连接服务器")?;
-                ensure!(!cancel.load(Ordering::Relaxed), "操作已取消");
-                if req.op != "list" {
-                    ensure!(
-                        !self.state.dir.join("paused").exists(),
-                        "同步已暂停，请先恢复"
-                    );
-                }
-                let path = string(a, "path")?;
-                match op {
-                    "list" => Ok(
-                        json!({"path":path,"entries":backend.list_directory(path)?.into_iter().map(metadata).collect::<Vec<_>>()}),
-                    ),
-                    "mkdir" => Ok(metadata(backend.create_folder(path)?)),
-                    "rename" => Ok(metadata(backend.rename_path(path, string(a, "to")?)?)),
-                    "delete" => {
-                        ensure!(path != "/", "不能删除共享根目录");
-                        backend.delete_path(path)?;
-                        Ok(json!({}))
-                    }
-                    "upload" => {
-                        let out = out.clone();
-                        let id = req.id;
-                        let last = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
-                        let progress = Arc::new(move |done, total| {
-                            ensure!(
-                                !cancel.load(Ordering::Relaxed),
-                                "上传已取消；若服务器已接收，请刷新确认结果"
-                            );
-                            let mut last = last.lock().unwrap();
-                            if done == total || last.elapsed() >= Duration::from_millis(150) {
-                                emit(
-                                    &out,
-                                    json!({"id":id,"event":"progress","done":done,"total":total}),
-                                );
-                                *last = Instant::now();
-                            }
-                            Ok(())
-                        });
-                        Ok(metadata(backend.upload_path(
-                            path,
-                            Path::new(string(a, "source")?),
-                            a["etag"].as_str(),
-                            progress,
-                        )?))
-                    }
-                    "download" => {
-                        let output = PathBuf::from(string(a, "output")?);
-                        ensure!(output.is_absolute(), "下载目标必须是绝对路径");
-                        ensure!(!output.exists(), "目标文件已存在，请选择另一个名称");
-                        let parent = output.parent().context("invalid output")?;
-                        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-                        let mut last = Instant::now() - Duration::from_secs(1);
-                        let total = a["size"].as_u64().unwrap_or(0);
-                        let done = backend.download_path_to(path, &mut temp, &mut |done| {
-                            ensure!(!cancel.load(Ordering::Relaxed), "下载已取消");
-                            if last.elapsed() >= Duration::from_millis(150) {
-                                emit(out,json!({"id":req.id,"event":"progress","done":done,"total":total})); last = Instant::now();
-                            } Ok(())
-                        })?;
-                        ensure!(!cancel.load(Ordering::Relaxed), "下载已取消");
-                        temp.flush()?;
-                        temp.as_file().sync_all()?;
-                        temp.persist_noclobber(output)?;
-                        Ok(json!({"bytes":done}))
-                    }
-                    _ => anyhow::bail!("unknown operation"),
-                }
-            }
+            _ => anyhow::bail!("unknown operation"),
         }
     }
 }
 impl Drop for App {
     fn drop(&mut self) {
-        let _ = self.unmount(false);
+        self.cleanup_inactive();
     }
 }
 
@@ -834,6 +909,8 @@ pub fn run() -> anyhow::Result<()> {
         backup: None,
         network: Arc::default(),
         hosting: sharing::Hosting::default(),
+        inactive: HashMap::new(),
+        jobs: HashMap::new(),
         native_fixture: local_files::NativeFixture::default(),
     };
     if let Some(id) = &app.args.backup_worker {
@@ -856,13 +933,18 @@ pub fn run() -> anyhow::Result<()> {
         let session = app.state.read(&format!("session-{}.json", p.id))?;
         let (backend, binding) =
             providers::restore_session(&p, &session, &app.state.dir.join("paused"))?;
+        let writable = backend.capabilities().upload;
         return mount::mount(
             State::new(app.mount_state(&p))?,
             p.mount_path,
             backend,
             binding,
-            p.writable,
+            writable,
         );
+    }
+    #[cfg(windows)]
+    if let Some(id) = &app.args.mount_worker {
+        return windows_mount::worker(&app, &app.profile(id)?);
     }
     let _lock = app.state.run_lock()?;
     if let Some(root) = &app.args.native_local_fixture_root {
@@ -883,6 +965,24 @@ pub fn run() -> anyhow::Result<()> {
                 .get(&req.id)
                 .cloned()
                 .unwrap_or_default();
+            app.reap_jobs();
+            if matches!(req.op.as_str(), "upload" | "download" | "quota") {
+                let id = req.id;
+                if let Err(error) = app.start_file_job(
+                    req,
+                    cancel,
+                    worker_out.clone(),
+                    worker_cancel.clone(),
+                    worker_notifications.load(Ordering::Relaxed),
+                ) {
+                    emit(
+                        &worker_out,
+                        json!({"id":id,"ok":false,"error":error.to_string()}),
+                    );
+                    worker_cancel.lock().unwrap().remove(&id);
+                }
+                continue;
+            }
             let observable = worker_notifications.load(Ordering::Relaxed)
                 && !matches!(
                     req.op.as_str(),
@@ -917,8 +1017,10 @@ pub fn run() -> anyhow::Result<()> {
                 break;
             }
         }
+        app.stop_jobs(&worker_cancel);
     });
     let mut input = std::io::stdin().lock();
+    let mut read_requests = std::collections::HashSet::new();
     loop {
         // UI requests never need large payloads: files stream from disk.
         let mut line = String::new();
@@ -954,6 +1056,20 @@ pub fn run() -> anyhow::Result<()> {
                 );
                 continue;
             }
+            read_requests.retain(|id| flags.contains_key(id));
+            if req.op == "quit" {
+                // Abandon display reads and startup restoration/mounts only.
+                // User transfers/mutations keep their completion protections.
+                for id in &read_requests {
+                    if let Some(flag) = flags.get(id) {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }
+            } else if matches!(req.op.as_str(), "list" | "quota" | "resume")
+                || req.op == "mount" && req.args["startup"] == true
+            {
+                read_requests.insert(id);
+            }
             flags.insert(id, Arc::new(AtomicBool::new(false)));
             drop(flags);
             // Never block the reader behind a full work queue: cancellation must
@@ -986,6 +1102,53 @@ mod test_provider;
 mod tests {
     use super::*;
     use test_provider::OpaqueProvider;
+    #[cfg(all(target_os = "linux", feature = "mount"))]
+    #[test]
+    fn remote_readonly_grant_remains_mountable_without_local_permission_controls() {
+        let root = tempfile::tempdir().unwrap();
+        let state = State::new(root.path().join("private")).unwrap();
+        let p = Profile {
+            id: "locked-account".into(),
+            revision: "saved-revision".into(),
+            writable: true,
+            ..Default::default()
+        };
+        let backend = Backend::new(OpaqueProvider::default()).with_write_access(false, None);
+        let mut app = App {
+            args: Args {
+                state: state.dir.clone(),
+                peer_bin: PathBuf::new(),
+                launcher: PathBuf::new(),
+                mount_worker: None,
+                backup_worker: None,
+                native_local_fixture_root: None,
+            },
+            state,
+            config: Config {
+                profiles: vec![p.clone()],
+                selected: Some(p.id.clone()),
+            },
+            connected: Some(p.clone()),
+            backend: Some(backend),
+            gateway: None,
+            mounted: None,
+            backup: None,
+            network: Arc::default(),
+            hosting: sharing::Hosting::default(),
+            inactive: HashMap::new(),
+            jobs: HashMap::new(),
+            native_fixture: local_files::NativeFixture::default(),
+        };
+        assert_eq!(app.capabilities()["upload"], false);
+        assert_eq!(
+            app.capabilities()["mount"],
+            true,
+            "remote read-only grants still support browsing mounts"
+        );
+        app.backend = Some(Backend::new(OpaqueProvider::default()));
+        assert_eq!(app.capabilities()["mount"], true);
+        assert_eq!(app.capabilities()["upload"], true);
+    }
     #[test]
     fn retained_cloud_deletion_is_visible_and_manual_retry_keeps_the_original_task() {
         let temp = tempfile::tempdir().unwrap();
@@ -1016,6 +1179,8 @@ mod tests {
             backup: None,
             network: Arc::default(),
             hosting: sharing::Hosting::default(),
+            inactive: HashMap::new(),
+            jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
         };
         let directory = app.mount_state(&active);
@@ -1089,6 +1254,8 @@ mod tests {
             backup: None,
             network: Arc::default(),
             hosting: sharing::Hosting::default(),
+            inactive: HashMap::new(),
+            jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
         };
         let session = json!({"kind":app.connected.as_ref().unwrap().kind,
@@ -1106,14 +1273,17 @@ mod tests {
         );
         assert!(!public.to_string().contains("private-secret"));
         assert!(!public.to_string().contains("private-binding"));
+        assert_eq!(public["profiles"][0]["startup_ready"], true);
         let mut stale = session.clone();
         stale["revision"] = json!("old-revision");
         app.state.save("session-active.json", &stale).unwrap();
         assert!(app.status().unwrap()["account_name"].is_null());
+        assert_eq!(app.public_profiles()["profiles"][0]["startup_ready"], false);
         stale = session;
         stale["kind"] = json!("another-provider");
         app.state.save("session-active.json", &stale).unwrap();
         assert!(app.public_profiles()["profiles"][0]["account_name"].is_null());
+        assert_eq!(app.public_profiles()["profiles"][0]["startup_ready"], false);
         let out = Arc::new(Mutex::new(std::io::stdout()));
         let mut other = json!({"id":"other","name":"Other","kind":"dav","url":"https://example.invalid/dav/","mount_path":temp.path().join("mount"),"network_route":"system"});
         let call = |app: &mut App, op: &str, args: Value| {
@@ -1199,6 +1369,8 @@ mod tests {
             backup: None,
             network: Arc::default(),
             hosting: sharing::Hosting::default(),
+            inactive: HashMap::new(),
+            jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
         };
         let source = temp.path().join("source");

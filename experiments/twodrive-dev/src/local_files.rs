@@ -258,6 +258,7 @@ fn core_metadata(entry: &MetadataEntry) -> twodrive_core::MetadataEntry {
         is_dir: entry.is_dir,
         size: entry.size,
         modified_unix: entry.modified_unix,
+        created_unix: entry.created_unix,
         etag: entry.etag.clone(),
     }
 }

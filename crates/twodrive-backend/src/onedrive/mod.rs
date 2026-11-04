@@ -174,10 +174,13 @@ impl CloudBackend for GraphBackend {
 
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         let path = normalize_cloud_path(path);
-        let url = format!(
-            "https://graph.microsoft.com/v1.0/me/drive/root:/{}",
-            encode_graph_path(&path)
-        );
+        let url = graph_parent_lookup_url(&path);
+        #[cfg(test)]
+        let url = self
+            .test_endpoint
+            .as_ref()
+            .map(|base| format!("{base}{}", &url["https://graph.microsoft.com".len()..]))
+            .unwrap_or(url);
         let Some(response) = retry_optional_request(|| {
             let access_token = self.access_token()?;
             Ok(self.client.get(&url).bearer_auth(access_token))

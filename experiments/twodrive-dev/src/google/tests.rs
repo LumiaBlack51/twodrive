@@ -11,6 +11,8 @@ struct Fixture {
     stale: Arc<AtomicBool>,
     media_change: Arc<AtomicBool>,
     list_requests: Arc<AtomicUsize>,
+    quota: Arc<Mutex<Value>>,
+    quota_requests: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     _dir: tempfile::TempDir,
@@ -37,6 +39,12 @@ impl Fixture {
         let thread_media_change = media_change.clone();
         let list_requests = Arc::new(AtomicUsize::new(0));
         let thread_list_requests = list_requests.clone();
+        let quota = Arc::new(Mutex::new(
+            json!({"quotaType":"LIMITED","quotaBytesTotal":"1000","quotaBytesUsedAggregate":"700","quotaBytesUsed":"200"}),
+        ));
+        let thread_quota = quota.clone();
+        let quota_requests = Arc::new(AtomicUsize::new(0));
+        let thread_quota_requests = quota_requests.clone();
         let thread = std::thread::spawn(move || {
             let mut counter = 0;
             let mut sessions = BTreeMap::<String, (String, Value, Vec<u8>, Option<String>)>::new();
@@ -76,7 +84,15 @@ impl Fixture {
                 let mut headers = Vec::<(&str, String)>::new();
                 let mut result = json!({});
                 let mut media = None;
-                if path == "/drive/v2/files/generateIds" {
+                if path == "/drive/v2/about" && method == "GET" {
+                    assert_eq!(
+                        q.get("fields").map(String::as_str),
+                        Some("quotaType,quotaBytesTotal,quotaBytesUsedAggregate")
+                    );
+                    thread_quota_requests.fetch_add(1, Ordering::Relaxed);
+                    result = thread_quota.lock().unwrap().clone();
+                    status = result["_status"].as_u64().unwrap_or(200) as u16;
+                } else if path == "/drive/v2/files/generateIds" {
                     counter += 1;
                     result = json!({"ids":[format!("f{counter}")]});
                 } else if path == "/drive/v2/files" && method == "GET" {
@@ -231,6 +247,8 @@ impl Fixture {
             stale,
             media_change,
             list_requests,
+            quota,
+            quota_requests,
             stop,
             thread: Some(thread),
             _dir: dir,
@@ -242,6 +260,92 @@ impl Fixture {
             (resource(id, name, "root", mime, bytes, 1), bytes.to_vec()),
         );
     }
+}
+
+#[test]
+fn storage_usage_reads_account_aggregate_without_listing_or_write_permission() {
+    let mut fixture = Fixture::new();
+    fixture.drive.writable = false;
+    let usage = fixture
+        .drive
+        .storage_usage(&mut || Ok(()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.total, Some(1000));
+    assert_eq!(usage.used, Some(700));
+    assert_eq!(usage.free, Some(300));
+    assert_eq!(usage.scope, "account");
+    assert_eq!(fixture.quota_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(fixture.list_requests.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn storage_usage_preserves_unknown_limits_zero_and_failures() {
+    let fixture = Fixture::new();
+    for (value, expected) in [
+        (
+            json!({"quotaType":"UNLIMITED","quotaBytesTotal":"0","quotaBytesUsedAggregate":"41"}),
+            (None, Some(41), None),
+        ),
+        (
+            json!({"quotaType":"LIMITED","quotaBytesTotal":"0","quotaBytesUsedAggregate":"0"}),
+            (Some(0), Some(0), Some(0)),
+        ),
+        (
+            json!({"quotaType":"LIMITED","quotaBytesTotal":"10","quotaBytesUsedAggregate":"12"}),
+            (Some(10), Some(12), Some(0)),
+        ),
+        (
+            json!({"quotaType":"LIMITED","quotaBytesTotal":"10"}),
+            (Some(10), None, None),
+        ),
+    ] {
+        *fixture.quota.lock().unwrap() = value;
+        let usage = fixture
+            .drive
+            .storage_usage(&mut || Ok(()))
+            .unwrap()
+            .unwrap();
+        assert_eq!((usage.total, usage.used, usage.free), expected);
+    }
+    for value in [
+        json!({"quotaBytesTotal":"invalid-private-response"}),
+        json!({"_status":503}),
+    ] {
+        *fixture.quota.lock().unwrap() = value;
+        let error = fixture
+            .drive
+            .storage_usage(&mut || Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("invalid-private-response"));
+    }
+    assert_eq!(fixture.list_requests.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn storage_usage_observes_cancellation_before_and_after_request() {
+    let fixture = Fixture::new();
+    assert!(
+        fixture
+            .drive
+            .storage_usage(&mut || anyhow::bail!("cancelled"))
+            .is_err()
+    );
+    assert_eq!(fixture.quota_requests.load(Ordering::Relaxed), 0);
+    let mut calls = 0;
+    assert!(
+        fixture
+            .drive
+            .storage_usage(&mut || {
+                calls += 1;
+                anyhow::ensure!(calls == 1, "cancelled");
+                Ok(())
+            })
+            .is_err()
+    );
+    assert_eq!(calls, 2);
+    assert_eq!(fixture.quota_requests.load(Ordering::Relaxed), 1);
 }
 impl Drop for Fixture {
     fn drop(&mut self) {

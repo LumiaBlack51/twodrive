@@ -1,0 +1,127 @@
+{
+  "scope": "iCloud adapter/time and browsing snapshot regressions; disposable loopback WinFsp only",
+  "deployed": true,
+  "cloud_requests": 0,
+  "real_icloud_time_and_performance_accepted": false,
+  "previous_user_acceptance": "rename succeeded on prior directory fix; creation date and severe latency are current unresolved live-acceptance scope",
+  "windows_rust": {
+    "passed": 154,
+    "ignored": 7
+  },
+  "linux_rust": {
+    "passed": 146,
+    "ignored": 4
+  },
+  "core_rust": {
+    "passed": 40,
+    "ignored": 0
+  },
+  "official_rclone_bridge": {
+    "passed": 1,
+    "ignored": 0
+  },
+  "winfsp": {
+    "scope": "disposable accounts and real WinFsp only",
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "checks": {
+      "legacy_readonly_profiles_edit_without_password": true,
+      "native_empty_and_populated_directory_rename_preserves_children": true,
+      "native_new_directory_exposes_recent_time": true,
+      "native_seek_edit_create_rename_delete_and_gui_upload": true,
+      "other_account_mount_and_content_preserved": true,
+      "both_accounts_restart_editable_without_password": true,
+      "conflict_blocks_teardown_and_crash_restart_retains_local_edit_without_overwriting": true,
+      "changed_account_binding_uses_new_cache_and_never_replays_old_edit": true,
+      "clean_quit_unmounts_both_accounts": true
+    }
+  },
+  "packaged-startup": {
+    "scope": "new engine process restores two saved loopback accounts; disposable state only",
+    "checks": {
+      "saved_accounts_eligible_without_new_login": true,
+      "missing_session_revision_and_changed_binding_refused": true,
+      "restart_restores_both_accounts_and_preferred_view": true,
+      "profile_revisions_and_options_preserved": true,
+      "both_native_mounts_recreated_with_correct_account_bytes": true,
+      "quit_cleans_both_restored_mounts": true
+    },
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "passed": true
+  },
+  "old_regressions": {
+    "known_creation_time": "old bridge compiled and failed NotImplemented; corrected direct metadata and DAV XML pass",
+    "eight_HEAD_requests": {
+      "old_backend_metadata_queries": 16,
+      "new_backend_metadata_queries": 1,
+      "content_downloads": 0
+    }
+  },
+  "strict_windows_clippy": true,
+  "rustfmt": true,
+  "windows_release_binaries": 3,
+  "gui": "unchanged, hash-reused from 2a3245a; historical Flutter results are not counted again",
+  "limits": [
+    "no captured live Apple request timing",
+    "no live iCloud date/performance acceptance yet",
+    "unknown historical folder dates cannot be reconstructed",
+    "first query and mutations still require synchronous cloud work",
+    "no new Linux release build or live Linux write-performance claim",
+    "hosted CI approval/execution pending"
+  ],
+  "deployment": {
+    "scope": "local configuration, private VFS status and owned process metadata only; no cloud/file probes or mouse",
+    "verified_at": "2026-10-29T12:24:19.898846+00:00",
+    "bundle": "TwoDrive-0.1.7-icloud-responsive-20261029",
+    "source_commit": "e7b8f7ef81cef71c030ddccf3fd00a18dcbfdd8e",
+    "one_gui_and_main_engine": true,
+    "original_state_used": true,
+    "original_profiles_revisions_bindings_selection_and_D_paths_preserved": true,
+    "all_four_writable_mount_workers_restored": true,
+    "accounts": [
+      {
+        "provider": "onedrive",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\OneDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "icloud",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\iCloudDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "baidu",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\Baidu",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "google",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\GoogleDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      }
+    ],
+    "real_cloud_write_delete_acceptance": "pending user test",
+    "passed": true
+  }
+}

@@ -23,7 +23,7 @@ impl Default for Profile {
             revision: String::new(),
             name: String::new(),
             kind: "dav".into(),
-            writable: false,
+            writable: true,
             mount_path: PathBuf::new(),
             network_route: "auto".into(),
             options: BTreeMap::new(),

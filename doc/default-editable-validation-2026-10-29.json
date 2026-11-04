@@ -1,0 +1,179 @@
+{
+  "scope": "default editable desktop and native mounts; disposable local services only",
+  "user_cloud_probes": 0,
+  "user_cloud_writes_or_deletes": 0,
+  "deployed": true,
+  "windows_rust": {
+    "passed": 143,
+    "ignored": 7
+  },
+  "linux_rust": {
+    "passed": 135,
+    "ignored": 4
+  },
+  "flutter_tests": 78,
+  "windows-clippy": true,
+  "windows-build": true,
+  "flutter-analyze": true,
+  "flutter-build": true,
+  "visual-tests": true,
+  "winfsp": {
+    "scope": "disposable accounts and real WinFsp only",
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "checks": {
+      "legacy_readonly_profiles_edit_without_password": true,
+      "native_seek_edit_create_rename_delete_and_gui_upload": true,
+      "other_account_mount_and_content_preserved": true,
+      "both_accounts_restart_editable_without_password": true,
+      "conflict_blocks_teardown_and_crash_restart_retains_local_edit_without_overwriting": true,
+      "changed_account_binding_uses_new_cache_and_never_replays_old_edit": true,
+      "clean_quit_unmounts_both_accounts": true
+    }
+  },
+  "packaged-startup": {
+    "scope": "new engine process restores two saved loopback accounts; disposable state only",
+    "checks": {
+      "saved_accounts_eligible_without_new_login": true,
+      "missing_session_revision_and_changed_binding_refused": true,
+      "restart_restores_both_accounts_and_preferred_view": true,
+      "profile_revisions_and_options_preserved": true,
+      "both_native_mounts_recreated_with_correct_account_bytes": true,
+      "quit_cleans_both_restored_mounts": true
+    },
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "passed": true
+  },
+  "remote-readonly": {
+    "scope": "disposable local WebDAV Provider through actual Windows engine",
+    "checks": {
+      "remote_server_denies_write_without_local_mode": true,
+      "profile_revision_guard": true,
+      "native_read_bytes_under_remote_read_grant": true,
+      "mount_survives_account_selection": true,
+      "two_mounts_targeted_without_switch_and_independent_unmount": true,
+      "unmount_remount_and_quit_cleanup": true
+    },
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "passed": true
+  },
+  "linux-native": {
+    "scope": "actual Linux FUSE and one disposable loopback account",
+    "real_cloud_requests": 0,
+    "checks": {
+      "default_editing_pending_writes_still_block_unmount_and_quit": true,
+      "legacy_readonly_profile_restores_editable_without_changing_revision": true,
+      "restart_recovers_original_pending_bytes_and_allows_new_writes": true,
+      "normal_teardown_releases_owned_mount": true
+    },
+    "passed": true
+  },
+  "dav-desktop": {
+    "checks": {
+      "private_profiles": true,
+      "connect": true,
+      "connected_profile_management_preserves_active_account": true,
+      "connection_affinity_enforced": true,
+      "roundtrip_bytes": 2097356,
+      "roundtrip_sha256": "25e13b8004eab67ba7723f8ff39dd3b180edd968c2902d3e0ed47e9a74723b65",
+      "shallow_directory": true,
+      "no_clobber": true,
+      "traversal_rejected": true,
+      "rename": true,
+      "progress_events": 2,
+      "backup_committed_upload_recovery_by_hash": true,
+      "backup_conflict_preserves_remote": true,
+      "folder_backup_create_update_pause_resume_symlink_guard": true,
+      "remote_test_removed": true,
+      "legacy_readonly_preference_normalized_to_default_editing": true,
+      "autostart_toggle_isolated_default_off": true
+    },
+    "scope": "disposable local services only"
+  },
+  "storage-connections": {
+    "checks": {
+      "online_add_edit_remove_preserves_active_revision": true,
+      "onedrive_schema_and_independent_defaults_without_login": true,
+      "actual_signed_udp_discovery_without_pairing_secret": true,
+      "actual_invitation_pairing_and_quic_read_write_modify_delete": true,
+      "paired_reconnect_without_reusing_invitation": true,
+      "switch_back_to_existing_connection": true
+    },
+    "scope": "disposable local services only"
+  },
+  "sharing": {
+    "checks": {
+      "start_export_import_pair_download_upload": true,
+      "imported_remote_write_grant_works_without_local_password": true,
+      "revoke_denies_new_requests_and_client_disconnect_keeps_hosting": true,
+      "same_engine_disconnect_preserves_hosting": true,
+      "explicit_replace_reauthorizes_and_same_scope_restart_retains_identity": true,
+      "changed_permissions_use_new_identity_and_enforce_readonly": true,
+      "quit_stops_hosting_and_releases_lock": true
+    },
+    "scope": "disposable local services only"
+  },
+  "old_behavior_regression": "Same native test fails on previous packaged engine before mounting: profiles are not directly editable. New package passes all seven groups.",
+  "not_verified": [
+    "real cloud edit/delete/recycle restoration",
+    "Linux release build",
+    "hosted CI approval/execution",
+    "user acceptance of this preview"
+  ],
+  "deployment": {
+    "scope": "local configuration, private VFS status and owned process metadata only; no cloud/file probes or mouse",
+    "verified_at": "2026-10-29T04:46:10.272938+00:00",
+    "bundle": "TwoDrive-0.1.7-default-editable-20261029",
+    "source_commit": "2a3245aa93fd2b6ed4cafffebc29507a2b22af7f",
+    "one_gui_and_main_engine": true,
+    "original_state_used": true,
+    "original_profiles_revisions_bindings_selection_and_D_paths_preserved": true,
+    "all_four_writable_mount_workers_restored": true,
+    "accounts": [
+      {
+        "provider": "onedrive",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\OneDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "icloud",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\iCloudDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "baidu",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\Baidu",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "google",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\GoogleDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      }
+    ],
+    "real_cloud_write_delete_acceptance": "pending user test",
+    "passed": true
+  }
+}

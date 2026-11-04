@@ -74,6 +74,7 @@ impl GraphBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CloudBackend;
     use tiny_http::{Response, Server};
     use twodrive_core::{AppPaths, TokenData, TokenStore, now_unix};
     struct Sandbox(std::path::PathBuf);
@@ -106,6 +107,67 @@ mod tests {
         graph.test_endpoint = Some(format!("http://{}", server.server_addr()));
         (Sandbox(root), graph)
     }
+    #[test]
+    fn mount_metadata_uses_root_resource_and_preserves_child_paths_and_absence() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (_sandbox, graph) = backend(&server);
+        let serving = std::thread::spawn(move || {
+            for expected in [
+                "/v1.0/me/drive/root",
+                "/v1.0/me/drive/root:/Course%20Work/notes%20%231.txt",
+                "/v1.0/me/drive/root:/missing.txt",
+            ] {
+                let request = server
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                let matched = request.method().as_str() == "GET" && request.url() == expected;
+                let (status, body) = if !matched {
+                    (400, serde_json::json!({"error":{"code":"invalidRequest"}}))
+                } else if expected.ends_with("/root") {
+                    (
+                        200,
+                        serde_json::json!({"id":"opaque-root","name":"root","folder":{},"size":-1,"eTag":"root-version"}),
+                    )
+                } else if expected.ends_with("/missing.txt") {
+                    (404, serde_json::json!({"error":{"code":"itemNotFound"}}))
+                } else {
+                    (
+                        200,
+                        serde_json::json!({"id":"opaque-child","name":"notes #1.txt","file":{},"size":7,"eTag":"child-version"}),
+                    )
+                };
+                request
+                    .respond(Response::from_string(body.to_string()).with_status_code(status))
+                    .unwrap();
+                if !matched {
+                    return false;
+                }
+            }
+            true
+        });
+        let root = graph.get_metadata_by_path("/").unwrap().unwrap();
+        assert!(root.is_dir);
+        assert_eq!(root.remote_id, "opaque-root");
+        assert_eq!(root.path, "/");
+        assert_eq!(root.size, 0);
+        let file = graph
+            .get_metadata_by_path("/Course Work/notes #1.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.remote_id, "opaque-child");
+        assert_eq!(file.path, "/Course Work/notes #1.txt");
+        assert_eq!(file.parent_path, "/Course Work");
+        assert_eq!(file.size, 7);
+        assert!(
+            graph
+                .get_metadata_by_path("/missing.txt")
+                .unwrap()
+                .is_none()
+        );
+        assert!(serving.join().unwrap());
+    }
+
     #[test]
     fn shallow_directory_preserves_ids_versions_and_bounded_pagination() {
         let server = Server::http("127.0.0.1:0").unwrap();

@@ -51,6 +51,8 @@ void main() {
       expect(find.text('当前使用'), findsOneWidget);
       expect(find.text('切换使用'), findsOneWidget);
       expect(find.textContaining('账号：Real signed in person'), findsOneWidget);
+      await tester.ensureVisible(find.text('切换使用'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('切换使用'));
       expect(c.requested, 'q');
       // A click cannot relabel old files as the new account before the engine

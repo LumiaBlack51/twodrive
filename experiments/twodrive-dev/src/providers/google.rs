@@ -54,6 +54,21 @@ pub fn connect(
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
 ) -> anyhow::Result<Connection> {
+    open(p, cancel, network, true)
+}
+pub fn resume(
+    p: &Profile,
+    cancel: &AtomicBool,
+    network: Arc<twodrive_dev::network::Diagnostics>,
+) -> anyhow::Result<Connection> {
+    open(p, cancel, network, false)
+}
+fn open(
+    p: &Profile,
+    cancel: &AtomicBool,
+    network: Arc<twodrive_dev::network::Diagnostics>,
+    interactive: bool,
+) -> anyhow::Result<Connection> {
     ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
     let state = state(p)?;
     let config = ClientConfig::import(Path::new(p.option("client_file")))?;
@@ -63,6 +78,7 @@ pub fn connect(
         "system"
     };
     if Tokens::load(&state, &config).is_err() {
+        ensure!(interactive, "Google 登录已失效，请手动重新授权");
         auth::login(&state, &config, route, cancel)?;
     }
     let backend = GoogleDrive::connect(state, route, p.writable)?;

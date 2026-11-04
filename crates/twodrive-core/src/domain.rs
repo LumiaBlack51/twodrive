@@ -70,6 +70,8 @@ pub struct MetadataEntry {
     pub is_dir: bool,
     pub size: u64,
     pub modified_unix: i64,
+    /// Optional known creation time; not a fabricated cloud timestamp.
+    pub created_unix: Option<i64>,
     pub etag: String,
 }
 
@@ -113,6 +115,7 @@ impl MetadataEntry {
             is_dir,
             size,
             modified_unix,
+            created_unix: None,
             etag: etag.into(),
         }
     }

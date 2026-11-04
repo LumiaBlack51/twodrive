@@ -193,7 +193,7 @@ void main() {
     await show();
     await tester.pump();
     expect(find.text('25%'), findsOneWidget);
-    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('暂停同步'));
     await tester.pumpAndSettle();
@@ -341,7 +341,9 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
-  testWidgets('readonly connection cannot expose mutations', (tester) async {
+  testWidgets('remote capabilities without writes cannot expose mutations', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -362,7 +364,7 @@ void main() {
       },
     ];
     await tester.pumpWidget(DavApp(client: c));
-    expect(find.text('只读'), findsOneWidget);
+    expect(find.text('只读'), findsNothing);
     expect(find.text('上传'), findsNothing);
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pumpAndSettle();

@@ -10,6 +10,7 @@ use std::{
 };
 use twodrive_core::TokenStore;
 use twodrive_dev::{
+    network::Diagnostics,
     onedrive::{OneDrive, paths},
     profile::Profile,
     provider::Backend,
@@ -61,8 +62,24 @@ pub fn connect(
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
 ) -> anyhow::Result<Connection> {
+    open(p, cancel, network, true)
+}
+pub fn resume(
+    p: &Profile,
+    cancel: &AtomicBool,
+    network: Arc<Diagnostics>,
+) -> anyhow::Result<Connection> {
+    open(p, cancel, network, false)
+}
+fn open(
+    p: &Profile,
+    cancel: &AtomicBool,
+    network: Arc<Diagnostics>,
+    interactive: bool,
+) -> anyhow::Result<Connection> {
     let paths = paths(&directory(p))?;
     if TokenStore::new(&paths.token_path).load()?.is_none() {
+        ensure!(interactive, "OneDrive 登录已失效，请手动重新授权");
         twodrive_backend::GraphBackend::login_cancellable_quiet(&paths, cancel)?;
     }
     let backend = OneDrive::open(&directory(p), p.writable)?;
@@ -98,4 +115,23 @@ pub fn restore(p: &Profile, recipe: &Value) -> anyhow::Result<Backend> {
 }
 pub fn sign_out(p: &Profile) -> anyhow::Result<()> {
     OneDrive::logout(&directory(p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn startup_with_missing_token_never_enters_browser_authorization() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("private");
+        let p: Profile = serde_json::from_value(
+            json!({"kind":"onedrive","onedrive_state":private,"network_route":"system"}),
+        )
+        .unwrap();
+        let error = resume(&p, &AtomicBool::new(false), Arc::default())
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("请手动重新授权"));
+        assert!(!paths(&private).unwrap().token_path.exists());
+    }
 }

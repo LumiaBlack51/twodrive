@@ -22,6 +22,7 @@ These are historical investigations/design records, not the current user manual.
 
 | Topic | Record |
 | --- | --- |
+| Default editable desktop accounts and Windows mounts | [2026-10-29 design and validation](default-editable-2026-10-29.md) |
 | Local workspace cleanup and recovery | [2026-10-07](workspace-cleanup-2026-10-07.md) |
 | Development 0.1.5 release and workspace cleanup | [2026-10-15](workspace-cleanup-2026-10-15.md) |
 | Nautilus responsiveness monitor | [2026-09-24](nautilus-hang-monitor-2026-09-24.md) |
@@ -51,11 +52,14 @@ Existing investigation paths are retained so earlier release links continue to w
 - [Provider delivery verification (2026-10-13)](provider-validation-2026-10-13.json)
 
 - [Third-party provider/auth/upload design specification / 第三方网盘与配套组件设计规范](provider-integration-spec.md)
+- [iCloud Drive 本机预览接入与验证边界](icloud-drive.md)
+- [百度网盘官方授权、只读浏览与挂载预览](baidu-netdisk.md)
 - [Tray positioning / 托盘居中与 X11、Wayland 验证](tray-positioning-2026-10-14.md)
 - [Storage connections / 存储连接与设备发现](storage-connections-dev.md)
 - [Desktop sharing GUI / 服务端 GUI、连接文件与验证](desktop-sharing-validation.md)
 - [Live OneDrive desktop verification / 真实 OneDrive 脱敏验证](onedrive-desktop-validation-2026-10-14.json)
 - [Google Drive Development setup / 接入与验证](google-drive-dev.md)
+- [PR #47 复审修正、操作变化与跨平台验证（2026-10-29）](review-followup-2026-10-29.md) · [脱敏验证摘要](review-followup-validation-2026-10-29.json)
 
 - [Development 0.1.4 发布与验证](development-0.1.4.md)：队列/自动刷新、显式登录与切换、真实账号名称、原生 CI 与附件校验。
 - [Development 0.1.6 发布与标准打包](development-0.1.6.md)：SQLite 元数据写入竞争修复、完整离线 Debian 源码/二进制构建与 MSIX。

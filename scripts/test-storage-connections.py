@@ -6,6 +6,7 @@ Does not use cloud credentials or report invitations, identities, or file lists.
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -38,12 +39,18 @@ def run(args):
                           writable=True, **credentials)
             engine.call('save_profile', active)
             engine.call('connect', {'id': active['id']})
+            engine.assert_editable(active['id'])
             revision = engine.active_revision
             engine.call('save_profile', dict(id='od-test', name='OneDrive test', kind='onedrive'))
             public = engine.call('profiles')
             od = next(p for p in public['profiles'] if p['id'] == 'od-test')
             assert od['network_route'] == 'system'
-            assert od['onedrive_state'] == str(root/'client/accounts/od-test/onedrive')
+            account_path = Path(od['onedrive_state'])
+            # Rust canonicalizes Windows state paths to the extended namespace.
+            # Compare the existing state directory's identity, and the exact
+            # uncreated account suffix, rather than two path spellings.
+            assert account_path.parts[-3:] == ('accounts', 'od-test', 'onedrive')
+            assert account_path.parent.parent.parent.samefile(root/'client')
             assert Path(od['mount_path']).is_absolute()
             assert public['selected'] == active['id']
             engine.call('save_profile', dict(od, name='Edited OneDrive test'))
@@ -83,8 +90,11 @@ def run(args):
             public = next(p for p in engine.call('profiles')['profiles'] if p['id'] == 'pc-test')
             assert 'invitation_file' not in public
             private = Path(public['peer_state'])/'pair-invitation.json'
-            assert private.exists() and private.stat().st_mode & 0o077 == 0
+            assert private.exists()
+            if os.name != 'nt':
+                assert private.stat().st_mode & 0o077 == 0
             engine.call('connect', {'id': 'pc-test'})
+            engine.assert_editable('pc-test')
             assert not private.exists()
             source = root/'source.txt'
             source.write_bytes(b'disposable connection write\n')
@@ -116,7 +126,7 @@ def run(args):
                     child.terminate()
                     child.wait(timeout=10)
     return {'mode': 'isolated-local-IPC-UDP-QUIC', 'checks': checks,
-            'not_verified': ['real-OneDrive-OAuth-and-cloud', 'physical-NAS', 'cross-network-NAT-hole-punching', 'native-Windows']}
+            'not_verified': ['real-OneDrive-OAuth-and-cloud', 'physical-NAS', 'cross-network-NAT-hole-punching', 'native-Windows-Shell-and-CFAPI']}
 
 
 if __name__ == '__main__':
