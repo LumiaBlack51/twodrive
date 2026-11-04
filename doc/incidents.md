@@ -44,6 +44,36 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20261104-06：PR47 挂载 IPC 帮助仍描述已移除的本机写入锁
+
+- 日期：2026-11-04；状态：已修正元数据文案并补回归，Rust 原生验证待执行。
+- 影响版本与环境：PR #47 `198f21be945e3eab64041caa8ef1149b80efe8fe` 的 Windows `mount_support.help` IPC 元数据。
+- 关联历史故障：默认可编辑设计见 [2026-10-29 记录](default-editable-2026-10-29.md)；本次为旧帮助遗漏，不恢复本机密码或权限切换。
+
+### 症状与触发
+
+读取 Windows status 的 `mount_support.help` 会得到“写入锁；解锁后可编辑”，与同一元数据的 `editable=true`、`readonly=false` 及默认可编辑策略不一致。已检查当前 Flutter 源码，没有发现界面读取此 help 字段；当前安装帮助已使用正确文案，未声称实际界面显示错误。
+
+### 根因与证据
+
+`desktop_windows_mount::support` 保留了旧写入锁文案。PR #50 的 `desktop_readonly_mount::support` 已使用正确描述，本次沿用相同文案，并保留先缓存、等待上传完成的提示。
+
+### 解决办法与恢复操作
+
+帮助改为“连接后即可编辑，具体操作取决于网盘授权”。仅修正 IPC 帮助信息，不改变挂载准入、远端授权、写入/恢复行为或 Flutter 操作流程；不修改已有配置或凭据，不部署、重启客户端或操作真实网盘。
+
+### 验证结果与边界
+
+静态检查确认旧文案出现一次并被替换；以相同文案约束检查旧帮助失败、新帮助通过。新增 Rust 回归 `support_help_describes_default_editable_mounts_without_local_unlock` 检查可编辑标志、远端授权与等待上传提示，并拒绝本机写入锁/解锁描述。当前环境无 Cargo/Rust/Windows，未执行或宣称通过 Rust 回归、Rustfmt、Clippy、Windows 原生挂载或 Flutter 测试；最终提交仍需托管检查。
+
+### 防复发措施与后续
+
+保持 IPC 帮助与默认可编辑设计一致，保留远端授权及待上传提示。#47/#50 的整合与最终 SHA Linux/Windows 验证仍未完成，不能用文案修正替代。
+
+### 交付记录
+
+本地候选已准备，提交哈希和后续 CI 结果待发布后核实。不合并、不发布版本、不改变用户运行环境。
+
 ## TD-20261104-03：PR47 的 iCloud 认证工作目录缺少 Unix 创建权限
 
 - 日期：2026-11-04；状态：已回移修复及回归，当前环境仅静态核对通过，最终提交的托管原生检查待执行。
@@ -52,7 +82,7 @@
 
 ### 症状与触发
 
-[Linux desktop job 123906538245](https://github.com/LumiaBlack51/twodrive/actions/runs/40873124420/job/123906538245) 在显式官方组件测试 `official_gui_questions_cancel_and_preserve_previous_login` 因 `state directory must have mode 0700` 失败，之后的 IPC/FUSE/Flutter/build 阶段未执行。当前 head 的七条 PR workflow 为六成功、一失败，不能再描述为等待批准或全通过；Windows 成功不替代 Linux。
+[Linux desktop job 123906538245](https://github.com/LumiaBlack51/twodrive/actions/runs/40873124420/job/123906538245) 在显式官方组件测试 `official_gui_questions_cancel_and_preserve_previous_login` 因 `state directory must have mode 0700` 失败，之后的 IPC/FUSE/Flutter/build 阶段未执行。历史 head `babf36a1d96a84fe472a8b84a81410ab5a87d123` 的七条 PR workflow 为六成功、一失败；该失败不属于修复后的 head。2026-11-04 复核修复提交 `198f21be945e3eab64041caa8ef1149b80efe8fe` 时，七条新 PR workflow 均为 `action_required`，[desktop run 41767184796](https://github.com/LumiaBlack51/twodrive/actions/runs/41767184796) 尚无已执行 job。历史 Windows 成功不替代最终候选的 Linux/Windows 验证。
 
 ### 根因与证据
 

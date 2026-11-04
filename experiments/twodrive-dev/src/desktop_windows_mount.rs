@@ -15,7 +15,7 @@ pub(super) fn installed() -> bool {
 }
 pub(super) fn support() -> Value {
     json!({"supported":true,"platform":"windows","driver_installed":installed(),"readonly":false,"editable":true,
-        "help":"挂载权限跟随每个网盘的写入锁；解锁后可编辑。保存先进入本机缓存，请等待上传完成再卸载。",
+        "help":"连接后即可编辑，具体操作取决于网盘授权。保存先进入本机缓存，请等待上传完成再卸载。",
         "driver_url":"https://winfsp.dev/rel/"})
 }
 pub(super) fn require_owner(profile: &Profile, args: &Value) -> anyhow::Result<()> {
@@ -411,6 +411,18 @@ pub(super) fn cache_status(app: &App, p: &Profile) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn support_help_describes_default_editable_mounts_without_local_unlock() {
+        let metadata = support();
+        assert_eq!(metadata["editable"], true);
+        assert_eq!(metadata["readonly"], false);
+        let help = metadata["help"].as_str().unwrap();
+        assert!(help.contains("连接后即可编辑"));
+        assert!(help.contains("网盘授权"));
+        assert!(help.contains("请等待上传完成再卸载"));
+        assert!(!help.contains("写入锁"));
+        assert!(!help.contains("解锁"));
+    }
     #[test]
     fn unmount_owner_is_bound_to_revision_without_requiring_a_live_backend() {
         let profile: Profile = serde_json::from_value(
