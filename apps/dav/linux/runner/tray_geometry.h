@@ -3,11 +3,33 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstdint>
 
 namespace twodrive {
 struct Rectangle {
   int x, y, width, height;
 };
+// GTK3 X11 uses one screen-wide scale, including monitor origins. On
+// Mutter's logical layout, XWayland native scaling may first multiply Shell
+// coordinates by the legacy X11 scale. Native GDK Wayland uses identity.
+struct HostCoordinateScale {
+  int numerator = 1;
+  int denominator = 1;
+};
+inline HostCoordinateScale host_coordinate_scale(bool x11, int gdk_scale,
+                                                 unsigned layout, int legacy_scale) {
+  if (!x11) return {};
+  return {layout == 1 && legacy_scale >= 1 && legacy_scale <= 4 ? legacy_scale : 1,
+      std::max(1, gdk_scale)};
+}
+inline Rectangle host_rectangle_to_gdk(Rectangle rect, HostCoordinateScale scale) {
+  const auto convert = [scale](int value) {
+    return static_cast<int>(static_cast<int64_t>(value) * scale.numerator /
+        std::max(1, scale.denominator));
+  };
+  return {convert(rect.x), convert(rect.y),
+      std::max(1, convert(rect.width)), std::max(1, convert(rect.height))};
+}
 enum class DockEdge { top, bottom, left, right };
 // Intersect the reported workarea with a monitor's occupied dock band.
 // Taking min/max against the monitor edge avoids subtracting a reserved dock

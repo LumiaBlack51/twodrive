@@ -44,6 +44,43 @@
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20261104-05：GNOME 宿主锚点与 GTK 缩放坐标混用
+
+- 日期：2026-11-04；状态：坐标归一化候选和纯几何回归已通过；原生 GTK/GNOME 桌面及完整构建待 CI/隔离桌面验证。
+- 影响：PR #50 的 3febefdf569508a2e90d4fad678b0d26ff3bb299，GNOME 宿主 GetAnchor 路径与 GTK X11 缩放不为1时；关联近期自隐藏 Dock 安全边界修复及 TD-20261013-06/-12 的坐标调查，属于新增最终 GDK 覆盖暴露的单位不一致。
+- 证据：[自动审查](https://github.com/LumiaBlack51/twodrive/pull/50#issuecomment-6621760644)。不是用户实体多屏新故障复现。
+
+### 症状、触发与根因
+
+GetAnchor 的宿主图标和工作区原样进入 GTK 的 monitor_at_point、Dock 边界及 TrayAnchor；最终 gdk_window_move_resize 又将其乘 GTK 的屏幕缩放。GDK_SCALE=2 时可能选错显示器、水平偏移或越界。GTK3 X11 的所有显示器原点、宽高和工作区都按同一个屏幕 window_scale 相除，不是各显示器独立重定位。原 Mutter connector 匹配也用未转换宿主原点与 GDK 原点比较。
+
+另外 GetCurrentState 的 legacy-ui-scaling-factor 实际是有符号 int32，而既有代码以 unsigned 读取，静默保留1。Mutter47 将该属性移至 org.gnome.Mutter.X11.UiScalingFactor；逻辑布局下它是 XWayland 的有效坐标倍率，物理布局下只是 UI 尺寸倍率，不能直接把所有 XWayland 当物理 X11 或当原生 Wayland。
+
+### 解决办法
+
+先按客户端后端和 Mutter 布局将 icon/area 归一化，再选 GDK 显示器和计算 Dock 安全边界：原生 GDK Wayland 保持坐标不变；GDK X11 物理布局为宿主坐标/GDK 屏幕倍率；逻辑布局为宿主坐标×XWayland 有效倍率/GDK 屏幕倍率。GetCurrentState 快照与 UI 倍率复用于连接器定位和 Dock 计算；先读旧版 signed 属性，再只读查询新版 X11 Properties.Get，均禁止自动启动服务并限制超时。保留原先尺寸、边距、倍率、JSON 长度校验、重复预留保护及最终 X11 Dock 安全覆盖；不修改宿主扩展协议或部署状态。
+
+布局属性不可用时，不把 UI 倍率误当成坐标倍率；UI 属性也不可用时默认1。两者均按已知 GDK 倍率转换；这是物理 X11/旧式 XWayland 的可解释兜底，不宣称覆盖缺失 API 的新式 native-scaled XWayland。原生 Wayland 的坐标保持身份变换；Dock 尺寸仍使用原公式，signed 类型修正使公式消费实际值，未新增另一套 Dock 策略。
+
+### 验证结果与边界
+
+1. 原有 C++ 几何断言全部保留；增加 scale1/2、正/负非零显示器原点、实际输出边界/居中、重复 Dock 预留、奇数负坐标按 GDK 截断、极小区域、逻辑布局 XWayland2/2及2/1、原生 Wayland身份变换。g++ -std=c++17 -Wall -Wextra -Werror -pedantic 通过；ASan/UBSan 通过（环境 ptrace 不支持 LeakSanitizer，关闭 leak 检查）。
+2. 同一独立宿主几何夹具对未改动原版 tray_geometry.h 运行，实际物理屏幕边界断言失败（exit134）；新归一化路径通过。此为纯几何重现，不是原生窗口实测。
+3. 实际 libglib 运行库构造 signed int32=2，原 unsigned lookup 失败并保留1，signed lookup 成功返回2。此为属性类型回归，不是真实 Mutter D-Bus 调用。
+4. 原有 geometry_test.js 在 Node ES module 环境运行通过（仅 print 适配）；不是 GJS/Shell 实测。Python 原生脚本 py_compile、--help 通过，新增 --host-anchor --gdk-scale 2 --screen 2880x1800 场景、物理窗口边界和精确归一化矩形断言、缩放后的 UI 点击偏移，原有开关/管理中心/任务栏断言均保留。
+5. 此环境无 GTK/GLib/GIO 开发头文件、GNOME Shell、Xvfb、Flutter、Cargo/Rust；未编译完整 status_tray/tray_workarea，未运行原生 harness、真实多屏/混合 DPI、Wayland/XWayland桌面、Flutter/Rust 全量测试。未重启/部署客户端，无真实云端或用户文件操作。
+
+### 来源与防复发
+
+- [GTK3 X11 monitor geometry and common scale](https://github.com/GNOME/gtk/blob/gtk-3-24/gdk/x11/gdkscreen-x11.c#L621-L643)
+- [GTK X11 move/resize scales position and extent](https://github.com/GNOME/gtk/blob/gtk-3-24/gdk/x11/gdkwindow-x11.c#L1771-L1774)
+- [Mutter46 signed legacy property](https://github.com/GNOME/mutter/blob/46.0/src/backends/meta-monitor-manager.c#L2079-L2082)
+- [Mutter47 effective XWayland scale and logical/physical distinction](https://github.com/GNOME/mutter/blob/47.0/src/wayland/meta-xwayland.c#L1232-L1270)
+- [Mutter47 X11 property contract](https://github.com/GNOME/mutter/blob/47.0/data/dbus-interfaces/org.gnome.Mutter.X11.xml)
+- [Mutter47 property implementation](https://github.com/GNOME/mutter/blob/47.0/src/x11/meta-x11-display.c)
+
+保留严格构建和已有几何回归；后续原生验收同时执行 scale1/2 宿主定位与缺失组件兜底，不以纯几何/Node 通过替代桌面验收。提交和最终 CI 链接待生成后补充。
+
 ## TD-20261104-04：Linux 适配分支的 Windows helper 和 CFAPI 测试依赖导致 CI 失败
 
 - 日期：2026-11-04；状态：两项编译机制已修正，静态契约核对通过，最终提交的托管原生检查待执行。
@@ -70,7 +107,7 @@
 
 ### 防复发措施与后续
 
-保留现有跨平台 `--all-targets --locked -- -D warnings` 和 CFAPI `desktop_contract` 的真实源码/FIFO 测试。#47 后续 iCloud 元数据/创建时间/浏览缓存尚未整合，不将本次小补丁或 mergeable=true 视作跨分支整合完成。历史 TD-20261029-33/-34 重号在后续整合时仍需逐项消歧并更新引用，不能删除历史结论。
+保留现有跨平台 `--all-targets --locked -- -D warnings` 和 CFAPI `desktop_contract` 的真实源码/FIFO 测试。#47 后续 iCloud 元数据/创建时间/浏览缓存尚未整合，不将本次小补丁或 mergeable=true 视作跨分支整合完成。历史 TD-20261029-33/-34 曾重号；2026-11-04 将本分支 Linux 两条记录分别改为 TD-20261029-42/-43，保留 Windows 原编号与全部历史内容，更新 Linux 关联引用。#47 后续 -35/-36 与本分支同号的记录仍须在实际整合时逐项消歧，不能删除历史结论。
 
 ### 交付记录
 
@@ -191,7 +228,7 @@ worker 改用不遍历目录的 vfs/queue，按真实上传尝试/排队状态�
 
 - 日期：2026-11-03；状态：已修复、本机部署，真实百度目标目录与上游4项完全匹配；后续统计误报独立见 TD-20261103-05。
 - 环境：本机 TwoDrive DAV / Linux fuse.rclone / Nautilus。
-- 关联：TD-20261029-33/35 的 PROPFIND 与目录缓存，TD-20261103-03 只更新 Flutter 导航，后端摘要保持不变。
+- 关联：TD-20261029-42/35 的 PROPFIND 与目录缓存，TD-20261103-03 只更新 Flutter 导航，后端摘要保持不变。
 
 ### 症状与证据
 
@@ -496,7 +533,7 @@ iCloud 后端的路径/目录查询与内容下载持有同一个账号操作锁
 
 - 日期：2026-10-29；状态：确认缓存淘汰及短导航缓存机制，旧代码回归失败、修正后的隔离和实际FUSE检查通过，已在本机更新。
 - 影响版本：Linux分支 `c85f444` 部署后的用户反馈，以iCloud最明显，并要求检查其他网盘。
-- 关联：TD-20261029-33 的目录显示快照及 TD-20261029-34 的内容读取等待。本次没有将所有无响应归为同一根因。
+- 关联：TD-20261029-42 的目录显示快照及 TD-20261029-43 的内容读取等待。本次没有将所有无响应归为同一根因。
 
 ### 症状与触发
 
@@ -522,11 +559,13 @@ iCloud、百度及Google使用共用桥，OneDrive目录枚举走本地索引/�
 
 已通过命令检查当前配置和所属挂载。安装前确认无用户文件写入后正常退出文件管理器，再按句柄与待写队列保护进行更新；更新成功，四个账号和挂载均恢复，前端、图标、偏好和会话身份保留；通过所属组件统计核实iCloud/百度/Google三个只读桥均使用30秒目录缓存。已恢复iCloud文件管理器窗口供用户确认，实际反复导航与无响应改善待反馈。源码仍提交独立[PR #50](https://github.com/LumiaBlack51/twodrive/pull/50)，不上传账号、凭据、真实列表、主机路径、截图或本机报告。
 
-## TD-20261029-34：百度客户端下载成功但 Linux 挂载复制长时间停在0
+## TD-20261029-43：百度客户端下载成功但 Linux 挂载复制长时间停在0
+
+编号更正（2026-11-04）：本条原为 TD-20261029-34，与 Windows 挂载复制调查重号；历史内容和验证边界保留，现以 -43 区分。
 
 - 日期：2026-10-29；状态：确认两处桥接等待机制，针对性回归、完整后端与实际合成FUSE复制验证通过，已在Linux本机更新。
 - 影响环境：Linux/Zorin，PR47百度摘要格式修复已本机更新。
-- 关联：TD-20261029-32 的摘要兼容修复及 TD-20261029-33 的Linux挂载适配。
+- 关联：TD-20261029-32 的摘要兼容修复及 TD-20261029-42 的Linux挂载适配。
 
 ### 症状与触发
 
@@ -546,7 +585,9 @@ iCloud、百度及Google使用共用桥，OneDrive目录枚举走本地索引/�
 
 初次读取仍可能在准备缓存期间显示0，优化不承诺消除云端延迟；未经用户复测不能声称真实挂载速度已经验收。现场检查仅用本机组件统计，不额外下载真实文件、不覆盖已有目标。
 
-## TD-20261029-33：PR47 的 Linux FUSE、窗口与在线切换适配
+## TD-20261029-42：PR47 的 Linux FUSE、窗口与在线切换适配
+
+编号更正（2026-11-04）：本条原为 TD-20261029-33，与 Windows 交付检查记录重号；历史内容和验证边界保留，现以 -42 区分。
 
 - 日期：2026-10-29；状态：Linux 源码适配、隔离回归和 release 构建通过。基础为 PR47 的 f4e07fe，随后合入960cf77的百度Content-MD5格式兼容修复。公开记录仅包含合成测试，不包含用户账号、真实列表、容量、令牌或机器路径。
 
@@ -569,8 +610,8 @@ iCloud、百度及Google使用共用桥，OneDrive目录枚举走本地索引/�
 
 - 新增Linux原生读写、退出及恢复回归，保留默认拒绝未知身份、错误不冒充空目录、在线选择不认证、待写数据不丢弃的约束。
 - 此分支只提交源码、合成测试、字体/许可证与通用说明。私有账号、OAuth JSON、缓存、数据库、日志、截图、部署报告和构建产物不纳入提交。使用说明和验证矩阵见[Linux适配记录](linux-zorin-2026-10-29.md)。
-- PR47后续百度Content-MD5十六进制/Base64兼容修复已合入；针对Linux用户相同校验失败截图，先确认本机仍为旧摘要实现，未将截图本身当作真实响应头证据。合成百度18项回归包含有效大小写十六进制、Base64、错误摘要拒绝与认证挂载桥范围读取；用户确认原文件客户端下载快速成功，但挂载复制无响应；后者另见TD-20261029-34。
-- Linux适配提交 `c73bdcf` 已上传独立分支 `codex/linux-zorin-pr47-20261029`；随后合入PR47最新百度摘要修复。已创建Ready for review的[PR #50](https://github.com/LumiaBlack51/twodrive/pull/50)（提交 `01d9aa3`），没有合并或正式Release。Linux本机后端已更新并恢复既有挂载，账号与前端/图标保留；未独立读取真实原文件；用户确认客户端下载成功，挂载复制仍待修正，见TD-20261029-34。
+- PR47后续百度Content-MD5十六进制/Base64兼容修复已合入；针对Linux用户相同校验失败截图，先确认本机仍为旧摘要实现，未将截图本身当作真实响应头证据。合成百度18项回归包含有效大小写十六进制、Base64、错误摘要拒绝与认证挂载桥范围读取；用户确认原文件客户端下载快速成功，但挂载复制无响应；后者另见TD-20261029-43。
+- Linux适配提交 `c73bdcf` 已上传独立分支 `codex/linux-zorin-pr47-20261029`；随后合入PR47最新百度摘要修复。已创建Ready for review的[PR #50](https://github.com/LumiaBlack51/twodrive/pull/50)（提交 `01d9aa3`），没有合并或正式Release。Linux本机后端已更新并恢复既有挂载，账号与前端/图标保留；未独立读取真实原文件；用户确认客户端下载成功，挂载复制仍待修正，见TD-20261029-43。
 
 
 
@@ -5793,3 +5834,4 @@ Path::parent 对单文件名返回空路径；原子写入尝试在空路径创�
 - 同批发布的既有 Nautilus 修复：[030132f](https://github.com/LumiaBlack51/twodrive/commit/030132f)，与解压故障根因不同。
 - Release：[TwoDrive 0.2.9-1](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.9-1)
 - 详细调查：[Archive extraction I/O error](archive-extraction-2026-09-15.md)
+
