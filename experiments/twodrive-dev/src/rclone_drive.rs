@@ -279,6 +279,41 @@ fn json_command(
     serde_json::from_slice(&bytes).context("网盘组件返回的元数据格式无效")
 }
 
+// Only the first metadata read may be replayed here. In particular, never
+// apply this policy to commands that upload, rename, delete or change auth.
+fn initial_root_with_retry(
+    mut read: impl FnMut() -> anyhow::Result<Value>,
+    mut wait: impl FnMut(Duration) -> anyhow::Result<()>,
+) -> anyhow::Result<Value> {
+    let mut delays = [2, 5, 10].into_iter();
+    loop {
+        match read() {
+            Err(error)
+                if error
+                    .downcast_ref::<RemoteError>()
+                    .is_some_and(|e| e.code == 5) =>
+            {
+                let Some(seconds) = delays.next() else {
+                    return Err(error);
+                };
+                wait(Duration::from_secs(seconds))?;
+            }
+            result => return result,
+        }
+    }
+}
+
+fn wait_for_initial_root_retry(cancel: &AtomicBool, delay: Duration) -> anyhow::Result<()> {
+    let start = Instant::now();
+    loop {
+        ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
+        let Some(remaining) = delay.checked_sub(start.elapsed()) else {
+            return Ok(());
+        };
+        thread::sleep(remaining.min(Duration::from_millis(50)));
+    }
+}
+
 fn check_config(
     exe: &Path,
     state: &State,
@@ -384,13 +419,20 @@ impl RcloneDrive {
             auth.binding.starts_with(&format!("icloud:{identity}:")),
             "登录账号已改变，请重新授权并刷新连接"
         );
-        let values = json_command(
-            &exe,
-            &state,
-            &pass,
-            route,
-            &["lsjson", "twodrive:", "--no-mimetype", "--max-depth=1"],
-            cancel,
+        let values = initial_root_with_retry(
+            || {
+                // Keep each component attempt's output private and separate;
+                // a failed/partial JSON response must not enter the next one.
+                json_command(
+                    &exe,
+                    &state,
+                    &pass,
+                    route,
+                    &["lsjson", "twodrive:", "--no-mimetype", "--max-depth=1"],
+                    cancel,
+                )
+            },
+            |delay| wait_for_initial_root_retry(cancel, delay),
         )?;
         let mut backend = Self {
             state,
@@ -850,6 +892,117 @@ pub fn sign_out(state: State) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn initial_root_retries_only_temporary_component_errors_with_a_bound() {
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        let value = initial_root_with_retry(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(anyhow::Error::new(RemoteError { code: 5 }).context("initial metadata"))
+                } else {
+                    Ok(json!([]))
+                }
+            },
+            |delay| {
+                waits.push(delay.as_secs());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(value, json!([]));
+        assert_eq!(attempts, 3);
+        assert_eq!(waits, [2, 5]);
+
+        for code in [1, 3, 4, 5, 6, 7] {
+            let mut attempts = 0;
+            let mut waits = Vec::new();
+            let error = initial_root_with_retry(
+                || {
+                    attempts += 1;
+                    Err(RemoteError { code }.into())
+                },
+                |delay| {
+                    waits.push(delay.as_secs());
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.downcast_ref::<RemoteError>().unwrap().code, code);
+            assert_eq!(attempts, if code == 5 { 4 } else { 1 });
+            assert_eq!(waits, if code == 5 { vec![2, 5, 10] } else { vec![] });
+        }
+        let mut attempts = 0;
+        assert!(
+            initial_root_with_retry(
+                || {
+                    attempts += 1;
+                    bail!("登录账号已改变")
+                },
+                |_| panic!("identity/auth/config errors must not be retried"),
+            )
+            .is_err()
+        );
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn initial_root_retry_wait_is_cancellable_and_does_not_read_again() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let signal = cancel.clone();
+        let worker = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            signal.store(true, Ordering::Relaxed);
+        });
+        let start = Instant::now();
+        let mut attempts = 0;
+        let error = initial_root_with_retry(
+            || {
+                attempts += 1;
+                Err(RemoteError { code: 5 }.into())
+            },
+            |delay| wait_for_initial_root_retry(&cancel, delay),
+        )
+        .unwrap_err();
+        worker.join().unwrap();
+        assert_eq!(error.to_string(), "连接已取消");
+        assert_eq!(attempts, 1);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn initial_root_discards_partial_json_before_retrying_component() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let state = State::new(temp.path().join("private")).unwrap();
+        let exe = temp.path().join("synthetic-component");
+        fs::write(&exe, b"#!/usr/bin/python3\nfrom pathlib import Path\nimport sys\nassert 'lsjson' in sys.argv\np=Path(__file__).with_suffix('.attempted')\nif not p.exists():\n p.write_text('1')\n print('[{partial')\n sys.exit(5)\nprint('[]')\n").unwrap();
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut waits = 0;
+        let value = initial_root_with_retry(
+            || {
+                json_command(
+                    &exe,
+                    &state,
+                    "synthetic",
+                    "direct",
+                    &["lsjson", "twodrive:"],
+                    &cancel,
+                )
+            },
+            |_| {
+                waits += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(value, json!([]));
+        assert_eq!(waits, 1);
+    }
+
     pub(super) fn fixture() -> (tempfile::TempDir, RcloneDrive) {
         let temp = tempfile::tempdir().unwrap();
         let state = State::new(temp.path().join("private")).unwrap();

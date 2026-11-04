@@ -61,6 +61,14 @@ names are retained for isolation and do not rename the product. Runtime lives in
 under `~/.local/share/twodrive-dav/state`. The autostart entry, if explicitly enabled,
 is `~/.config/autostart/twodrive-dav.desktop`.
 
+Normal background startup restores every saved, still-valid account. The first
+iCloud root metadata check retries Rclone temporary errors (exit code 5) after
+2, 5 and 10 seconds, for at most four attempts. Each attempt keeps the existing
+component timeout and cancellation checks. This also applies when reconnecting;
+it never replays a file mutation, opens a login prompt or discards cached data.
+Other errors are reported immediately. An exhausted retry budget still requires
+checking the connection or login; startup does not retry indefinitely.
+
 ## Safety and recovery
 
 File actions bind both profile ID and revision before any remote request. Cache
