@@ -1683,6 +1683,60 @@ fn directory_handle(path: &Path) -> Result<Handle> {
     }
     Ok(Handle(handle, false))
 }
+/// Effective directory traversal lease. Attribute-only handles do not prevent
+/// rename on Windows. A directory-only relative NT open prevents a substituted
+/// file from being opened for data/implicit hydration. Keep this distinct from
+/// metadata observations and from
+/// the fixture teardown's independent exclusive directory handles.
+#[cfg(feature = "native-sync")]
+fn directory_lease(parent: HANDLE, component: &std::ffi::OsStr) -> Result<Handle> {
+    use windows_sys::Wdk::Storage::FileSystem::FILE_OPEN;
+    let mut name = wide(Path::new(component));
+    let length = ((name.len() - 1) * 2)
+        .try_into()
+        .map_err(|_| "directory component too long")?;
+    let unicode = UNICODE_STRING {
+        Length: length,
+        MaximumLength: length,
+        Buffer: name.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: parent,
+        ObjectName: &unicode,
+        Attributes: OBJ_CASE_INSENSITIVE,
+        ..Default::default()
+    };
+    let mut io = IO_STATUS_BLOCK::default();
+    let mut raw = ptr::null_mut();
+    let status = unsafe {
+        NtCreateFile(
+            &mut raw,
+            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | SYNCHRONIZE,
+            &attributes,
+            &mut io,
+            ptr::null(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_OPEN,
+            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+            ptr::null(),
+            0,
+        )
+    };
+    if status < 0 {
+        return Err(format!(
+            "retain traversal directory: NTSTATUS 0x{:08X}",
+            status as u32
+        ));
+    }
+    let handle = Handle(raw, false);
+    if !file_binding(handle.0)?.2 {
+        return Err("traversal target is not a directory".into());
+    }
+    Ok(handle)
+}
+
 fn relative_name(root: &Path, path: &Path) -> Result<String> {
     path.strip_prefix(root)
         .map_err(|_| "path outside fixture")?

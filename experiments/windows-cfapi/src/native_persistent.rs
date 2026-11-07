@@ -502,9 +502,10 @@ impl PersistentSession {
         }
         let mut parent = self.root().to_path_buf();
         let mut guards = Vec::new();
+        let mut parent_handle = self.guard._handles.last().ok_or("root lease missing")?.0;
         for part in &parts[..parts.len() - 1] {
             parent.push(part.as_os_str());
-            let handle = directory_handle(&parent)?;
+            let handle = directory_lease(parent_handle, part.as_os_str())?;
             let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
             if unsafe {
                 GetFileInformationByHandleEx(
@@ -540,6 +541,7 @@ impl PersistentSession {
             if count < size_of::<CF_PLACEHOLDER_STANDARD_INFO>() as u32 {
                 return Err("short parent placeholder information".into());
             }
+            parent_handle = handle.0;
             guards.push(handle);
         }
         Ok((parent, guards))

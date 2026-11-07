@@ -16,9 +16,20 @@ pub struct NativeEntry {
     pub cloud: Option<NativeObservation>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InventoryStage {
+    BeforeDirectory,
+    DirectoryHeld,
+}
+
 impl PersistentSession {
     fn namespace_handle(&self, path: &Path) -> Result<(Handle, FILE_ATTRIBUTE_TAG_INFO)> {
-        let handle = directory_handle(path)?;
+        self.namespace_checked_handle(metadata_handle(path)?)
+    }
+    fn namespace_checked_handle(
+        &self,
+        handle: Handle,
+    ) -> Result<(Handle, FILE_ATTRIBUTE_TAG_INFO)> {
         let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
         if unsafe {
             GetFileInformationByHandleEx(
@@ -54,26 +65,42 @@ impl PersistentSession {
     /// directory enumeration. The caller must separately prove a missing file's
     /// filesystem identity before issuing any remote deletion.
     pub fn inventory(&self) -> Result<Vec<NativeEntry>> {
+        self.inventory_observed(|_, _| Ok(()))
+    }
+
+    fn inventory_observed(
+        &self,
+        mut observe: impl FnMut(InventoryStage, &Path) -> Result<()>,
+    ) -> Result<Vec<NativeEntry>> {
         if self.connection.is_none() {
             return Err("native root is disconnected".into());
         }
-        let mut directories = vec![PathBuf::new()];
+        let mut directories = vec![(PathBuf::new(), Vec::<(u32, u64)>::new())];
         let mut entries = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        while let Some(relative) = directories.pop() {
+        while let Some((relative, expected_chain)) = directories.pop() {
+            observe(InventoryStage::BeforeDirectory, &relative)?;
             let mut directory = self.root().to_path_buf();
             let mut guards = Vec::new();
-            for part in relative.components() {
+            let mut parent_handle = self.guard._handles.last().ok_or("root lease missing")?.0;
+            for (index, part) in relative.components().enumerate() {
                 if !matches!(part, Component::Normal(_)) {
                     return Err("invalid namespace path".into());
                 }
                 directory.push(part.as_os_str());
-                let (handle, tag) = self.namespace_handle(&directory)?;
+                let (handle, tag) = self
+                    .namespace_checked_handle(directory_lease(parent_handle, part.as_os_str())?)?;
                 if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
                     return Err("namespace parent changed kind".into());
                 }
+                let (volume, id, _) = file_binding(handle.0)?;
+                if expected_chain.get(index) != Some(&(volume, id)) {
+                    return Err("queued namespace directory identity changed".into());
+                }
+                parent_handle = handle.0;
                 guards.push(handle);
             }
+            observe(InventoryStage::DirectoryHeld, &relative)?;
             for child in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
                 let child = child.map_err(|e| e.to_string())?;
                 let relative_path = relative.join(child.file_name());
@@ -143,7 +170,9 @@ impl PersistentSession {
                     (None, None)
                 };
                 if directory {
-                    directories.push(relative_path.clone());
+                    let mut child_chain = expected_chain.clone();
+                    child_chain.push((information.dwVolumeSerialNumber, file_id));
+                    directories.push((relative_path.clone(), child_chain));
                 }
                 entries.push(NativeEntry {
                     relative_path,
@@ -244,6 +273,135 @@ mod tests {
         fn read_range(&self, _: &[u8], _: usize, _: usize, _: &AtomicBool) -> Result<Vec<u8>> {
             Err("inventory must not fetch content".into())
         }
+    }
+    fn substitution_case(held: bool, replacement_file: bool) {
+        let base = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_NAMESPACE_RACE_ROOT")
+                .expect("explicit new generated root"),
+        );
+        assert!(
+            base.is_absolute()
+                && base
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let root = base.with_file_name(format!(
+            "{}-{}",
+            base.file_name().unwrap().to_string_lossy(),
+            if held {
+                "held"
+            } else if replacement_file {
+                "queued-file"
+            } else {
+                "queued"
+            }
+        ));
+        assert!(!root.exists());
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+            Arc::new(NoData),
+        )
+        .unwrap();
+        let work = root.join("work");
+        let moved = root.join("moved");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::write(work.join("old.txt"), b"old").unwrap();
+        let mut attempted = false;
+        let mut replaced = false;
+        let result = owner.inventory_observed(|stage, path| {
+            let expected = if held {
+                InventoryStage::DirectoryHeld
+            } else {
+                InventoryStage::BeforeDirectory
+            };
+            if !attempted && stage == expected && path == Path::new("work") {
+                attempted = true;
+                if held {
+                    if std::fs::rename(&work, &moved).is_ok() {
+                        replaced = true;
+                        std::fs::rename(&moved, &work).map_err(|e| e.to_string())?;
+                    }
+                } else {
+                    std::fs::rename(&work, &moved).map_err(|e| e.to_string())?;
+                    if replacement_file {
+                        owner.publish_placeholder(
+                            Path::new("work"),
+                            b"substituted-generated-file",
+                            65536,
+                            false,
+                            1,
+                        )?;
+                    } else {
+                        std::fs::create_dir(&work).map_err(|e| e.to_string())?;
+                        std::fs::write(work.join("new.txt"), b"new").map_err(|e| e.to_string())?;
+                    }
+                    replaced = true;
+                }
+            }
+            Ok(())
+        });
+        let no_fetch = owner.source.as_ref().unwrap().calls.load(Ordering::SeqCst) == 0;
+        // Retire only this known ordinary generated tree before asserting the
+        // race oracle, so an old-code reproduction does not leave a live root.
+        if held {
+            assert_eq!(std::fs::read(work.join("old.txt")).unwrap(), b"old");
+            std::fs::remove_file(work.join("old.txt")).unwrap();
+        } else {
+            if replacement_file {
+                std::fs::remove_file(&work).unwrap();
+            } else {
+                assert_eq!(std::fs::read(work.join("new.txt")).unwrap(), b"new");
+                std::fs::remove_file(work.join("new.txt")).unwrap();
+            }
+            assert_eq!(std::fs::read(moved.join("old.txt")).unwrap(), b"old");
+            std::fs::remove_file(moved.join("old.txt")).unwrap();
+            std::fs::remove_dir(&moved).unwrap();
+        }
+        if !replacement_file {
+            std::fs::remove_dir(&work).unwrap();
+        }
+        owner.retire_empty_office_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::remove_file(&checkpoint).unwrap();
+        assert!(
+            attempted && no_fetch,
+            "attempted={attempted} no_fetch={no_fetch} result={:?}",
+            result.as_ref().map(|entries| entries.len())
+        );
+        if held {
+            assert!(
+                !replaced,
+                "a directory was renamed while its traversal lease was held"
+            );
+            assert!(result.is_ok());
+        } else {
+            assert!(replaced);
+            assert!(
+                result.is_err(),
+                "queued directory substitution produced a mixed inventory"
+            );
+        }
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; replacement while directory is being traversed"]
+    fn inventory_rejects_replacement_during_directory_traversal() {
+        substitution_case(true, false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; replacement after enqueue before traversal"]
+    fn inventory_rejects_replacement_of_a_queued_directory() {
+        substitution_case(false, false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; queued directory replaced by an online-only file"]
+    fn inventory_rejects_replacement_by_a_file_without_hydration() {
+        substitution_case(false, true);
     }
     #[test]
     #[ignore = "explicit NEW generated CFAPI root; metadata-only inventory and file-ID lookup"]
