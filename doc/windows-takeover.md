@@ -59,7 +59,20 @@ owner was enabled. The CFAPI harness now depends on the shared backend contract
 instead of compiling a separate Windows model. Its lockfile adds that dependency
 closure; ordinary CI tests do not contact a cloud account.
 
-Production account/root authority, persistent native registration/reconnect,
+An opt-in `native-sync` platform owner now retains registration on disconnect and
+resumes only the saved root identity, volume serial and directory file ID. The
+explicit generated test passed cached offline reads, retained online-only entries,
+wrong-receipt refusal and resumed hydration. Its two generated files were retained
+as ordinary files before that test alone unregistered its root. The production
+type intentionally exposes no unregister/delete operation.
+
+The companion Office test also passed native root binding and actual STA-timer
+Word/Excel/PowerPoint saves on a generated CFAPI root. The fixture has no cloud
+provider, and was unregistered only after its three generated documents had been
+removed and its root confirmed empty. Neither test establishes account-backed
+restart recovery or full writable native root support.
+
+Production account/root authority and persistent engine composition,
 file-size changes, create/rename/delete, remote delta conflict reconciliation,
 cache eviction, installed Office integration, real-cloud end-to-end and the
 source-folder rollback/cutover remain incomplete. Desktop writable/native-root

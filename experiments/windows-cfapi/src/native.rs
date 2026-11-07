@@ -30,6 +30,9 @@ use windows_sys::{
 };
 
 type Result<T> = std::result::Result<T, String>;
+#[cfg(feature = "native-sync")]
+#[path = "native_persistent.rs"]
+pub mod persistent;
 const ID: &[u8] = Dataset::StandardV1.root_identity();
 const SIZE: usize = 65536;
 const OFFLINE: i32 = 0xC000CF11u32 as i32;
