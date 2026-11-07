@@ -92,6 +92,40 @@ impl LocalFileBridge {
         self.journal.open_write(id)
     }
 
+    #[cfg(all(windows, feature = "native-local-fixture"))]
+    pub fn capture_native_edit(&self, path: &Path, id: &str) -> anyhow::Result<i64> {
+        let record = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("unknown native item")?;
+        let cloud_id = record
+            .cloud_remote_id
+            .as_deref()
+            .context("unbound native item")?;
+        self.journal.record_native_edit(cloud_id)?;
+        let generation = self.status(id)?.generation;
+        twodrive_local_files::native::with_native_capture(
+            path,
+            cloud_id.as_bytes(),
+            usize::try_from(record.metadata.size)?,
+            |locked| {
+                let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
+                    .map_err(|e| e.to_string())?;
+                let size = locked.copy_resident_to(temporary.as_file_mut())?;
+                temporary.as_file().sync_all().map_err(|e| e.to_string())?;
+                // Keep the owned file on any commit error: it contains user edits,
+                // and must not be mistaken for a disposable download cache.
+                let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
+                drop(file);
+                self.journal
+                    .stage_native_edit(id, generation, &captured, size)
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .map_err(anyhow::Error::msg)
+    }
+
     /// Download by opaque object identity; recheck provider version after EOF.
     pub fn hydrate(&self, remote_id: &str) -> anyhow::Result<String> {
         self.hydrate_cancellable(remote_id, &std::sync::atomic::AtomicBool::new(false))

@@ -1779,6 +1779,51 @@ pub fn with_exclusive_placeholder<T>(
     action(&locked)
 }
 
+/// A synchronous no-recall, no-follow, share-none lease for copying native
+/// edits. Busy files are deferred instead of reading a writer's partial save.
+pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
+impl NativeCapture<'_> {
+    pub fn copy_resident_to(&self, output: &mut impl std::io::Write) -> Result<u64> {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::os::windows::io::FromRawHandle;
+        let state = self.0.inspect()?;
+        if !state.resident || state.partial {
+            return Err("native capture requires resident bytes".into());
+        }
+        let mut file =
+            std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(self.0.handle.0) });
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let mut buffer = [0u8; 65536];
+        let mut total = 0u64;
+        loop {
+            let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..count])
+                .map_err(|e| e.to_string())?;
+            total = total
+                .checked_add(count as u64)
+                .ok_or("capture size overflow")?;
+        }
+        if total != state.logical_size || self.0.inspect()?.logical_size != state.logical_size {
+            return Err("native capture size changed".into());
+        }
+        Ok(total)
+    }
+}
+pub fn with_native_capture<T>(
+    path: &Path,
+    identity: &[u8],
+    size: usize,
+    action: impl FnOnce(&NativeCapture<'_>) -> Result<T>,
+) -> Result<T> {
+    let lease = RetainedPlaceholder::open_node(path, identity, size, false)?;
+    lease.inspect()?;
+    action(&NativeCapture(&lease))
+}
+
 pub fn inspect(path: &Path, engine_state: FileState) -> Result<LocalStatus> {
     status(metadata_handle(path)?.0, engine_state)
 }

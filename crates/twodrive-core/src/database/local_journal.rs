@@ -356,7 +356,7 @@ impl CacheJournal {
     }
 
     /// Persist an OS-observed edit, including a truncated placeholder that never
-    /// needed hydration. This slice deliberately provides no clearing API.
+    /// needed hydration. Only a verified native snapshot may clear this veto.
     pub fn record_native_edit(&self, cloud_id: &str) -> anyhow::Result<()> {
         let _guard = self
             .0
@@ -370,15 +370,90 @@ impl CacheJournal {
             [cloud_id],
         )? == 1
         {
+            // An upload owns an immutable PRIVATE snapshot. Native edits are a
+            // separate durable veto; invalidating that upload's generation here
+            // would make its receipt and lost-reply reconciliation impossible.
             tx.execute("UPDATE local_cache_journal SET generation=generation+1,dirty_intent=1,recovery_required=1
-                WHERE local_id IN (SELECT remote_id FROM files WHERE cloud_remote_id=?1)", [cloud_id])?;
+                WHERE upload_generation IS NULL AND local_id IN (SELECT remote_id FROM files WHERE cloud_remote_id=?1)", [cloud_id])?;
             tx.execute(
-                "UPDATE files SET state='dirty' WHERE cloud_remote_id=?1",
+                "UPDATE files SET state='dirty' WHERE cloud_remote_id=?1
+                 AND NOT EXISTS(SELECT 1 FROM local_cache_journal j WHERE j.local_id=files.remote_id AND j.upload_generation IS NOT NULL)",
                 [cloud_id],
             )?;
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Publish a complete fsynced native-file snapshot without overwriting the
+    /// private cache in place. The adapter must retain the source's exclusive
+    /// native no-write/no-delete handle through this call and verify its
+    /// placeholder identity and complete resident bytes.
+    /// This never marks the visible file in sync or authorizes dehydration.
+    pub fn stage_native_edit(
+        &self,
+        id: &str,
+        expected_generation: i64,
+        path: &Path,
+        size: u64,
+    ) -> anyhow::Result<i64> {
+        let _guard = self
+            .0
+            .gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache gate poisoned"))?;
+        let record = self.record(id)?;
+        ensure!(
+            record.cache_path.as_deref() != Some(path),
+            "native snapshot must be a new file"
+        );
+        let old_file = self.file(&record, false)?;
+        old_file.try_lock()?;
+        let mut candidate = record.clone();
+        candidate.cache_path = Some(path.to_path_buf());
+        let new_file = self.file(&candidate, true)?;
+        new_file.try_lock()?;
+        new_file.sync_all()?;
+        let metadata = new_file.metadata()?;
+        ensure!(metadata.len() == size, "incomplete native capture");
+        let modified = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = snapshot(&tx, id)?;
+        ensure!(
+            state.generation == expected_generation
+                && state.native_dirty
+                && state.readers == 0
+                && state.writers == 0
+                && state.upload_generation.is_none()
+                && !state.uncertain_upload
+                && !state.pending_operations
+                && matches!(
+                    state.state,
+                    FileState::Dirty | FileState::Cached | FileState::Pinned
+                ),
+            "native capture is stale or another operation owns the cache"
+        );
+        let generation = state
+            .generation
+            .checked_add(1)
+            .context("cache generation exhausted")?;
+        tx.execute("UPDATE local_cache_journal SET generation=?2,cache_path=?3,dirty_intent=1,recovery_required=0 WHERE local_id=?1",
+            params![id,generation,path.to_string_lossy()])?;
+        tx.execute("UPDATE files SET cache_path=?2,size=?3,modified_unix=?4,state='dirty' WHERE remote_id=?1",
+            params![id,path.to_string_lossy(),i64::try_from(metadata.len())?,i64::try_from(modified)?])?;
+        tx.execute(
+            "DELETE FROM local_native_dirty WHERE cloud_id=?1",
+            [record
+                .cloud_remote_id
+                .as_deref()
+                .context("missing cloud identity")?],
+        )?;
+        tx.commit()?;
+        Ok(generation)
     }
 
     pub fn open_read(&self, id: &str) -> anyhow::Result<CacheReadLease> {
@@ -697,9 +772,18 @@ impl CacheWriteLease {
         let mut conn = journal_connection(&self.journal.0.db)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure!(tx.execute("UPDATE local_cache_journal SET writers=0 WHERE local_id=?1 AND generation=?2 AND writers=1",params![self.id,self.generation])?==1,"stale write lease");
+        let metadata = self.file.metadata()?;
+        let modified = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
         tx.execute(
-            "UPDATE files SET state='dirty',size=?2 WHERE remote_id=?1",
-            params![self.id, i64::try_from(self.file.metadata()?.len())?],
+            "UPDATE files SET state='dirty',size=?2,modified_unix=?3 WHERE remote_id=?1",
+            params![
+                self.id,
+                i64::try_from(metadata.len())?,
+                i64::try_from(modified)?
+            ],
         )?;
         tx.commit()?;
         Ok(())
@@ -823,7 +907,9 @@ fn acknowledge(
     digest: &str,
 ) -> anyhow::Result<()> {
     conn.execute("UPDATE local_cache_journal SET acknowledged_generation=?2,acknowledged_digest=?3,base_etag=?4,dirty_intent=0,uncertain_upload=0,recovery_required=0,upload_generation=NULL,upload_epoch=NULL,upload_digest=NULL WHERE local_id=?1",params![id,generation,digest,remote.etag])?;
-    conn.execute("UPDATE files SET etag=?2,size=?3,modified_unix=?4,state=CASE WHEN pin_explicit=1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned' ELSE 'cached' END WHERE remote_id=?1",params![id,remote.etag,i64::try_from(remote.size)?,remote.modified_unix])?;
+    // Match the Linux upload commit: a server acknowledgement changes the
+    // cloud version, not the content timestamp observed by an open editor.
+    conn.execute("UPDATE files SET etag=?2,size=?3,state=CASE WHEN pin_explicit=1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned' ELSE 'cached' END WHERE remote_id=?1",params![id,remote.etag,i64::try_from(remote.size)?])?;
     Ok(())
 }
 

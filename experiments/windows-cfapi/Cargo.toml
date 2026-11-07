@@ -28,6 +28,7 @@ serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 tempfile = "3"
 sha2 = "0.10"
+twodrive-backend = { path = "../../crates/twodrive-backend" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_Storage_CloudFilters", "Win32_Storage_FileSystem", "Win32_System_CorrelationVector", "Win32_System_IO", "Win32_Security", "Wdk_Foundation", "Wdk_Storage_FileSystem"] }

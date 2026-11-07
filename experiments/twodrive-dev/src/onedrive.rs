@@ -115,7 +115,6 @@ impl CloudBackend for OneDrive {
     ) -> anyhow::Result<u64> {
         self.graph.download_to(id, writer, progress)
     }
-    #[cfg(target_os = "linux")]
     fn download_sized_to(
         &self,
         id: &str,

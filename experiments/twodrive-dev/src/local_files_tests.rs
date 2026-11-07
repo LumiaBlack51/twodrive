@@ -228,12 +228,260 @@ fn actual_engine_download_edit_conditional_upload_and_generation_ack() {
     assert!(bridge.engine_release_ready(OBJECT, 1).unwrap());
     assert!(!bridge.engine_release_ready(OBJECT, 0).unwrap());
 }
+
+#[test]
+fn native_upload_and_delta_echo_preserve_the_local_content_timestamp() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    edit(&f.bridge);
+    let local = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    assert!(f.bridge.upload(OBJECT, no_progress()).unwrap());
+    let acknowledged = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    assert_eq!(
+        acknowledged.metadata.modified_unix,
+        local.metadata.modified_unix
+    );
+    let echo = provider.get_metadata(OBJECT).unwrap().unwrap();
+    f.db.upsert_metadata(&core_metadata(&echo)).unwrap();
+    assert_eq!(
+        f.db.get_by_remote_id(OBJECT)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .modified_unix,
+        local.metadata.modified_unix
+    );
+}
+
+#[test]
+fn native_snapshot_preserves_old_bytes_and_rejects_stale_capture() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    let old_cache =
+        f.db.get_by_remote_id(OBJECT)
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .unwrap();
+    f.bridge.journal.record_native_edit(OBJECT).unwrap();
+    let generation = f.bridge.status(OBJECT).unwrap().generation;
+    let captured = f.cache.join("native-snapshot");
+    fs::write(&captured, EDITED).unwrap();
+    assert!(
+        f.bridge
+            .journal
+            .stage_native_edit(OBJECT, generation - 1, &captured, EDITED.len() as u64)
+            .is_err()
+    );
+    assert!(f.bridge.status(OBJECT).unwrap().native_dirty);
+    assert_eq!(fs::read(&old_cache).unwrap(), INITIAL);
+    let next = f
+        .bridge
+        .journal
+        .stage_native_edit(OBJECT, generation, &captured, EDITED.len() as u64)
+        .unwrap();
+    assert_eq!(next, generation + 1);
+    assert!(!f.bridge.status(OBJECT).unwrap().sync_confirmed());
+    assert_eq!(bytes(&f.bridge), EDITED);
+    assert!(f.bridge.upload(OBJECT, no_progress()).unwrap());
+    assert_eq!(provider.download(OBJECT).unwrap(), EDITED);
+    assert!(f.bridge.status(OBJECT).unwrap().sync_confirmed());
+    assert_eq!(fs::read(old_cache).unwrap(), INITIAL);
+}
+
+#[test]
+fn native_capture_cannot_bypass_a_reader_or_changed_path_binding() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    let reader = f.bridge.journal.open_read(OBJECT).unwrap();
+    f.bridge.journal.record_native_edit(OBJECT).unwrap();
+    let generation = f.bridge.status(OBJECT).unwrap().generation;
+    let captured = f.cache.join("native-snapshot");
+    fs::write(&captured, EDITED).unwrap();
+    assert!(
+        f.bridge
+            .journal
+            .stage_native_edit(OBJECT, generation, &captured, EDITED.len() as u64)
+            .is_err()
+    );
+    drop(reader);
+    f.db.move_subtree_and_queue(OBJECT, "/renamed.txt").unwrap();
+    assert!(
+        f.bridge
+            .journal
+            .stage_native_edit(OBJECT, generation, &captured, EDITED.len() as u64)
+            .is_err()
+    );
+    assert!(f.bridge.status(OBJECT).unwrap().native_dirty);
+    assert_eq!(fs::read(captured).unwrap(), EDITED);
+}
+
+#[test]
+fn native_edit_during_an_upload_does_not_destroy_the_older_receipt() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    edit(&f.bridge);
+    let mut upload = f.bridge.journal.begin_upload(OBJECT, digest_file).unwrap();
+    let old = upload.record().clone();
+    f.bridge.journal.record_native_edit(OBJECT).unwrap();
+    let remote = provider
+        .upload_controlled(
+            &old.metadata.path,
+            old.cache_path.as_ref().unwrap(),
+            Some(OBJECT),
+            Some(&old.metadata.etag),
+            no_progress(),
+        )
+        .unwrap();
+    let digest = digest_file(upload.file()).unwrap();
+    assert!(
+        upload
+            .acknowledge(&core_metadata(&remote), &digest)
+            .unwrap()
+    );
+    // Only the old private snapshot is acknowledged. Native bytes still veto
+    // all synchronized/release claims until a new immutable snapshot is captured.
+    let state = f.bridge.status(OBJECT).unwrap();
+    assert!(state.native_dirty);
+    assert!(!state.sync_confirmed());
+    let newer = f.cache.join("newer-native-snapshot");
+    fs::write(&newer, b"later native edit").unwrap();
+    f.bridge
+        .journal
+        .stage_native_edit(OBJECT, state.generation, &newer, 17)
+        .unwrap();
+    assert!(f.bridge.upload(OBJECT, no_progress()).unwrap());
+    assert_eq!(provider.download(OBJECT).unwrap(), b"later native edit");
+}
+
+#[test]
+fn later_native_bytes_survive_lost_reply_reconciliation_and_restart() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    edit(&f.bridge);
+    provider.mode.store(2, Ordering::SeqCst);
+    assert!(f.bridge.upload(OBJECT, no_progress()).is_err());
+    f.bridge.journal.record_native_edit(OBJECT).unwrap();
+    drop(f.bridge);
+    let bridge = LocalFileBridge::open(
+        f.db.clone(),
+        &f.cache,
+        Backend::new(provider.clone()),
+        "generated-provider-account-1",
+    )
+    .unwrap();
+    assert!(bridge.reconcile(OBJECT).unwrap());
+    let state = bridge.status(OBJECT).unwrap();
+    assert!(state.native_dirty && !state.sync_confirmed());
+    let newer = f.cache.join("later-native");
+    fs::write(&newer, b"later native edit").unwrap();
+    bridge
+        .journal
+        .stage_native_edit(OBJECT, state.generation, &newer, 17)
+        .unwrap();
+    provider.mode.store(0, Ordering::SeqCst);
+    assert!(bridge.upload(OBJECT, no_progress()).unwrap());
+    assert_eq!(provider.download(OBJECT).unwrap(), b"later native edit");
+}
+
+#[cfg(all(windows, feature = "native-local-fixture"))]
+#[test]
+#[ignore = "registers an explicitly supplied NEW generated CFAPI root; no real cloud"]
+fn native_read_edit_capture_upload_preserves_complete_bytes() {
+    use std::sync::atomic::AtomicBool;
+    use twodrive_local_files::native::{HydrationSource, Session};
+    struct Source(LocalFileBridge);
+    impl HydrationSource for Source {
+        fn size(&self, identity: &[u8]) -> Result<usize, String> {
+            if identity != OBJECT.as_bytes() {
+                return Err("foreign fixture identity".into());
+            }
+            Ok(INITIAL.len())
+        }
+        fn read_range(
+            &self,
+            identity: &[u8],
+            offset: usize,
+            length: usize,
+            cancelled: &AtomicBool,
+        ) -> Result<Vec<u8>, String> {
+            self.size(identity)?;
+            if self
+                .0
+                .journal
+                .database()
+                .get_by_remote_id(OBJECT)
+                .map_err(|e| e.to_string())?
+                .and_then(|r| r.cache_path)
+                .is_none()
+            {
+                self.0
+                    .hydrate_cancellable(OBJECT, cancelled)
+                    .map_err(|e| e.to_string())?;
+            }
+            let mut file = self
+                .0
+                .journal
+                .open_read(OBJECT)
+                .map_err(|e| e.to_string())?;
+            file.seek(SeekFrom::Start(offset as u64))
+                .map_err(|e| e.to_string())?;
+            let mut bytes = vec![0; length];
+            file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+            Ok(bytes)
+        }
+    }
+    let root = PathBuf::from(
+        std::env::var_os("TWODRIVE_APPROVED_NATIVE_CAPTURE_ROOT")
+            .expect("explicit new root required"),
+    );
+    assert!(root.is_absolute() && !root.exists());
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    let mut session =
+        Session::create_with_source(&root, Arc::new(Source(f.bridge.clone()))).unwrap();
+    let path = session
+        .placeholder_for(
+            Path::new("generated-中文.txt"),
+            OBJECT.as_bytes(),
+            INITIAL.len(),
+        )
+        .unwrap();
+    let edited = vec![b'X'; INITIAL.len()];
+    let result = (|| -> anyhow::Result<()> {
+        assert_eq!(fs::read(&path)?, INITIAL);
+        fs::write(&path, &edited)?;
+        let generation = f.bridge.capture_native_edit(&path, OBJECT)?;
+        assert_eq!(bytes(&f.bridge), edited);
+        assert!(!f.bridge.engine_release_ready(OBJECT, generation)?);
+        assert!(f.bridge.upload(OBJECT, no_progress())?);
+        assert_eq!(provider.download(OBJECT)?, edited);
+        assert_eq!(fs::read(&path)?, edited);
+        Ok(())
+    })();
+    let cleanup = session.finish();
+    result.unwrap();
+    cleanup.unwrap();
+    twodrive_local_files::native::verify_unregistered(&root).unwrap();
+    assert_eq!(fs::read(path).unwrap(), edited);
+}
 #[test]
 fn accepted_write_lost_reply_restarts_and_requires_verified_download() {
     let provider = MockProvider::new();
     let f = fixture(&provider);
     f.bridge.hydrate(OBJECT).unwrap();
     edit(&f.bridge);
+    let local_modified =
+        f.db.get_by_remote_id(OBJECT)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .modified_unix;
     provider.mode.store(2, Ordering::SeqCst);
     assert!(f.bridge.upload(OBJECT, no_progress()).is_err());
     assert_eq!(provider.download(OBJECT).unwrap(), EDITED);
@@ -241,7 +489,7 @@ fn accepted_write_lost_reply_restarts_and_requires_verified_download() {
     assert!(f.bridge.upload(OBJECT, no_progress()).is_err());
     drop(f.bridge);
     let bridge = LocalFileBridge::open(
-        f.db,
+        f.db.clone(),
         &f.cache,
         Backend::new(provider.clone()),
         "generated-provider-account-1",
@@ -249,6 +497,14 @@ fn accepted_write_lost_reply_restarts_and_requires_verified_download() {
     .unwrap();
     assert!(bridge.status(OBJECT).unwrap().uncertain_upload);
     assert!(bridge.reconcile(OBJECT).unwrap());
+    assert_eq!(
+        f.db.get_by_remote_id(OBJECT)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .modified_unix,
+        local_modified
+    );
     assert_eq!(bridge.status(OBJECT).unwrap().state, FileState::Cached);
     assert!(bridge.engine_release_ready(OBJECT, 1).unwrap());
     assert_eq!(bytes(&bridge), EDITED);
