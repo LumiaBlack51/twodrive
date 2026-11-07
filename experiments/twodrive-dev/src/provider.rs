@@ -27,6 +27,12 @@ impl Capabilities {
 }
 
 pub trait Provider: CloudBackend {
+    /// Optional protocol process control, used by bounded desktop operations.
+    fn set_operation_cancel(&self, _cancel: Arc<std::sync::atomic::AtomicBool>) {}
+    /// Adapters without a persistent version/cache contract may forbid mounts.
+    fn supports_mount(&self) -> bool {
+        true
+    }
     fn capabilities(&self) -> Capabilities;
     fn list_directory(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>>;
     /// No version means atomic create-only; a version requires atomic comparison.
@@ -64,6 +70,12 @@ impl Backend {
             "同步已暂停；待传输数据保留在本机"
         );
         Ok(())
+    }
+    pub fn supports_mount(&self) -> bool {
+        self.inner.supports_mount()
+    }
+    pub fn set_operation_cancel(&self, cancel: Arc<std::sync::atomic::AtomicBool>) {
+        self.inner.set_operation_cancel(cancel);
     }
     pub fn capabilities(&self) -> Capabilities {
         self.inner.capabilities()

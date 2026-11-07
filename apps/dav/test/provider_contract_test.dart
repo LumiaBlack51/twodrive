@@ -9,6 +9,83 @@ import 'package:twodrive_dav/tray_panel.dart';
 
 void main() {
   testWidgets(
+    'read-only schema hides write permission and private internal fields',
+    (tester) async {
+      tester.view.physicalSize = const Size(1000, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      Json? saved;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async {
+                saved = await showDialog<Json>(
+                  context: context,
+                  builder: (_) => const ProfileDialog(
+                    providers: [
+                      {
+                        'id': 'smb',
+                        'label': 'SMB2/3（只读）',
+                        'network_modes': ['system'],
+                        'capabilities': {
+                          'upload': false,
+                          'conditional_upload': false,
+                          'mkdir': false,
+                          'rename': false,
+                          'delete': false,
+                          'backup': false,
+                          'mount': false,
+                        },
+                        'fields': [
+                          {'key': 'server', 'label': '服务器', 'required': true},
+                          {'key': 'share', 'label': '共享名', 'required': true},
+                          {'key': 'username', 'label': '用户名', 'required': true},
+                          {'key': 'password', 'label': '密码', 'secret': true},
+                          {
+                            'key': 'credential_state',
+                            'label': 'private reference',
+                            'internal': true,
+                            'secret': true,
+                          },
+                        ],
+                      },
+                    ],
+                    original: {
+                      'id': 'smb',
+                      'kind': 'smb',
+                      'name': 'Synthetic',
+                      'server': '127.0.0.1',
+                      'share': 'synthetic',
+                      'username': 'test',
+                      'password_saved': true,
+                    },
+                  ),
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.text('服务器'), findsOneWidget);
+      expect(find.text('共享名'), findsOneWidget);
+      expect(find.text('允许修改远端文件'), findsNothing);
+      expect(find.text('private reference'), findsNothing);
+      expect(find.textContaining('已保存'), findsWidgets);
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+      expect(saved?['kind'], 'smb');
+      expect(saved?['network_route'], 'system');
+      expect(saved?['writable'], false);
+      expect(saved!.containsKey('credential_state'), false);
+    },
+  );
+
+  testWidgets(
     'connected account can open add dialog and edit inactive accounts',
     (tester) async {
       tester.view.physicalSize = const Size(1100, 900);

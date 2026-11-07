@@ -39,9 +39,11 @@ flowchart LR
 | field `type` | 当前支持文本（省略）、`boolean`、`file`、`directory`；现有 JSON 文件选择器仅适合 JSON 凭据/邀请 |
 | field `secret` | 公开列表仅返回 `<key>_saved`，不回显原值；空值仅在同一提供者且身份字段未变时保留旧凭据 |
 | field `advanced` / `read_only` | 私有目录等内部路径放高级设置；一般添加连接使用自动目录；选定设备身份只读展示 |
+| field `internal` | 通用表单不显示的适配器私有引用/版本字段；仍须经 schema allowlist 和 public secret 投影，不接受前端给出的秘密引用作为授权 |
 | field `transient` | 表单输入意图；适配器 prepare 必须显式消费并移除，当前不是通用层自动擦除机制 |
 | `identity_fields` | 影响凭据归属的字段；身份变化不得继承另一账号密码 |
 | `protected_paths` | 凭据/身份/状态路径；备份不得把这些路径当上传源 |
+| `network_labels` | 可选路由显示名映射；仅改变已允许 mode 的文字，不增加网络能力 |
 | `network_modes` | 仅展示并允许已实现的 `auto` / `direct` / `system`；省略时现有表单展示三者，不表示适配器已经实现全部策略 |
 | `actions` | 非文件操作的适配器动作，例如发现设备；由 `provider_action` 执行，不得暗中授权或改变其他账号 |
 | `capabilities` | UI 提示；实际连接的后端能力是执行依据，schema 的声明不代替服务端授权 |
@@ -152,3 +154,8 @@ Add third-party drives only at the provider composition boundary. Flutter consum
 Enable writing only with atomic create-only and version-checked replacement, bounded streaming, cancellation and recoverable ambiguous outcomes. Paths select entries; opaque IDs select remote objects; metadata and media versions may differ. Shared backup/FUSE services must use the same guarantees. Preserve pending local work on conflicts, logout, account changes and upgrades.
 
 Ship protocol/auth/contract/UI/recovery regressions and clearly separate mock, isolated desktop and live cloud validation. Include this specification, supporting components, installers, source, checksums and verified build provenance in development releases; never include a user's credentials. Planned interfaces in this document are not implemented product features.
+
+
+## SMB 只读候选的附加合同（2026-11-07）
+
+`Provider::supports_mount` 默认保留旧行为，SMB 返回 false；引擎依合同关闭 mount，不能按 `!writable` 推断所有只读适配器可挂载。`set_operation_cancel` 默认空实现，协议子进程适配器可绑定当前 IPC 取消标志；这是桌面操作取消，不是持久任务队列。SMB 禁止递归库存/恢复 worker、空强版本、每次显式连接使用新 binding。schema 所有写能力为 false 时通用表单不显示写许可开关。详见 [SMB 候选](smb-readonly-dev.md)。

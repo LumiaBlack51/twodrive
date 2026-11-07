@@ -17,6 +17,8 @@ mod google;
 mod onedrive;
 #[path = "providers/paired.rs"]
 mod paired;
+#[path = "providers/smb.rs"]
+mod smb;
 
 pub struct Connection {
     pub backend: Backend,
@@ -31,7 +33,8 @@ pub fn catalog() -> Value {
         dav::descriptor(),
         paired::descriptor(),
         google::descriptor(),
-        onedrive::descriptor()
+        onedrive::descriptor(),
+        smb::descriptor()
     ])
 }
 fn descriptor(kind: &str) -> anyhow::Result<Value> {
@@ -40,6 +43,7 @@ fn descriptor(kind: &str) -> anyhow::Result<Value> {
         "peer" => Ok(paired::descriptor()),
         "google" => Ok(google::descriptor()),
         "onedrive" => Ok(onedrive::descriptor()),
+        "smb" => Ok(smb::descriptor()),
         _ => anyhow::bail!("unsupported provider: {kind}"),
     }
 }
@@ -47,6 +51,7 @@ pub fn prepare(p: &mut Profile, state: &twodrive_dev::state::State) -> anyhow::R
     descriptor(&p.kind)?;
     match p.kind.as_str() {
         "onedrive" => onedrive::prepare(p, state),
+        "smb" => smb::prepare(p, state),
         "peer" => paired::prepare(p, state),
         "google" => google::prepare(p, state),
         _ => Ok(()),
@@ -71,6 +76,7 @@ pub fn validate(p: &Profile) -> anyhow::Result<()> {
         "peer" => paired::validate(p),
         "google" => google::validate(p),
         "onedrive" => onedrive::validate(p),
+        "smb" => smb::validate(p),
         _ => unreachable!(),
     }
 }
@@ -96,6 +102,9 @@ pub fn retain_secrets(p: &mut Profile, previous: Option<&Profile>, clear: bool) 
                 p.options.insert(key.into(), json!(old.option(key)));
             }
         }
+    }
+    if p.kind == "smb" {
+        smb::retain(p, previous, clear);
     }
     // Provider schemas define the only persisted options, so account switches
     // cannot accidentally retain another provider's credentials or IPC metadata.
@@ -134,6 +143,9 @@ pub fn public_profile(p: &Profile) -> Value {
                 value[key] = v.clone();
             }
         }
+        if p.kind == "smb" {
+            value["password_saved"] = json!(Path::new(p.option("credential_state")).is_file());
+        }
         let mut capabilities = d["capabilities"].clone();
         if !p.writable {
             for key in ["upload", "mkdir", "rename", "delete", "backup"] {
@@ -160,6 +172,7 @@ pub fn connect(
         "peer" => paired::connect(p, args, cancel, network),
         "google" => google::connect(p, cancel, network),
         "onedrive" => onedrive::connect(p, cancel, network),
+        "smb" => smb::connect(p, cancel, network),
         _ => unreachable!(),
     }
 }
@@ -174,6 +187,9 @@ pub fn restore(p: &Profile, recipe: &Value, paused: &Path) -> anyhow::Result<Bac
         "peer" => paired::restore(p, recipe)?,
         "google" => google::restore(p, recipe)?,
         "onedrive" => onedrive::restore(p, recipe)?,
+        "smb" => {
+            anyhow::bail!("SMB requires explicit reconnect; persistent workers/mounts unavailable")
+        }
         _ => anyhow::bail!("unsupported provider"),
     };
     Ok(backend.with_pause_file(paused.to_path_buf()))
@@ -227,6 +243,7 @@ pub fn sign_out(p: &Profile) -> anyhow::Result<()> {
     match p.kind.as_str() {
         "google" => google::sign_out(p)?,
         "onedrive" => onedrive::sign_out(p)?,
+        "smb" => smb::sign_out(p)?,
         _ => {}
     }
     Ok(())

@@ -2,6 +2,12 @@
 
 2026-10-15（Development 0.1.4）：`dev` 的 Development 桌面“连接 → 添加连接”可在已有连接在线时使用。可新增、修改、删除其他连接；正在使用的连接需先断开才能编辑或删除。每条已保存连接提供“登录并使用”或“切换使用”，活动连接明确标为“当前使用”；行点击保留为快捷操作，切换仍受待上传缓存保护。当前为单个活动连接，配置列表可保存多个账号。
 
+## SMB2/3（本地只读候选）
+
+2026-11-07 本地审查分支新增 **SMB2/3（只读）**，复用添加连接/登录/浏览/下载流程。手动填写服务器、端口、共享、共享内根目录和账号；需先准备独立 SMB Python 组件。默认 SMB3 加密，SMB2 仅签名需显式选择；无 SMB1、写入、备份、挂载、链接/DFS 或 SMB 自动发现。仅在受控回环 Samba 合成共享验证；默认 Samba 4.19/4.22 因缺少安全能力声明被拒绝，真实 Windows/NAS 未验证；尚未发布或安装。详情见 [SMB 指南](smb-readonly-dev.md) 和[后续阶段](lan-storage-roadmap.md)。
+
+Local review candidate: SMB2/3 uses the existing connection form and file browser. A private Python component is required; encryption is mandatory by default, signed-only access needs explicit selection, and all writes/mounts/backups remain unavailable. Loopback Samba was tested; Windows and physical NAS were not. See the [SMB guide](smb-readonly-dev.md).
+
 ## WebDAV 网盘与 NAS
 
 选择 **WebDAV / NAS**，填写服务端提供的根 URL、用户名、密码，按需启用“允许修改远端文件”，保存后点击“登录并使用”。默认使用 HTTPS 并验证证书。局域网 NAS 仅提供 HTTP 时，在高级设置中显式开启“允许局域网 HTTP”，地址须使用数字私有 IP，例如 `http://192.168.1.10:5005/`；该段连接不加密。公共地址或域名 HTTP 仍拒绝，URL 不得内嵌凭据。局域网 HTTP 使用操作系统到该 IP 的路由；不会据此宣称已绕过 VPN/透明网关。

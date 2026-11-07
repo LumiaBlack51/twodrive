@@ -12,6 +12,7 @@ pub mod onedrive;
 pub mod peer;
 pub mod profile;
 pub mod provider;
+pub mod smb;
 pub mod state;
 pub mod test_agent;
 pub mod webdav;

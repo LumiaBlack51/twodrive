@@ -307,11 +307,12 @@ impl App {
         self.network = Arc::default();
         Ok(())
     }
-    fn connect(&mut self, id: &str, cancel: &AtomicBool) -> anyhow::Result<Value> {
+    fn connect(&mut self, id: &str, cancel: Arc<AtomicBool>) -> anyhow::Result<Value> {
         let p = self.profile(id)?;
         self.disconnect()?;
         self.network = Arc::default();
-        let connection = providers::connect(&p, &self.args, cancel, self.network.clone())?;
+        let connection = providers::connect(&p, &self.args, &cancel, self.network.clone())?;
+        connection.backend.set_operation_cancel(cancel.clone());
         let entries = connection.backend.list_directory("/")?;
         ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
         self.state.save(
@@ -388,7 +389,7 @@ impl App {
         let mut value = serde_json::to_value(c).unwrap();
         value["backup"] = json!(c.backup());
         value["mount"] = json!(
-            self.backend.is_some()
+            self.backend.as_ref().is_some_and(|b| b.supports_mount())
                 && cfg!(all(target_os = "linux", feature = "mount"))
                 && (self.connected.as_ref().is_none_or(|p| !p.writable)
                     || (c.backup() && c.rename && c.delete))
@@ -552,7 +553,7 @@ impl App {
                 self.config = next;
                 Ok(json!({}))
             }
-            "connect" => self.connect(string(a, "id")?, &cancel),
+            "connect" => self.connect(string(a, "id")?, cancel),
             "disconnect" | "quit" => {
                 self.disconnect()?;
                 if req.op == "quit" {
@@ -732,6 +733,7 @@ impl App {
                     "连接配置已更新，请刷新后重新选择文件"
                 );
                 let backend = self.backend.as_ref().context("请先连接服务器")?;
+                backend.set_operation_cancel(cancel.clone());
                 ensure!(!cancel.load(Ordering::Relaxed), "操作已取消");
                 if req.op != "list" {
                     ensure!(
