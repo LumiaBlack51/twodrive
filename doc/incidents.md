@@ -2,7 +2,42 @@
 
 从 2026-09-15 起持续维护。每次故障新增条目，最近的条目放在前面；复发也单独记录并关联历史条目。请在下方最新记录区（[记录模板](#记录模板)之前）新增条目，保留模板后既有记录与分隔空行，避免重新占用旧分支共用的插入位置。维护流程见 [AGENTS.md](../AGENTS.md)。更早的调查保留在[文档索引](README.md#engineering-notes)，不追溯标记为已按本流程验证。
 
-本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
+本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
+
+## TD-20261107-07：可选 SMB 单元测试被通用桌面测试发现，缺少组件依赖
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：已修复并通过本地前后对照；新 head 的 hosted CI/Dot 待完成
+- 影响版本与环境：PR #59 的 `1edf3b9`；Linux 桌面 CI 和未安装可选 smbprotocol 的本地 Python
+- 关联历史故障：无；不是 SMB 协议或运行时连接错误
+
+### 症状与影响
+
+[Linux 桌面 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/42358173734/job/128360717712) 在 Desktop IPC and WebDAV operations 步骤失败。通用 discovery 共运行 32 项，其中 5 项 SMB 组件测试报 ModuleNotFoundError: smbprotocol，5 项平台测试按既有条件跳过。没有触及真实共享或现用程序。
+
+### 触发条件与复现
+
+在未安装 SMB 可选依赖的 Python 中运行 `python3 -m unittest discover -s scripts -p 'test_*.py'`。本地已复现同样的 5 个错误；专用 dev CI 已安装锁定的组件依赖，同批 7 项组件测试在 Linux/Windows 均通过。
+
+### 根因与证据
+
+新增测试放在通用 scripts discovery 范围内，但它属于需要 smbprotocol 的可选 dev 组件。通用桌面流程本身并不使用该组件，也没有安装其依赖；测试归属与依赖边界不一致。不是应将缺少依赖静默跳过的问题。
+
+### 解决办法与恢复操作
+
+将七项测试移至 dev 组件目录，调整相邻组件加载路径，并由已安装 requirements-smb.txt 的专用 Linux/Windows dev CI 显式执行。通用桌面 discovery 不增加可选依赖，也不屏蔽任何所属测试。无需修改产品协议实现或恢复用户状态。
+
+### 验证结果与边界
+
+旧布局已证实 5 项错误；修复后系统 Python（未安装 smbprotocol）通用 discovery 运行 25 项，20 项通过、5 项按既有平台条件跳过；私有 venv 安装 smbprotocol==1.17.0 后，移动后的七项组件测试全部通过。Debian policy 与 diff 检查通过；产品源码三项 SHA-256 与原协议验证一致，未重复构建。新 head 的 hosted CI/Dot 待完成；Windows CI 单元测试通过不能等同真实 Windows SMB 共享互通。
+
+### 防复发措施与后续
+
+保持可选组件测试和其依赖安装步骤位于同一专用 CI；同时保留无 SMB 依赖的通用 discovery 回归。
+
+### 交付记录
+
+本条随测试归属修复提交；最新提交与最终检查见 [PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 交付至 dev，等待新 head 的 CI/Dot，无 Release 或部署。
 
 ## TD-20261107-06：旧 Samba 透明跟随 Unix 链接绕过客户端子根范围
 

@@ -62,7 +62,7 @@ export TWODRIVE_SMB_PYTHON=/absolute/private/smb-venv/bin/python
 # 在这一环境启动候选 Development 桌面；不要运行现用安装器。
 ```
 
-Windows 同样需要 Python 3.10+ 的独立环境，设置 `TWODRIVE_SMB_PYTHON` 为该环境的 `Scripts/python.exe`。Windows 本轮没有构建或运行，不能据此宣称已兼容；凭据 ACL、进程回收及原生互通仍需 Windows 验收。本轮只修改 CI 配置，未推送或执行 hosted CI。
+Windows 同样需要 Python 3.10+ 的独立环境，设置 `TWODRIVE_SMB_PYTHON` 为该环境的 `Scripts/python.exe`。初次本地验收未在 Windows 构建或运行；后续 PR 已触发 hosted Windows 构建及七项组件单元测试，但这些不能宣称原生共享已兼容。凭据 ACL、进程回收及原生互通仍需 Windows 验收；最新 CI 状态见文末 PR。
 
 字段为服务器（不带 `smb://`、用户名或路径）、端口（默认 445）、共享名、共享内绝对根目录（默认 `/`）、用户名、域/工作组和密码。例如服务器 `127.0.0.1`、共享 `synthetic`、根 `/Documents`。这是格式示例，不会主动连接或扫描网络。
 
@@ -92,7 +92,7 @@ Windows 同样需要 Python 3.10+ 的独立环境，设置 `TWODRIVE_SMB_PYTHON`
 以下脚本自行产生/清理 fixture；需在 SMB venv 中执行，路径指向候选构建及私有 smbd：
 
 ```bash
-python scripts/test_smb_component.py
+python experiments/twodrive-dev/components/test_smb_component.py
 # 受控的较新测试服务器，明确记录非默认能力声明；不用于用户 NAS 配置。
 python scripts/test-smb-readonly.py --smbd /absolute/private/smbd22 \
   --engine /absolute/build/debug/twodrive-dav-engine \
@@ -105,7 +105,7 @@ python scripts/test-smb-readonly.py --smbd /absolute/private/usr/sbin/smbd \
 
 正向 13 组覆盖真实 SMB 3.1.1 加密 / SMB 2.1 强制签名、元数据/浅层目录、大小写别名、空/Unicode/128 MiB 文件内容、权限/密码拒绝、取消/断线/服务端本地截断无发布、已有文件保全、重连 binding、share/root 隔离及秘密不继承。在支持的服务器策略下，目录和最终文件链接均不可见或返回错误，未公开其目标；不将“服务端隐藏链接”当作客户端独立发现链接的证据。组件七项单元测试覆盖能力缺失拒绝、低层禁止跟随、危险名称、reparse/祖先句柄、时间表示及日志脱敏；Rust 合同覆盖全部后端写入口。
 
-真实 Windows 共享、实体 NAS、Active Directory/域认证、Kerberos、DFS/junction 互通、IPv6、独立网络、SMB 2.0.2/3.0/3.0.2 均未验证；mock/组件单元测试不代替这些互通结论。普通 FUSE 默认忽略测试、完整 GUI 桌面交互和 hosted CI 未执行。
+真实 Windows 共享、实体 NAS、Active Directory/域认证、Kerberos、DFS/junction 互通、IPv6、独立网络、SMB 2.0.2/3.0/3.0.2 均未验证；mock/组件单元测试不代替这些互通结论。普通 FUSE 默认忽略测试、完整 GUI 桌面交互未执行。hosted CI 属后续提交验证，状态见文末 PR。
 
 ## English
 
@@ -115,3 +115,5 @@ This local review candidate adds manual SMB2/3 read-only connections to the exis
 ## dev 提交与审查（2026-11-07）
 
 用户已授权提交至 dev，并要求清理本轮构建缓存/一次性脚本及等待 CI、Dot 意见。工作分支为 `codex/smb-readonly-20261107`，采用目标为 dev 的 PR 与必需检查流程；源码已提交为 [`7e600c6`](https://github.com/LumiaBlack51/twodrive/commit/7e600c6b7f1fc86492994c60f623cd476c77569c)，已推送并创建 [PR #59](https://github.com/LumiaBlack51/twodrive/pull/59)，目标 dev。最新 head 的 CI 与 Dot 审查仍待完成。用户要求的推送后清理已完成：本轮 target 缓存、候选调试程序、私有测试 venv/Samba 解包、一次性探针、日志与重复 patch 已移除；永久回归脚本和源码保留，其他工作目录与现用程序未动。此前本地验证结果不冒充 hosted CI。该授权不涉及 Release、现用程序替换或 SMB 写入阶段。
+
+首轮提交 `1edf3b9` 的 [Linux 桌面 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/42358173734/job/128360717712) 发现可选 SMB 测试被通用 discovery 收集，造成缺少依赖的五项错误（TD-20261107-07）。现将测试移至组件目录，由专用 dev CI 安装依赖后执行；未安装 SMB 的通用 discovery 现为 20 项通过、5 项平台跳过，私有 venv 的组件七项全部通过。协议实现未变。Dot 对 `1edf3b9` 的[静态审查](https://github.com/LumiaBlack51/twodrive/pull/59#issuecomment-6704871852) 未发现新的高置信度代码缺陷，要求等待最终 CI 并保留实验性服务器边界；修复后的 head 仍须重新检查 CI/Dot，不用旧审查代替。

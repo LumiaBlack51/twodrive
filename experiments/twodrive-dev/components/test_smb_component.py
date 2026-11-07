@@ -8,7 +8,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch, Mock
 
-spec = importlib.util.spec_from_file_location('smb_component', Path(os.environ.get('TWODRIVE_TEST_SMB_COMPONENT', Path(__file__).parents[1]/'experiments/twodrive-dev/components/smb_readonly.py')))
+spec = importlib.util.spec_from_file_location('smb_component', Path(os.environ.get('TWODRIVE_TEST_SMB_COMPONENT', Path(__file__).with_name('smb_readonly.py'))))
 component = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(component)
 

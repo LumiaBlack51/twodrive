@@ -1,7 +1,7 @@
 {
   "date": "2026-11-07",
   "timezone": "Asia/Shanghai",
-  "scope": "local isolated SMB read-only candidate; no push, PR, merge, release, installation or live user share access",
+  "scope": "isolated SMB read-only candidate and authorized PR 59 submission to dev; no release, installation or live user share access",
   "baseline": {
     "remote": "https://github.com/LumiaBlack51/twodrive.git",
     "dev": "f2d2ee40a1341f49b4f2f5d7280ee7df202be524",
@@ -234,6 +234,31 @@
     {
       "command": "candidate component with system Python lacking smbprotocol",
       "result": "passed negative check: redacted actionable component_missing"
+    },
+    {
+      "command": "python3 -m unittest discover -s scripts -p 'test_*.py' (before test relocation; no smbprotocol)",
+      "result": {
+        "expected_failure": true,
+        "ran": 32,
+        "errors": 5,
+        "skipped": 5
+      }
+    },
+    {
+      "command": "python3 -m unittest discover -s scripts -p 'test_*.py' (after test relocation; no smbprotocol)",
+      "result": {
+        "ran": 25,
+        "passed": 20,
+        "skipped": 5,
+        "failed": 0
+      }
+    },
+    {
+      "command": "private venv: python -m pip install --no-cache-dir -r experiments/twodrive-dev/components/requirements-smb.txt; python experiments/twodrive-dev/components/test_smb_component.py",
+      "result": {
+        "passed": 7,
+        "failed": 0
+      }
     }
   ],
   "build_policy": "separate target; CARGO_BUILD_JOBS=2, nice 15, ionice idle for initial/primary builds",
@@ -275,6 +300,11 @@
     },
     {
       "result": "Samba 4.22 local runtime required private matching LDAP/ICU/LDB libraries; downloaded official packages and verified hashes, no system installation or apt-source changes"
+    },
+    {
+      "incident": "TD-20261107-07",
+      "commit": "1edf3b9652e52ca68298f0b90fbf2ae955171d2e",
+      "result": "Linux desktop generic discovery picked up optional SMB tests and failed with 5 missing-smbprotocol errors; reproduced locally. Tests relocated to their dev component and explicit dependency-owning CI; generic discovery now passes without optional dependency. Protocol sources unchanged."
     }
   ],
   "unverified": [
@@ -289,7 +319,7 @@
     "real user cloud or NAS data",
     "desktop mouse interaction and full GUI build",
     "normally ignored root FUSE cases",
-    "hosted CI and release packaging (not requested/authorized)",
+    "release/deployment not requested; latest hosted CI tracked separately under submission",
     "Active Directory/domain authentication",
     "stock Samba positive transfers (intentionally refused)",
     "servers that falsely advertise capabilities or transparently follow Unix links (unsupported)"
@@ -301,7 +331,8 @@
     "TD-20261107-03",
     "TD-20261107-04",
     "TD-20261107-05",
-    "TD-20261107-06"
+    "TD-20261107-06",
+    "TD-20261107-07"
   ],
   "review_binaries": {
     "kind": "local debug candidates, not installed/released",
@@ -329,9 +360,14 @@
     "authorized_date": "2026-11-07",
     "target": "dev",
     "branch": "codex/smb-readonly-20261107",
-    "status": "pushed and PR open; current-head CI/Dot review pending",
+    "status": "test ownership CI failure fixed locally; corrected head CI/Dot review pending; final authoritative status at PR 59",
     "commit": "7e600c6b7f1fc86492994c60f623cd476c77569c",
     "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/59",
-    "release_or_deployment": "not requested; existing program unchanged"
+    "release_or_deployment": "not requested; existing program unchanged",
+    "prior_review": {
+      "commit": "1edf3b9652e52ca68298f0b90fbf2ae955171d2e",
+      "url": "https://github.com/LumiaBlack51/twodrive/pull/59#issuecomment-6704871852",
+      "result": "Dot static review: no new high-confidence actionable defect; await final applicable CI and retain narrow experimental server boundary. Not executed tests."
+    }
   }
 }
