@@ -63,6 +63,60 @@ fn unsupported_graph_names_fail_before_network_io() {
 }
 
 #[test]
+fn invalid_rename_and_folder_names_are_rejected_before_authentication_or_network() {
+    use twodrive_core::{AppPaths, TokenData, TokenStore};
+    let root = std::env::temp_dir().join(format!(
+        "td-name-preflight-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let paths = AppPaths {
+        config_dir: root.clone(),
+        config_path: root.join("config.toml"),
+        data_dir: root.clone(),
+        cache_dir: root.join("cache"),
+        db_path: root.join("db"),
+        mount_dir: root.join("mount"),
+        token_path: root.join("tokens.json"),
+    };
+    TokenStore::new(&paths.token_path)
+        .save(&TokenData {
+            access_token: "synthetic-expired".into(),
+            refresh_token: None,
+            expires_at_unix: 0,
+        })
+        .unwrap();
+    let graph = GraphBackend::from_paths(&paths).unwrap();
+    for path in [
+        "/Draft: proposal.docx",
+        "/folder?/proposal.docx",
+        "/bad*/file",
+        "/bad|name",
+        "/bad\u{0001}name",
+    ] {
+        for error in [
+            graph.rename("synthetic-id", path).unwrap_err(),
+            graph.create_folder(path).unwrap_err(),
+        ] {
+            assert!(
+                error.to_string().contains("unsupported OneDrive file name"),
+                "{error}"
+            );
+        }
+    }
+    for path in ["/Draft： proposal.docx", "/literal%3a.docx", "/valid.docx"] {
+        assert!(
+            graph
+                .rename("synthetic-id", path)
+                .unwrap_err()
+                .to_string()
+                .contains("access token expired")
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn graph_move_resolves_the_parent_item_instead_of_sending_a_path() {
     assert_eq!(
         graph_parent_lookup_url("/"),

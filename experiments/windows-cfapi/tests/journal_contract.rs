@@ -38,12 +38,15 @@ fn paths(root: &Path) -> (Database, PathBuf, PathBuf) {
     )
 }
 fn fixture() -> (tempfile::TempDir, CacheJournal, PathBuf) {
+    fixture_at("/generated.txt")
+}
+fn fixture_at(cloud_path: &str) -> (tempfile::TempDir, CacheJournal, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let (db, root, path) = paths(temp.path());
     db.init().unwrap();
     db.upsert_metadata(&MetadataEntry::new_file(
         ID,
-        "/generated.txt",
+        cloud_path,
         ORIGINAL.len() as u64,
         1,
         "version-1",
@@ -61,6 +64,17 @@ fn edit(j: &CacheJournal) {
     writer.set_len(0).unwrap();
     writer.write_all(EDITED).unwrap();
     writer.finish().unwrap();
+}
+
+#[test]
+fn retired_cache_cleanup_cannot_bypass_a_native_journal_reference() {
+    let (_temp, j, path) = fixture();
+    edit(&j);
+    // Model a stale legacy metadata mutation. The native journal remains the
+    // durable owner even when the ordinary files row loses its cache pointer.
+    j.database().mark_online_only(ID).unwrap();
+    assert!(!j.database().remove_unreferenced_cache(&path).unwrap());
+    assert_eq!(fs::read(path).unwrap(), EDITED);
 }
 fn receipt() -> MetadataEntry {
     MetadataEntry::new_file(ID, "/generated.txt", EDITED.len() as u64, 2, "version-2")
@@ -157,15 +171,16 @@ fn only_current_generation_and_verified_receipt_can_acknowledge() {
 fn pending_delete_and_parent_move_veto_release() {
     let (_temp, j, path) = fixture();
     j.database()
-        .queue_remote_delete(ID, "/generated.txt")
+        .queue_remote_delete("retired-previous-cloud-object", "/generated.txt")
         .unwrap();
     assert!(j.snapshot(ID).unwrap().pending_operations);
     assert!(j.with_clean_cache(ID, 0, |_, _| Ok(())).unwrap().is_none());
     assert_eq!(fs::read(path).unwrap(), ORIGINAL);
-    let (_temp, j, _) = fixture();
+    let (_temp, j, _) = fixture_at("/parent/generated.txt");
     j.database()
-        .upsert_metadata(&MetadataEntry::new_dir("parent", "/", 1, "parent-v1"))
+        .upsert_metadata(&MetadataEntry::new_dir("parent", "/parent", 1, "parent-v1"))
         .unwrap();
+    assert!(!j.snapshot(ID).unwrap().pending_operations);
     j.database()
         .move_subtree_and_queue("parent", "/moved")
         .unwrap();

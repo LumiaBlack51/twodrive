@@ -70,11 +70,18 @@ impl InodeTable {
         };
         let mut children = Vec::with_capacity(records.len());
         for record in records {
-            let ino = self.ino_for_path(&record.metadata.path).unwrap_or_else(|| {
-                let ino = self.next_ino;
-                self.next_ino += 1;
-                ino
-            });
+            let ino = self
+                .ino_for_path(&record.metadata.path)
+                .filter(|ino| {
+                    self.record_by_ino.get(ino).is_some_and(|cached| {
+                        cached.metadata.remote_id == record.metadata.remote_id
+                    })
+                })
+                .unwrap_or_else(|| {
+                    let ino = self.next_ino;
+                    self.next_ino += 1;
+                    ino
+                });
             self.path_by_ino.insert(ino, record.metadata.path.clone());
             self.ino_by_path.insert(record.metadata.path.clone(), ino);
             self.record_by_ino.insert(ino, record.clone());
@@ -112,7 +119,11 @@ impl InodeTable {
     }
 
     pub(crate) fn insert_or_update(&mut self, record: FileRecord) -> u64 {
-        if let Some(ino) = self.ino_for_path(&record.metadata.path) {
+        if let Some(ino) = self.ino_for_path(&record.metadata.path).filter(|ino| {
+            self.record_by_ino
+                .get(ino)
+                .is_some_and(|cached| cached.metadata.remote_id == record.metadata.remote_id)
+        }) {
             self.replace_ino_record(ino, record);
             return ino;
         }
@@ -137,7 +148,9 @@ impl InodeTable {
             if let Some(children) = self.children_by_parent_ino.get_mut(&previous_parent) {
                 children.retain(|(child_ino, _)| *child_ino != ino);
             }
-            self.ino_by_path.remove(&previous_path);
+            if self.ino_by_path.get(&previous_path) == Some(&ino) {
+                self.ino_by_path.remove(&previous_path);
+            }
         }
         self.ino_by_path.insert(record.metadata.path.clone(), ino);
         self.record_by_ino.insert(ino, record.clone());
@@ -162,7 +175,9 @@ impl InodeTable {
     }
 
     pub(crate) fn remove_ino(&mut self, ino: u64) {
-        if let Some(path) = self.path_by_ino.remove(&ino) {
+        if let Some(path) = self.path_by_ino.remove(&ino)
+            && self.ino_by_path.get(&path) == Some(&ino)
+        {
             self.ino_by_path.remove(&path);
         }
         self.record_by_ino.remove(&ino);
@@ -181,6 +196,7 @@ impl InodeTable {
             .filter_map(|(ino, _)| {
                 self.record_by_ino
                     .get(ino)
+                    .filter(|record| self.ino_by_path.get(&record.metadata.path) == Some(ino))
                     .cloned()
                     .map(|record| (*ino, record))
             })

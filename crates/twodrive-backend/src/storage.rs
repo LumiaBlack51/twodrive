@@ -8,6 +8,17 @@ pub trait CloudBackend: Send + Sync + 'static {
         crate::onedrive::is_conflict_error(error)
     }
 
+    /// A missing data endpoint can require reconciliation of a bound upload.
+    /// Authentication failures must not be mistaken for remote deletions.
+    fn is_not_found_error(&self, error: &anyhow::Error) -> bool {
+        error
+            .downcast_ref::<crate::diagnostics::RequestFailure>()
+            .is_some_and(|failure| {
+                failure.status == 404
+                    && failure.operation == crate::diagnostics::RequestOperation::Graph
+            })
+    }
+
     fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>>;
     fn get_metadata(&self, remote_id: &str) -> anyhow::Result<Option<MetadataEntry>> {
         Ok(self

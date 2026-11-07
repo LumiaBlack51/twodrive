@@ -16,7 +16,8 @@ use twodrive_core::{Database, FileRecord, FileState, join_cloud_path};
 
 use crate::activity::{ActivityGuard, clear_activity_file};
 use crate::cache_io::{
-    has_existing_cache, read_slice, sanitize_cache_name, unique_suffix, write_slice,
+    download_cache_path, has_existing_cache, read_slice, reconcile_cached_record,
+    sanitize_cache_name, unique_suffix, write_slice,
 };
 use crate::conflicts::record_upload_etag;
 use crate::hydration::{hydrate_generation, hydrate_record};
@@ -80,7 +81,16 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             return None;
         }
 
-        self.inodes.record_for_ino(ino).cloned()
+        let cached = self.inodes.record_for_ino(ino)?;
+        // Background workers can retire a row without updating this table.
+        // A path occupied by another identity must never revive the old inode.
+        match self.db.get_by_remote_id(&cached.metadata.remote_id) {
+            Ok(record) => record,
+            Err(err) => {
+                eprintln!("twodrive refresh inode error: {err:#}");
+                Some(cached.clone())
+            }
+        }
     }
 
     pub(crate) fn attr_for_ino(&self, ino: u64) -> Option<FileAttr> {
@@ -89,21 +99,37 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         }
 
         if let Some(record) = self.record_for_ino(ino) {
+            // Writers publish size in memory before close; clean files may
+            // have received new cloud metadata without a directory listing.
+            let record = if self.write_handles.values().any(|handle| handle.ino == ino) {
+                self.inodes.record_for_ino(ino).cloned().unwrap_or(record)
+            } else {
+                record
+            };
             return Some(attr_for_record(ino, &record));
         }
 
         // Atomic replacement removes the old directory entry, not an open
         // descriptor. Poppler calls fstat on that descriptor on later saves.
         for handle in self.read_handles.values() {
-            if handle.ino == ino && handle.unlinked {
+            if handle.ino == ino {
                 let mut attr = handle.open_attr;
                 attr.nlink = 0;
+                // In-place saves may have changed the cached file since open.
+                // Never block this dispatcher on a deferred network download.
+                if let Ok(guard) = handle._cache_guard.try_lock()
+                    && let Some(file) = guard.as_ref()
+                    && let Ok(metadata) = file.metadata()
+                {
+                    attr.size = metadata.len();
+                    attr.blocks = attr.size.div_ceil(512);
+                }
                 return Some(attr);
             }
         }
         self.write_handles
             .values()
-            .find(|handle| handle.ino == ino && handle.unlinked)
+            .find(|handle| handle.ino == ino)
             .and_then(|handle| unlinked_file_attr(ino, &handle._cache_guard))
     }
 
@@ -123,7 +149,6 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .get_by_remote_id(&record.metadata.remote_id)
             .ok()
             .flatten()
-            .or_else(|| self.db.get_by_path(&record.metadata.path).ok().flatten())
             .unwrap_or_else(|| record.clone())
     }
 
@@ -168,6 +193,7 @@ struct WriteHandle {
     _cache_guard: fs::File,
     activity: Option<ActivityGuard>,
     uploaded: bool,
+    changed: bool,
     created_new_record: bool,
     unlinked: bool,
     base_etag: Option<String>,
@@ -175,6 +201,17 @@ struct WriteHandle {
 
 pub(crate) const ROOT_INO: u64 = 1;
 pub(crate) const TTL: Duration = Duration::from_secs(30);
+
+fn attribute_ttl(attr: &FileAttr) -> Duration {
+    // Background imports cannot notify this dispatcher's inode table. Fresh
+    // file attributes prevent cached i_size from truncating a remote version.
+    // Normal open replies (without KEEP_CACHE) also discard old data pages.
+    if attr.kind == FileType::RegularFile {
+        Duration::ZERO
+    } else {
+        TTL
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FilesystemStats {

@@ -63,7 +63,35 @@
   "cleanup": {
     "office_fixture_processes_and_roots_cleaned": true,
     "live_cloud_validation_scope_cleaned": true,
-    "earlier_unregistered_generated_files_and_disposable_old_login_copy": "retained after automatic tool safety review rejected cleanup, including narrowed deletion",
-    "build_caches": "pending final CI and cleanup"
+    "earlier_unregistered_generated_files_and_disposable_old_login_copy": "moved to Recycle Bin after user authorization; 8 directories verified there",
+    "build_caches": "earlier caches recycled; a new scoped validation build exists for the Linux recovery port and will be recycled after checks",
+    "office_bytecode_and_test_binaries_recycled": {
+      "directories": 3,
+      "files": 2
+    }
+  },
+  "linux_recovery_port": {
+    "source_commit": "a64ce65c8282398aafa79e66f8279b518e8d6e1c",
+    "scope": "selected core/fs/backend storage fixes and tests; no whole main merge, package/version changes or known-folder throttling port",
+    "linux_default_tests": {
+      "backend": 54,
+      "backend_contract": 2,
+      "core": 56,
+      "filesystem": 75,
+      "environment_tests_ignored_in_default_run": 11
+    },
+    "explicit_mock_fuse_tests": {
+      "passed": 11,
+      "first_attempt": {
+        "passed": 9,
+        "failed_due_to_setup": 2
+      },
+      "corrected_tests": "unprivileged permission oracle and explicit built CLI"
+    },
+    "native_journal_tests": 18,
+    "new_native_reference_cleanup_veto": true,
+    "native_source_mtime_preserved": true,
+    "windows_fixture_drop_order_regression": true,
+    "full_cfapi_takeover": false
   }
 }

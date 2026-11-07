@@ -172,10 +172,12 @@ impl Provider for MockProvider {
 }
 
 struct Fixture {
-    _temp: tempfile::TempDir,
     db: Database,
     cache: PathBuf,
     bridge: LocalFileBridge,
+    // Fields drop in declaration order. Release Windows no-delete-sharing
+    // owner/directory handles before TempDir attempts its cleanup.
+    _temp: tempfile::TempDir,
 }
 fn fixture(provider: &MockProvider) -> Fixture {
     let temp = tempfile::tempdir().unwrap();
@@ -196,6 +198,19 @@ fn fixture(provider: &MockProvider) -> Fixture {
         cache,
         bridge,
     }
+}
+
+#[test]
+fn fixture_releases_native_owner_before_temporary_directory_cleanup() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    let root = f._temp.path().to_path_buf();
+    drop(f);
+    assert!(
+        !root.exists(),
+        "generated fixture was not cleaned: {}",
+        root.display()
+    );
 }
 fn edit(bridge: &LocalFileBridge) {
     let mut file = bridge.edit(OBJECT).unwrap();
@@ -456,7 +471,19 @@ fn native_read_edit_capture_upload_preserves_complete_bytes() {
     let result = (|| -> anyhow::Result<()> {
         assert_eq!(fs::read(&path)?, INITIAL);
         fs::write(&path, &edited)?;
+        let source_modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_042);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)?
+            .set_times(std::fs::FileTimes::new().set_modified(source_modified))?;
         let generation = f.bridge.capture_native_edit(&path, OBJECT)?;
+        assert_eq!(
+            f.db.get_by_remote_id(OBJECT)?
+                .unwrap()
+                .metadata
+                .modified_unix,
+            1_700_000_042
+        );
         assert_eq!(bytes(&f.bridge), edited);
         assert!(!f.bridge.engine_release_ready(OBJECT, generation)?);
         assert!(f.bridge.upload(OBJECT, no_progress())?);

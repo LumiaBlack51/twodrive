@@ -115,9 +115,17 @@ impl LocalFileBridge {
             cloud_id.as_bytes(),
             usize::try_from(record.metadata.size)?,
             |locked| {
+                let modified = locked.modified_time()?;
                 let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
                     .map_err(|e| e.to_string())?;
                 let size = locked.copy_resident_to(temporary.as_file_mut())?;
+                if modified != locked.modified_time()? {
+                    return Err("native source timestamp changed during capture".into());
+                }
+                temporary
+                    .as_file()
+                    .set_times(std::fs::FileTimes::new().set_modified(modified))
+                    .map_err(|e| e.to_string())?;
                 temporary.as_file().sync_all().map_err(|e| e.to_string())?;
                 // Keep the owned file on any commit error: it contains user edits,
                 // and must not be mistaken for a disposable download cache.

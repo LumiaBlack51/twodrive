@@ -29,6 +29,17 @@ See [folder moves](folder-move-sync-2026-09-11.md),
 [PDF mtime](pdf-save-reliability-2026-09-09.md), and
 [journal bridge](windows-local-journal-2026-10-21.md).
 
+The shared core/fs/backend storage changes through Linux main `a64ce65` were
+subsequently ported into this development worktree: untouched writable-open
+handling, cloud cache-version invalidation, retired-cache references and trash
+retention, missing-remote conflict recovery, and upload/rename identity ordering.
+This is a selected source port, not a merge of stable releases or unrelated
+known-folder throttling. Existing native journal guards were retained, and the
+new retired-cache removal path additionally respects native journal references.
+Linux backend/core/fs default tests and all eleven explicit mock FUSE checks
+passed; Windows native journal tests passed. These establish shared recovery
+behavior, not completed CFAPI create/rename/delete callbacks.
+
 ## Migration constraints
 
 The current user's read-only metadata inventory contains roughly 12,700 files,

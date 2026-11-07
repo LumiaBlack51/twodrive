@@ -218,21 +218,34 @@ impl Database {
         target_local_id: &str,
         new_path: &str,
     ) -> anyhow::Result<FileRecord> {
+        let new_path = normalize_cloud_path(new_path);
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Read both identities under the write transaction: a delta or upload
+        // acknowledgement must not change the replacement preconditions.
         let source = self
-            .get_by_remote_id(source_local_id)?
+            .query_record(&tx,
+                "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
+                params![source_local_id])?
             .ok_or_else(|| anyhow::anyhow!("replacement source disappeared"))?;
         let target = self
-            .get_by_remote_id(target_local_id)?
+            .query_record(&tx,
+                "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
+                params![target_local_id])?
             .ok_or_else(|| anyhow::anyhow!("replacement target disappeared"))?;
         if source.metadata.is_dir || target.metadata.is_dir {
             anyhow::bail!("cannot replace a directory as a file");
         }
-        let new_path = normalize_cloud_path(new_path);
-        let mut conn = self.connect()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(target.metadata.path == new_path, "replacement target moved");
+        if source_local_id == target_local_id {
+            // Preserve content, state, upload claims and pending metadata jobs.
+            return Ok(target);
+        }
+        // An atomic save replaces the target's bytes, not its cloud identity or
+        // destination. Keep its pending rename; only the source job is obsolete.
         tx.execute(
-            "DELETE FROM pending_metadata_operations WHERE local_id IN (?1, ?2)",
-            params![source_local_id, target_local_id],
+            "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
+            params![source_local_id],
         )?;
         if let Some(source_cloud_id) = source
             .cloud_remote_id
@@ -248,11 +261,20 @@ impl Database {
                 params![source_cloud_id, source.metadata.path, now_unix()],
             )?;
         }
-        tx.execute(
+        let removed = tx.execute(
             "DELETE FROM files WHERE remote_id = ?1",
             params![source_local_id],
         )?;
-        tx.execute(
+        anyhow::ensure!(removed == 1, "replacement source was not removed");
+        if target.cache_path != source.cache_path
+            && let Some(path) = &target.cache_path
+        {
+            tx.execute(
+                "INSERT OR IGNORE INTO retired_cache(cache_path) VALUES (?1)",
+                params![path.to_string_lossy()],
+            )?;
+        }
+        let updated = tx.execute(
             r#"
             UPDATE files
             SET path = ?1,
@@ -282,6 +304,7 @@ impl Database {
                 source.local_mode,
             ],
         )?;
+        anyhow::ensure!(updated == 1, "replacement target was not updated");
         tx.commit()?;
         self.recompute_pin_inheritance()?;
         self.get_by_remote_id(target_local_id)?
@@ -363,31 +386,6 @@ impl Database {
         }
         tx.commit()?;
         Ok(still_current)
-    }
-
-    pub(super) fn move_descendants(&self, old_path: &str, new_path: &str) -> anyhow::Result<()> {
-        let descendants = self.list_descendants(old_path)?;
-        if descendants.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.connect()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for record in descendants {
-            let suffix = record
-                .metadata
-                .path
-                .strip_prefix(old_path)
-                .ok_or_else(|| anyhow::anyhow!("descendant path lost its parent prefix"))?;
-            let path = normalize_cloud_path(&format!("{new_path}{suffix}"));
-            let parent_path = parent_cloud_path(&path);
-            let name = cloud_name(&path);
-            tx.execute(
-                "UPDATE files SET path = ?1, parent_path = ?2, name = ?3 WHERE remote_id = ?4",
-                params![path, parent_path, name, record.metadata.remote_id],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
     }
 
     // Re-read under a write transaction: the caller's snapshot may predate a save.
@@ -502,11 +500,14 @@ impl Database {
     }
 
     pub fn queue_remote_delete(&self, cloud_remote_id: &str, path: &str) -> anyhow::Result<()> {
+        // Cleanup of an obsolete upload acknowledgement is not a user unlink.
+        // A live record may already have adopted the returned cloud identity.
         let conn = self.connect()?;
         conn.execute(
             r#"
             INSERT INTO pending_deletes(remote_id, cloud_remote_id, path, cache_path, queued_unix)
-            VALUES (?1, ?1, ?2, NULL, ?3)
+            SELECT ?1, ?1, ?2, NULL, ?3
+            WHERE NOT EXISTS (SELECT 1 FROM files WHERE cloud_remote_id = ?1)
             ON CONFLICT(remote_id) DO UPDATE SET cloud_remote_id = excluded.cloud_remote_id,
                 path = excluded.path, queued_unix = excluded.queued_unix
             "#,

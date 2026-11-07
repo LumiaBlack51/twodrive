@@ -49,6 +49,9 @@ impl Database {
                 path TEXT NOT NULL,
                 queued_unix INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS retired_cache (
+                cache_path TEXT PRIMARY KEY
+            );
             "#,
         )?;
         ensure_column(

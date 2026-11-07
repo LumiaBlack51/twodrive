@@ -84,6 +84,163 @@ fn add_file(db: &Database, id: &str, path: &str) {
 }
 
 #[test]
+fn missing_conflict_copy_rejection_keeps_the_original_generation_and_claim() {
+    let test = TestDatabase::new("missing-conflict-rollback");
+    add_file(&test.db, "old", "/edit.txt");
+    let cache = test.root.join("edit");
+    fs::write(&cache, b"edit").unwrap();
+    test.db.mark_cached("old", &cache).unwrap();
+    test.db.mark_state("old", FileState::Conflict).unwrap();
+    let original = test.db.get_by_remote_id("old").unwrap().unwrap();
+    let copy = MetadataEntry::new_file("copy", "/recovered.txt", 4, 2, "etag-copy");
+    assert!(
+        test.db
+            .begin_conflict_upload(&original, &copy.path, &cache)
+            .unwrap()
+    );
+    let conn = Connection::open(test.db.path()).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER reject_recovery_copy BEFORE INSERT ON files
+        WHEN NEW.remote_id = 'copy' BEGIN SELECT RAISE(IGNORE); END;",
+    )
+    .unwrap();
+    assert!(
+        test.db
+            .complete_missing_conflict_upload(&original, &copy, &cache)
+            .is_err()
+    );
+    assert!(test.db.get_by_remote_id("copy").unwrap().is_none());
+    let kept = test.db.get_by_remote_id("old").unwrap().unwrap();
+    assert_eq!(kept.state, FileState::Conflict);
+    assert_eq!(kept.cache_path.as_deref(), Some(cache.as_path()));
+    let claim: String = conn
+        .query_row(
+            "SELECT upload_path FROM files WHERE remote_id = 'old'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(claim, copy.path);
+    assert_eq!(fs::read(&cache).unwrap(), b"edit");
+    conn.execute_batch("DROP TRIGGER reject_recovery_copy;")
+        .unwrap();
+    assert!(
+        test.db
+            .complete_missing_conflict_upload(&original, &copy, &cache)
+            .unwrap()
+    );
+    assert!(test.db.get_by_remote_id("old").unwrap().is_none());
+    assert_eq!(
+        test.db.get_by_remote_id("copy").unwrap().unwrap().state,
+        FileState::Cached
+    );
+}
+
+#[test]
+fn atomic_save_into_a_renamed_file_keeps_the_pending_cloud_move() {
+    let test = TestDatabase::new("replace-renamed-target");
+    add_file(&test.db, "target", "/old.txt");
+    test.db
+        .move_subtree_and_queue("target", "/final.txt")
+        .unwrap();
+    let cache = test.root.join("new-edit");
+    fs::write(&cache, b"latest saved bytes").unwrap();
+    test.db
+        .create_local_file("local-upload-temp", "/.save-temp", &cache)
+        .unwrap();
+    test.db
+        .mark_dirty_with_size("local-upload-temp", 18)
+        .unwrap();
+    let replaced = test
+        .db
+        .replace_file_locally("local-upload-temp", "target", "/final.txt")
+        .unwrap();
+    assert_eq!(replaced.cloud_remote_id.as_deref(), Some("target"));
+    let reopened = Database::new(test.db.path());
+    reopened.init().unwrap();
+    let pending = reopened
+        .pending_metadata_operation("target")
+        .unwrap()
+        .expect("saving a renamed file must not cancel its cloud move");
+    assert_eq!(pending.kind, PendingMetadataKind::Move);
+    assert_eq!(pending.path, "/final.txt");
+    assert_eq!(
+        fs::read(replaced.cache_path.unwrap()).unwrap(),
+        b"latest saved bytes"
+    );
+}
+
+#[test]
+fn retired_remote_versions_wait_for_references_and_file_locks_across_restart() {
+    let test = TestDatabase::new("retired-cache");
+    let cache_dir = test.root.join("cache");
+    fs::create_dir(&cache_dir).unwrap();
+    let old = cache_dir.join("old-version");
+    let unknown = cache_dir.join("untracked-recovery");
+    fs::write(&old, b"old!").unwrap();
+    fs::write(&unknown, b"untracked user content").unwrap();
+    add_file(&test.db, "cloud", "/file");
+    test.db.mark_cached("cloud", &old).unwrap();
+    let guard = fs::File::open(&old).unwrap();
+    guard.lock_shared().unwrap();
+    test.db
+        .upsert_metadata(&MetadataEntry::new_file("cloud", "/file", 5, 2, "new-etag"))
+        .unwrap();
+    assert!(
+        test.db
+            .get_by_path("/file")
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .is_none()
+    );
+    let restarted = Database::new(test.db.path());
+    restarted.init().unwrap();
+    assert_eq!(restarted.prune_retired_cache(&cache_dir).unwrap(), 0);
+    drop(guard);
+    let conn = Connection::open(test.db.path()).unwrap();
+    conn.execute(
+        "UPDATE files SET upload_cache_path=?1 WHERE remote_id='cloud'",
+        [&old.to_string_lossy()],
+    )
+    .unwrap();
+    assert_eq!(restarted.prune_retired_cache(&cache_dir).unwrap(), 0);
+    conn.execute("UPDATE files SET upload_cache_path=NULL", [])
+        .unwrap();
+    conn.execute("INSERT INTO pending_deletes(remote_id,path,cache_path,queued_unix) VALUES ('pending','/pending',?1,1)", [&old.to_string_lossy()]).unwrap();
+    assert_eq!(restarted.prune_retired_cache(&cache_dir).unwrap(), 0);
+    conn.execute("DELETE FROM pending_deletes", []).unwrap();
+    assert_eq!(restarted.prune_retired_cache(&cache_dir).unwrap(), 1);
+    assert!(!old.exists());
+    assert_eq!(fs::read(&unknown).unwrap(), b"untracked user content");
+    assert_eq!(restarted.prune_retired_cache(&cache_dir).unwrap(), 0);
+}
+
+#[test]
+fn retired_cache_cannot_remove_a_reused_current_generation_or_outside_file() {
+    let test = TestDatabase::new("retired-cache-reuse");
+    let cache_dir = test.root.join("cache");
+    fs::create_dir(&cache_dir).unwrap();
+    let cache = cache_dir.join("cache");
+    let outside = test.root.join("outside");
+    fs::write(&cache, b"data").unwrap();
+    fs::write(&outside, b"private").unwrap();
+    add_file(&test.db, "current", "/current");
+    test.db.mark_cached("current", &cache).unwrap();
+    let conn = Connection::open(test.db.path()).unwrap();
+    for path in [&cache, &outside] {
+        conn.execute(
+            "INSERT INTO retired_cache(cache_path) VALUES (?1)",
+            [path.to_string_lossy()],
+        )
+        .unwrap();
+    }
+    assert_eq!(test.db.prune_retired_cache(&cache_dir).unwrap(), 0);
+    assert_eq!(fs::read(&cache).unwrap(), b"data");
+    assert_eq!(fs::read(&outside).unwrap(), b"private");
+}
+
+#[test]
 fn deletion_claim_reads_latest_cloud_binding_and_migrates_idempotently() {
     let test = TestDatabase::new("delete-cloud-binding");
     let cache = test.root.join("cache");
@@ -848,6 +1005,118 @@ fn failed_metadata_write_does_not_block_another_clone() {
 }
 
 #[test]
+fn self_replacement_preserves_cached_content_upload_claim_and_pending_move() {
+    let test = TestDatabase::new("self-replacement");
+    let id = "cloud-source";
+    let cache = test.root.join("source.cache");
+    fs::write(&cache, b"saved").unwrap();
+    add_file(&test.db, id, "/source");
+    test.db.mark_cached(id, &cache).unwrap();
+    test.db.mark_dirty_with_size(id, 5).unwrap();
+    test.db.set_local_mode(id, 0o750).unwrap();
+    assert!(
+        test.db
+            .begin_upload(&test.db.get_by_remote_id(id).unwrap().unwrap())
+            .unwrap()
+    );
+    test.db.move_subtree_and_queue(id, "/moved").unwrap();
+    let before = test.db.get_by_remote_id(id).unwrap().unwrap();
+    let operation = test.db.pending_metadata_operation(id).unwrap().unwrap();
+
+    let after = test.db.replace_file_locally(id, id, "/moved").unwrap();
+
+    assert_eq!(after.metadata.path, before.metadata.path);
+    assert_eq!(after.metadata.size, before.metadata.size);
+    assert_eq!(after.metadata.etag, before.metadata.etag);
+    assert_eq!(after.cloud_remote_id, before.cloud_remote_id);
+    assert_eq!(after.cache_path, before.cache_path);
+    assert_eq!(after.state, FileState::Uploading);
+    assert_eq!(after.local_mode, Some(0o750));
+    let retained = test.db.pending_metadata_operation(id).unwrap().unwrap();
+    assert_eq!(retained.kind, operation.kind);
+    assert_eq!(retained.path, operation.path);
+    assert_eq!(retained.queued_unix, operation.queued_unix);
+    let claim: (String, String, String) = Connection::open(test.db.path()).unwrap().query_row(
+        "SELECT upload_path, upload_target_id, upload_cache_path FROM files WHERE remote_id = ?1",
+        [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        claim,
+        (
+            "/source".into(),
+            id.into(),
+            cache.to_string_lossy().into_owned()
+        )
+    );
+    assert!(test.db.pending_deletes().unwrap().is_empty());
+    assert_eq!(fs::read(&cache).unwrap(), b"saved");
+}
+
+#[test]
+fn replacement_rejects_a_target_that_has_moved_without_changing_records() {
+    let test = TestDatabase::new("replacement-moved-target");
+    add_file(&test.db, "source", "/source");
+    add_file(&test.db, "target", "/target");
+    test.db
+        .move_subtree_and_queue("target", "/elsewhere")
+        .unwrap();
+
+    assert!(
+        test.db
+            .replace_file_locally("source", "target", "/target")
+            .is_err()
+    );
+
+    assert!(test.db.get_by_path("/source").unwrap().is_some());
+    assert!(test.db.get_by_path("/elsewhere").unwrap().is_some());
+    assert!(test.db.get_by_path("/target").unwrap().is_none());
+    assert_eq!(
+        test.db
+            .pending_metadata_operation("target")
+            .unwrap()
+            .unwrap()
+            .path,
+        "/elsewhere"
+    );
+    assert!(test.db.pending_deletes().unwrap().is_empty());
+}
+
+#[test]
+fn replacement_rolls_back_source_deletion_when_target_update_is_ignored() {
+    let test = TestDatabase::new("replacement-update-ignored");
+    add_file(&test.db, "source", "/source");
+    add_file(&test.db, "target", "/target");
+    test.db
+        .move_subtree_and_queue("source", "/moved-source")
+        .unwrap();
+    Connection::open(test.db.path())
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER ignore_target_update BEFORE UPDATE ON files
+         WHEN OLD.remote_id = 'target' BEGIN SELECT RAISE(IGNORE); END;",
+        )
+        .unwrap();
+
+    assert!(
+        test.db
+            .replace_file_locally("source", "target", "/target")
+            .is_err()
+    );
+
+    assert!(test.db.get_by_path("/moved-source").unwrap().is_some());
+    assert!(test.db.get_by_path("/target").unwrap().is_some());
+    assert_eq!(
+        test.db
+            .pending_metadata_operation("source")
+            .unwrap()
+            .unwrap()
+            .path,
+        "/moved-source"
+    );
+    assert!(test.db.pending_deletes().unwrap().is_empty());
+}
+
+#[test]
 fn local_permissions_survive_cloud_updates_release_and_replacement() {
     let test = TestDatabase::new("local-permissions");
     let cache = test.root.join("program.cache");
@@ -909,6 +1178,138 @@ fn local_permissions_survive_cloud_updates_release_and_replacement() {
     assert_eq!(
         test.db.get_by_path("/program").unwrap().unwrap().local_mode,
         None
+    );
+}
+
+#[test]
+fn remote_content_updates_detach_cached_bytes_and_cancel_old_downloads() {
+    for batch in [false, true] {
+        for pinned in [false, true] {
+            for (size, etag) in [(3, "v2"), (9, "v2"), (6, "v2"), (3, "v1")] {
+                let test = TestDatabase::new("remote-cache-version");
+                let original = MetadataEntry::new_file("cloud", "/slides.pptx", 6, 1, "v1");
+                test.db.upsert_metadata(&original).unwrap();
+                let cache = test.root.join("old.cache");
+                fs::write(&cache, b"oldzip").unwrap();
+                test.db.mark_cached("cloud", &cache).unwrap();
+                test.db.set_explicit_pin("cloud", pinned).unwrap();
+                let generation = test.db.download_generation("cloud").unwrap();
+                // Echoes and metadata-only moves retain the cache and local mtime.
+                let mut moved = original.clone();
+                moved.path = "/renamed.pptx".into();
+                moved.name = "renamed.pptx".into();
+                moved.modified_unix = 2;
+                if batch {
+                    test.db.upsert_metadata_batch([&moved]).unwrap();
+                } else {
+                    test.db.upsert_metadata(&moved).unwrap();
+                }
+                let echoed = test.db.get_by_remote_id("cloud").unwrap().unwrap();
+                assert_eq!(echoed.cache_path.as_deref(), Some(cache.as_path()));
+                assert_eq!(echoed.metadata.modified_unix, 1);
+                assert_eq!(test.db.download_generation("cloud").unwrap(), generation);
+
+                let changed = MetadataEntry::new_file("cloud", "/renamed.pptx", size, 3, etag);
+                if batch {
+                    test.db.upsert_metadata_batch([&changed]).unwrap();
+                } else {
+                    test.db.upsert_metadata(&changed).unwrap();
+                }
+                let current = test.db.get_by_remote_id("cloud").unwrap().unwrap();
+                assert!(
+                    current.cache_path.is_none(),
+                    "new metadata retained old content"
+                );
+                assert_eq!(current.metadata.size, size);
+                assert_eq!(current.effective_pinned(), pinned);
+                assert_eq!(fs::read(&cache).unwrap(), b"oldzip");
+                assert!(test.db.download_generation("cloud").unwrap() > generation);
+                assert!(!test.db.begin_hydration("cloud", generation).unwrap());
+            }
+        }
+    }
+}
+
+#[test]
+fn remote_update_during_hydration_rejects_late_publication() {
+    for batch in [false, true] {
+        let test = TestDatabase::new("download-remote-version");
+        add_file(&test.db, "cloud", "/file");
+        let generation = test.db.download_generation("cloud").unwrap();
+        assert!(test.db.begin_hydration("cloud", generation).unwrap());
+        let changed = MetadataEntry::new_file("cloud", "/file", 3, 2, "new-etag");
+        if batch {
+            test.db.upsert_metadata_batch([&changed]).unwrap();
+        } else {
+            test.db.upsert_metadata(&changed).unwrap();
+        }
+        let temporary = test.root.join("late.tmp");
+        let cache = test.root.join("late.cache");
+        fs::write(&temporary, b"old!").unwrap();
+        assert!(
+            !test
+                .db
+                .finish_hydration("cloud", generation, &temporary, &cache)
+                .unwrap()
+        );
+        assert!(!cache.exists());
+    }
+}
+
+#[test]
+fn cache_repair_and_remote_import_preserve_pending_local_content() {
+    for state in [
+        FileState::Writing,
+        FileState::Dirty,
+        FileState::Uploading,
+        FileState::Conflict,
+    ] {
+        for batch in [false, true] {
+            let test = TestDatabase::new("remote-preserve-local");
+            add_file(&test.db, "cloud", "/file");
+            let cache = test.root.join("cache");
+            fs::write(&cache, b"local unsynced content").unwrap();
+            test.db.mark_cached("cloud", &cache).unwrap();
+            let clean_snapshot = test.db.get_by_remote_id("cloud").unwrap().unwrap();
+            test.db.mark_state("cloud", state).unwrap();
+            assert!(!test.db.invalidate_cached_snapshot(&clean_snapshot).unwrap());
+            let changed = MetadataEntry::new_file("cloud", "/file", 3, 2, "new-etag");
+            if batch {
+                test.db.upsert_metadata_batch([&changed]).unwrap();
+            } else {
+                test.db.upsert_metadata(&changed).unwrap();
+            }
+            let current = test.db.get_by_remote_id("cloud").unwrap().unwrap();
+            assert_eq!(current.state, state);
+            assert_eq!(current.metadata.size, 4);
+            assert_eq!(current.cache_path.as_deref(), Some(cache.as_path()));
+            assert_eq!(fs::read(cache).unwrap(), b"local unsynced content");
+        }
+    }
+}
+
+#[test]
+fn hydration_never_publishes_a_cache_of_the_wrong_length() {
+    let test = TestDatabase::new("hydration-length");
+    add_file(&test.db, "cloud", "/file");
+    let generation = test.db.download_generation("cloud").unwrap();
+    assert!(test.db.begin_hydration("cloud", generation).unwrap());
+    let temporary = test.root.join("partial");
+    let cache = test.root.join("cache");
+    fs::write(&temporary, b"bad").unwrap();
+    assert!(
+        test.db
+            .finish_hydration("cloud", generation, &temporary, &cache)
+            .is_err()
+    );
+    assert!(!cache.exists());
+    assert!(
+        test.db
+            .get_by_remote_id("cloud")
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .is_none()
     );
 }
 

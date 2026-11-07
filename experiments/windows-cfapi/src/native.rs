@@ -1786,15 +1786,24 @@ pub fn with_exclusive_placeholder<T>(
 /// edits. Busy files are deferred instead of reading a writer's partial save.
 pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
 impl NativeCapture<'_> {
+    pub fn modified_time(&self) -> Result<std::time::SystemTime> {
+        use std::os::windows::io::BorrowedHandle;
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(self.0.handle.0) };
+        let file = std::fs::File::from(borrowed.try_clone_to_owned().map_err(|e| e.to_string())?);
+        file.metadata()
+            .and_then(|metadata| metadata.modified())
+            .map_err(|e| e.to_string())
+    }
     pub fn copy_resident_to(&self, output: &mut impl std::io::Write) -> Result<u64> {
         use std::io::{Read, Seek, SeekFrom};
-        use std::os::windows::io::FromRawHandle;
+        use std::os::windows::io::BorrowedHandle;
         let state = self.0.inspect()?;
         if !state.resident || state.partial {
             return Err("native capture requires resident bytes".into());
         }
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(self.0.handle.0) };
         let mut file =
-            std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(self.0.handle.0) });
+            std::fs::File::from(borrowed.try_clone_to_owned().map_err(|e| e.to_string())?);
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let mut buffer = [0u8; 65536];
         let mut total = 0u64;

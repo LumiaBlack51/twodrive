@@ -34,11 +34,24 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         offset: u64,
         size: u32,
     ) -> anyhow::Result<Vec<u8>> {
+        if let Some(handle) = self.read_handles.get(&fh) {
+            use std::os::unix::fs::FileExt;
+            let guard = handle
+                ._cache_guard
+                .lock()
+                .map_err(|_| anyhow::anyhow!("read handle poisoned"))?;
+            let file = guard
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("read is still deferred"))?;
+            let mut bytes = vec![0; size as usize];
+            let count = file.read_at(&mut bytes, offset)?;
+            bytes.truncate(count);
+            return Ok(bytes);
+        }
         let cache_path = self
-            .read_handles
+            .write_handles
             .get(&fh)
             .map(|handle| &handle.cache_path)
-            .or_else(|| self.write_handles.get(&fh).map(|handle| &handle.cache_path))
             .ok_or_else(|| anyhow::anyhow!("open file handle does not exist"))?;
         read_slice(cache_path, offset, size)
     }
@@ -91,11 +104,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 .values()
                 .any(|handle| handle.cache_path == cache_path);
         if !still_open {
-            match fs::remove_file(cache_path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
-            }
+            self.db.remove_unreferenced_cache(cache_path)?;
         }
         Ok(())
     }
