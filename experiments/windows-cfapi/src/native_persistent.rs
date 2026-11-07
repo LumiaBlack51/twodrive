@@ -3,6 +3,9 @@
 //! registration identity, volume and file ID saved by the engine.
 use super::*;
 use serde::{Deserialize, Serialize};
+#[path = "native_namespace.rs"]
+mod namespace;
+pub use namespace::NativeEntry;
 
 pub const ROOT_IDENTITY_PREFIX: &[u8] = b"twodrive-dev-native-v1:";
 

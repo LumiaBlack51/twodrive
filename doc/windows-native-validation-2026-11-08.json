@@ -93,7 +93,12 @@
       "directories": 3,
       "files": 2
     },
-    "additional_resized_generated_roots_recycled_and_verified": 4
+    "additional_resized_generated_roots_recycled_and_verified": 4,
+    "namespace_recovery_recycled_verified": {
+      "empty_directories": 4,
+      "receipt_files": 2,
+      "one_off_source_files": 1
+    }
   },
   "linux_recovery_port": {
     "source_commit": "a64ce65c8282398aafa79e66f8279b518e8d6e1c",
@@ -181,5 +186,14 @@
     "exclusive_reader": "busy in all three while document open",
     "read_oplock_acquisition": "available in all three; coherent snapshot not yet established",
     "all_generated_processes_and_roots_cleaned": true
+  },
+  "native_namespace_observation": {
+    "actual_windows_generated_test": true,
+    "ordinary_additions_and_cloud_metadata": true,
+    "rename_and_move_out_by_file_id": true,
+    "foreign_volume_and_junction_refused": true,
+    "hydration_callbacks": 0,
+    "deleted_file_id_error_87": "unresolved; not treated as deletion authorization",
+    "cloud_mutation_worker_enabled": false
   }
 }

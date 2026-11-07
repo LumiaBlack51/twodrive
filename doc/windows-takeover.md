@@ -156,3 +156,11 @@ Windows CFAPI CI compiles the actual development bridge and its test source via
 `tests/engine_cache_contract.rs` and `tests/desktop_contract.rs`, with all features.
 The pinned-cache mismatch regression needs no registration and is included in
 those default Windows test suites; native ignored tests remain opt-in.
+
+The owned-root namespace layer now inventories ordinary additions and cloud
+placeholders using metadata only, rejects junctions/unknown reparse states, and
+retains directory identities during enumeration. File-ID lookup follows a known
+identity through rename or move-out. Deleted identities can return an unresolved
+Windows error; this is deliberately not cloud-deletion authorization. The actual
+generated test observed zero hydration callbacks. No namespace mutation worker
+is enabled by this observer alone.
