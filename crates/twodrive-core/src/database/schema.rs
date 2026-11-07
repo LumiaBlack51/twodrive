@@ -56,6 +56,12 @@ impl Database {
                 cloud_remote_id TEXT PRIMARY KEY,
                 completed_unix INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS native_event_log (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                binding TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_native_event_binding ON native_event_log(binding,sequence);
             "#,
         )?;
         ensure_column(

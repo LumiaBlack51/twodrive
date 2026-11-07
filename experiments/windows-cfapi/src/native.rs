@@ -98,6 +98,8 @@ struct Source {
     offline: AtomicBool,
     stopping: AtomicBool,
     engine: Option<Arc<dyn HydrationSource>>,
+    #[cfg(feature = "native-sync")]
+    events: Option<persistent::events::Context>,
     active: Mutex<HashMap<(i64, i64), Arc<AtomicBool>>>,
     requested_bytes: AtomicU64,
     transferred_bytes: AtomicU64,
@@ -287,6 +289,13 @@ unsafe extern "system" fn deny_dehydrate(
     deny_mutation(unsafe { &*info }, CF_OPERATION_TYPE_ACK_DEHYDRATE);
 }
 fn deny_mutation(info: &CF_CALLBACK_INFO, kind: CF_OPERATION_TYPE) {
+    let _ = acknowledge_mutation(info, kind, 0xC0000022u32 as i32);
+}
+fn acknowledge_mutation(
+    info: &CF_CALLBACK_INFO,
+    kind: CF_OPERATION_TYPE,
+    status: i32,
+) -> Result<()> {
     let operation = CF_OPERATION_INFO {
         StructSize: size_of::<CF_OPERATION_INFO>() as u32,
         Type: kind,
@@ -297,32 +306,34 @@ fn deny_mutation(info: &CF_CALLBACK_INFO, kind: CF_OPERATION_TYPE) {
         ..Default::default()
     };
     let mut parameters = CF_OPERATION_PARAMETERS::default();
-    let denied = 0xC0000022u32 as i32;
     let size = match kind {
         CF_OPERATION_TYPE_ACK_DELETE => {
             parameters.Anonymous.AckDelete = CF_OPERATION_PARAMETERS_0_7 {
                 Flags: 0,
-                CompletionStatus: denied,
+                CompletionStatus: status,
             };
             size_of::<CF_OPERATION_PARAMETERS_0_7>()
         }
         CF_OPERATION_TYPE_ACK_RENAME => {
             parameters.Anonymous.AckRename = CF_OPERATION_PARAMETERS_0_6 {
                 Flags: 0,
-                CompletionStatus: denied,
+                CompletionStatus: status,
             };
             size_of::<CF_OPERATION_PARAMETERS_0_6>()
         }
         _ => {
             parameters.Anonymous.AckDehydrate = CF_OPERATION_PARAMETERS_0_5 {
-                CompletionStatus: denied,
+                CompletionStatus: status,
                 ..Default::default()
             };
             size_of::<CF_OPERATION_PARAMETERS_0_5>()
         }
     };
     parameters.ParamSize = (offset_of!(CF_OPERATION_PARAMETERS, Anonymous) + size) as u32;
-    let _ = unsafe { CfExecute(&operation, &mut parameters) };
+    hr(
+        unsafe { CfExecute(&operation, &mut parameters) },
+        "acknowledge native mutation",
+    )
 }
 
 pub struct Session {

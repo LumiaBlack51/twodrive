@@ -82,7 +82,8 @@
       "ignored_environment": 11
     },
     "pinned_cache_mismatch_records_dirty_recovery": true,
-    "known_folder_ci_timing_test_fixed": "Condvar requires two actual upload entrants; local daemon seven tests and strict Clippy passed"
+    "known_folder_ci_timing_test_fixed": "Condvar requires two actual upload entrants; local daemon seven tests and strict Clippy passed",
+    "ancestor_recovery_ci_test_fixed": "fixed queued timestamps reproduce the old one-pass assumption; bounded passes retain exact completion, content, restart and parent-first assertions"
   },
   "cleanup": {
     "office_fixture_processes_and_roots_cleaned": true,
@@ -97,6 +98,11 @@
     "namespace_recovery_recycled_verified": {
       "empty_directories": 4,
       "receipt_files": 2,
+      "one_off_source_files": 1
+    },
+    "event_fixture_recovery_recycled_verified": {
+      "empty_directories": 1,
+      "receipt_files": 1,
       "one_off_source_files": 1
     }
   },
@@ -195,5 +201,17 @@
     "hydration_callbacks": 0,
     "deleted_file_id_error_87": "unresolved; not treated as deletion authorization",
     "cloud_mutation_worker_enabled": false
+  },
+  "native_operation_events": {
+    "actual_windows_external_process": true,
+    "failed_persistence_denies_rename": true,
+    "placeholder_rename_and_delete_requested_and_completed": true,
+    "identity_volume_and_root_checked": true,
+    "queue_survives_restart": true,
+    "owner_and_sequence_prefix_acknowledgement": true,
+    "portable_sqlite_failure_and_restart_tests": "Windows and Linux passed",
+    "ordinary_unconverted_file_event_count": 0,
+    "provider_own_io_is_not_application_notification": true,
+    "cloud_consumer_connected": false
   }
 }

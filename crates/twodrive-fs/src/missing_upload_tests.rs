@@ -695,10 +695,16 @@ fn check_renamed_recovery(test: &Test, destination: &str, moves: usize) {
     assert!(test.db.get_by_remote_id(LOCAL).unwrap().is_none());
     let reopened = Database::new(test.db.path());
     reopened.init().unwrap();
-    assert_eq!(
-        crate::recover_pending_metadata_operations(&reopened, &test.backend).unwrap(),
-        moves
-    );
+    // Recovery intentionally defers a child while its ancestor is still queued.
+    // An older child can be visited first, so model bounded scheduler passes.
+    let mut completed = 0;
+    for _ in 0..moves {
+        completed += crate::recover_pending_metadata_operations(&reopened, &test.backend).unwrap();
+        if reopened.pending_metadata_operations().unwrap().is_empty() {
+            break;
+        }
+    }
+    assert_eq!(completed, moves);
     assert!(reopened.pending_metadata_operations().unwrap().is_empty());
     let remote = test
         .backend
@@ -807,8 +813,17 @@ fn recovery_copy_and_ancestor_moves_before_ack_keep_both_pending_destinations() 
             .unwrap();
         db.move_subtree_and_queue("dir-documents", "/Moved Documents")
             .unwrap();
+        // Deterministically model the child queued just before a wall-clock
+        // second boundary, followed by its ancestor move in the next second.
+        assert_eq!(rusqlite::Connection::open(db.path()).unwrap().execute(
+            "UPDATE pending_metadata_operations SET queued_unix=CASE WHEN local_id='dir-documents' THEN 2 ELSE 1 END", []
+        ).unwrap(), 2);
     }));
     check_renamed_recovery(&test, "/Moved Documents/kept-recovery.txt", 2);
+    assert_eq!(
+        *test.backend.rename_requests.lock().unwrap(),
+        vec!["/Moved Documents", "/Moved Documents/kept-recovery.txt"]
+    );
 }
 
 #[test]

@@ -12,6 +12,7 @@ mod delete_retry;
 pub mod local_journal;
 mod metadata;
 mod mutations;
+mod native_events;
 mod pins;
 mod queries;
 mod schema;

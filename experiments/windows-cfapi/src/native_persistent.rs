@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 #[path = "native_namespace.rs"]
 mod namespace;
 pub use namespace::NativeEntry;
+#[path = "native_events.rs"]
+pub(crate) mod events;
+pub use events::{DatabaseEventSink, NativeEvent, NativeEventKind, NativeEventSink};
 
 pub const ROOT_IDENTITY_PREFIX: &[u8] = b"twodrive-dev-native-v1:";
 
@@ -80,6 +83,18 @@ impl PersistentSession {
         let (guard, receipt) = Self::prepare_new(root, identity, checkpoint)?;
         Self::register_owned(&guard, &receipt.identity)?;
         Self::connect_owned(guard, receipt, engine)
+    }
+
+    pub fn create_new_recording(
+        root: &Path,
+        identity: &[u8],
+        checkpoint: &Path,
+        engine: Arc<dyn HydrationSource>,
+        sink: Arc<dyn NativeEventSink>,
+    ) -> Result<Self> {
+        let (guard, receipt) = Self::prepare_new(root, identity, checkpoint)?;
+        Self::register_owned(&guard, &receipt.identity)?;
+        Self::connect_recording(guard, receipt, engine, Some(sink))
     }
 
     fn prepare_new(
@@ -168,6 +183,24 @@ impl PersistentSession {
         checkpoint: &Path,
         engine: Arc<dyn HydrationSource>,
     ) -> Result<Self> {
+        Self::resume_checkpoint(root, checkpoint, engine, None)
+    }
+
+    pub fn resume_from_checkpoint_recording(
+        root: &Path,
+        checkpoint: &Path,
+        engine: Arc<dyn HydrationSource>,
+        sink: Arc<dyn NativeEventSink>,
+    ) -> Result<Self> {
+        Self::resume_checkpoint(root, checkpoint, engine, Some(sink))
+    }
+
+    fn resume_checkpoint(
+        root: &Path,
+        checkpoint: &Path,
+        engine: Arc<dyn HydrationSource>,
+        sink: Option<Arc<dyn NativeEventSink>>,
+    ) -> Result<Self> {
         use std::io::Read;
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
         let checkpoint_guard = RootGuard::lock_parent(checkpoint)?;
@@ -194,7 +227,7 @@ impl PersistentSession {
             return Err("oversized root checkpoint".into());
         }
         let receipt = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        Self::resume_owned(root, &receipt, engine, true)
+        Self::resume_owned(root, &receipt, engine, true, sink)
     }
 
     pub fn resume(
@@ -202,7 +235,7 @@ impl PersistentSession {
         receipt: &RootReceipt,
         engine: Arc<dyn HydrationSource>,
     ) -> Result<Self> {
-        Self::resume_owned(root, receipt, engine, false)
+        Self::resume_owned(root, receipt, engine, false, None)
     }
 
     fn resume_owned(
@@ -210,6 +243,7 @@ impl PersistentSession {
         receipt: &RootReceipt,
         engine: Arc<dyn HydrationSource>,
         finish_registration: bool,
+        sink: Option<Arc<dyn NativeEventSink>>,
     ) -> Result<Self> {
         valid_identity(&receipt.identity)?;
         if receipt.schema_version != 1 {
@@ -285,7 +319,7 @@ impl PersistentSession {
         if needs_registration {
             Self::register_owned(&guard, &receipt.identity)?;
         }
-        Self::connect_owned(guard, receipt.clone(), engine)
+        Self::connect_recording(guard, receipt.clone(), engine, sink)
     }
 
     fn connect_owned(
@@ -293,11 +327,21 @@ impl PersistentSession {
         receipt: RootReceipt,
         engine: Arc<dyn HydrationSource>,
     ) -> Result<Self> {
+        Self::connect_recording(guard, receipt, engine, None)
+    }
+
+    fn connect_recording(
+        guard: RootGuard,
+        receipt: RootReceipt,
+        engine: Arc<dyn HydrationSource>,
+        sink: Option<Arc<dyn NativeEventSink>>,
+    ) -> Result<Self> {
         let source = Box::new(Source {
             engine: Some(engine),
+            events: sink.map(|sink| events::Context::new(receipt.clone(), sink)),
             ..Default::default()
         });
-        let table = [
+        let mut table = vec![
             CF_CALLBACK_REGISTRATION {
                 Type: CF_CALLBACK_TYPE_FETCH_DATA,
                 Callback: Some(fetch),
@@ -312,11 +356,31 @@ impl PersistentSession {
                 Type: CF_CALLBACK_TYPE_NOTIFY_DEHYDRATE,
                 Callback: Some(deny_dehydrate),
             },
-            CF_CALLBACK_REGISTRATION {
-                Type: CF_CALLBACK_TYPE_NONE,
-                Callback: None,
-            },
         ];
+        if source.events.is_some() {
+            table.extend([
+                CF_CALLBACK_REGISTRATION {
+                    Type: CF_CALLBACK_TYPE_NOTIFY_DELETE,
+                    Callback: Some(events::delete_requested),
+                },
+                CF_CALLBACK_REGISTRATION {
+                    Type: CF_CALLBACK_TYPE_NOTIFY_DELETE_COMPLETION,
+                    Callback: Some(events::delete_completed),
+                },
+                CF_CALLBACK_REGISTRATION {
+                    Type: CF_CALLBACK_TYPE_NOTIFY_RENAME,
+                    Callback: Some(events::rename_requested),
+                },
+                CF_CALLBACK_REGISTRATION {
+                    Type: CF_CALLBACK_TYPE_NOTIFY_RENAME_COMPLETION,
+                    Callback: Some(events::rename_completed),
+                },
+            ]);
+        }
+        table.push(CF_CALLBACK_REGISTRATION {
+            Type: CF_CALLBACK_TYPE_NONE,
+            Callback: None,
+        });
         let mut key = 0;
         hr(
             unsafe {

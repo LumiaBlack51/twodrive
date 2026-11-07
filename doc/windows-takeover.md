@@ -164,3 +164,13 @@ identity through rename or move-out. Deleted identities can return an unresolved
 Windows error; this is deliberately not cloud-deletion authorization. The actual
 generated test observed zero hydration callbacks. No namespace mutation worker
 is enabled by this observer alone.
+
+Native placeholder rename/delete notifications can now be recorded through an
+opt-in durable event sink. SQLite FULL commits precede allowing the operation;
+completion observations survive restart, and acknowledgement removes only the
+selected owner/sequence prefix. Actual Windows tests use a separate process:
+a failed append denies its rename, while successful rename/delete produce
+identity-bound request and completion records without hydration. Provider-owned
+I/O and ordinary unconverted files did not produce these application callbacks.
+An independent ordinary-file watcher, account-bound coordinator and cloud
+mutation/recovery consumer remain required. Events alone enable no cloud writes.
