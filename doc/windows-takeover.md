@@ -135,3 +135,24 @@ The generated personal OneDrive validation subsequently passed 5-byte, empty,
 state confirmation. The stale original ETag was rejected, and the generated cloud
 folder and native root were cleaned. This still does not establish Office atomic
 replacement, Explorer icon behavior or original-folder takeover.
+
+Atomic replacement capture is now available behind `native-sync`: an ordinary
+replacement is converted without dehydration or an in-sync claim, under the
+owned parent chain and a unique resident-file lease. The bridge requires its
+bound cloud path, persists native-dirty intent first, and publishes the immutable
+snapshot before conditional upload. Actual Windows generated tests passed busy
+reader deferral, replacement content preservation, foreign identity refusal, and
+restart after conversion but before journal publication. They use MockProvider,
+not real Office applications or a production worker.
+
+Actual hidden Office probing found all three applications deny a share-none
+reader while their document remains open after Save. They permit a read oplock,
+but acquiring that oplock alone does not prove a coherent concurrent-write
+snapshot. The current exclusive capture therefore defers cloud upload while a
+document is held open; the local autosave timer still works. No weaker sharing
+mode has been enabled in production on the basis of this diagnostic.
+
+Windows CFAPI CI compiles the actual development bridge and its test source via
+`tests/engine_cache_contract.rs` and `tests/desktop_contract.rs`, with all features.
+The pinned-cache mismatch regression needs no registration and is included in
+those default Windows test suites; native ignored tests remain opt-in.

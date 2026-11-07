@@ -4,6 +4,18 @@
 
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
+## TD-20261108-15：CI 已知目录并发测试依赖短暂 sleep 重叠
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：CI 失败已定位；夹具修复后本地 7 项 daemon 检查及严格 Clippy 通过
+- 证据：[0674241 Linux job](https://github.com/LumiaBlack51/twodrive/actions/runs/42405959647/job/128503586632)
+
+known_folder_small_files_upload_concurrently 的 max_active>=2 断言失败；其余 6 项 daemon
+检查通过。旧夹具只让每次上传 sleep 100ms，准备/调度较慢时不能稳定观察重叠。
+改为测试专用 Condvar：第一个已进入上传的 worker 等第二个进入，15 秒截止；串行
+实现会超时失败，不再凭时间窗口猜测并发。生产已知目录逻辑、并发配置均不更改。
+本地 7 项 daemon 检查及严格 Clippy 通过，最终 CI 待完成；不据此将其他 CI 失败归为同一原因。
+
 ## TD-20261108-14：固定保留缓存摘要异常未能转为持久恢复工作
 
 - 日期：2026-11-08（Asia/Shanghai）

@@ -111,27 +111,75 @@ impl LocalFileBridge {
         self.journal.record_native_edit(cloud_id)?;
         let generation = self.status(id)?.generation;
         twodrive_local_files::native::with_native_capture(path, cloud_id.as_bytes(), |locked| {
-            let modified = locked.modified_time()?;
-            let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
-                .map_err(|e| e.to_string())?;
-            let size = locked.copy_resident_to(temporary.as_file_mut())?;
-            if modified != locked.modified_time()? {
-                return Err("native source timestamp changed during capture".into());
-            }
-            temporary
-                .as_file()
-                .set_times(std::fs::FileTimes::new().set_modified(modified))
-                .map_err(|e| e.to_string())?;
-            temporary.as_file().sync_all().map_err(|e| e.to_string())?;
-            // Keep the owned file on any commit error: it contains user edits,
-            // and must not be mistaken for a disposable download cache.
-            let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
-            drop(file);
-            self.journal
-                .stage_native_edit(id, generation, &captured, size)
-                .map_err(|e| e.to_string())
+            self.capture_locked_native(locked, id, generation)
         })
         .map_err(anyhow::Error::msg)
+    }
+
+    #[cfg(all(windows, feature = "native-local-fixture"))]
+    fn capture_locked_native(
+        &self,
+        locked: &twodrive_local_files::native::NativeCapture<'_>,
+        id: &str,
+        generation: i64,
+    ) -> Result<i64, String> {
+        let modified = locked.modified_time()?;
+        let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
+            .map_err(|e| e.to_string())?;
+        let size = locked.copy_resident_to(temporary.as_file_mut())?;
+        if modified != locked.modified_time()? {
+            return Err("native source timestamp changed during capture".into());
+        }
+        temporary
+            .as_file()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .map_err(|e| e.to_string())?;
+        temporary.as_file().sync_all().map_err(|e| e.to_string())?;
+        // Keep the owned file on any commit error: it contains user edits,
+        // and must not be mistaken for a disposable download cache.
+        let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
+        drop(file);
+        self.journal
+            .stage_native_edit(id, generation, &captured, size)
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub fn capture_native_replacement(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        relative: &Path,
+        id: &str,
+    ) -> anyhow::Result<i64> {
+        let record = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("unknown replacement item")?;
+        let cloud_id = record
+            .cloud_remote_id
+            .as_deref()
+            .context("unbound replacement item")?;
+        let parts = relative
+            .components()
+            .map(|part| match part {
+                std::path::Component::Normal(name) => {
+                    name.to_str().context("invalid replacement name")
+                }
+                _ => anyhow::bail!("bounded relative replacement path required"),
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        ensure!(
+            format!("/{}", parts.join("/")) == record.metadata.path,
+            "replacement does not match the bound cloud path"
+        );
+        self.journal.record_native_edit(cloud_id)?;
+        let generation = self.status(id)?.generation;
+        owner
+            .with_replacement_capture(relative, cloud_id.as_bytes(), |locked| {
+                self.capture_locked_native(locked, id, generation)
+            })
+            .map_err(anyhow::Error::msg)
     }
 
     /// A cloud acknowledgement alone cannot mark a subsequently edited native

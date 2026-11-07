@@ -359,6 +359,54 @@ impl PersistentSession {
         {
             return Err("invalid native publication".into());
         }
+        let (parent, _guards) = self.guard_relative_parent(relative)?;
+        let name = wide(Path::new(
+            relative.file_name().ok_or("missing native leaf")?,
+        ));
+        let mut item = CF_PLACEHOLDER_CREATE_INFO {
+            RelativeFileName: name.as_ptr(),
+            FileIdentity: identity.as_ptr().cast(),
+            FileIdentityLength: identity.len() as u32,
+            Flags: CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC
+                | if directory {
+                    CF_PLACEHOLDER_CREATE_FLAG_DISABLE_ON_DEMAND_POPULATION
+                } else {
+                    0
+                },
+            ..Default::default()
+        };
+        item.FsMetadata.FileSize = if directory { 0 } else { size as i64 };
+        item.FsMetadata.BasicInfo.FileAttributes = if directory {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
+        item.FsMetadata.BasicInfo.LastWriteTime = modified_unix
+            .checked_add(11_644_473_600)
+            .and_then(|v| v.checked_mul(10_000_000))
+            .unwrap_or(0)
+            .max(0);
+        let mut done = 0;
+        hr(
+            unsafe {
+                CfCreatePlaceholders(
+                    wide(&parent).as_ptr(),
+                    &mut item,
+                    1,
+                    CF_CREATE_FLAG_STOP_ON_ERROR,
+                    &mut done,
+                )
+            },
+            "publish native placeholder",
+        )?;
+        hr(item.Result, "publish native entry")?;
+        if done != 1 {
+            return Err("native placeholder was not published".into());
+        }
+        Ok(self.root().join(relative))
+    }
+
+    fn guard_relative_parent(&self, relative: &Path) -> Result<(PathBuf, Vec<Handle>)> {
         let parts = relative.components().collect::<Vec<_>>();
         if parts.is_empty()
             || parts.len() > 128
@@ -427,48 +475,83 @@ impl PersistentSession {
             }
             guards.push(handle);
         }
-        let name = wide(Path::new(parts.last().unwrap().as_os_str()));
-        let mut item = CF_PLACEHOLDER_CREATE_INFO {
-            RelativeFileName: name.as_ptr(),
-            FileIdentity: identity.as_ptr().cast(),
-            FileIdentityLength: identity.len() as u32,
-            Flags: CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC
-                | if directory {
-                    CF_PLACEHOLDER_CREATE_FLAG_DISABLE_ON_DEMAND_POPULATION
-                } else {
-                    0
-                },
-            ..Default::default()
-        };
-        item.FsMetadata.FileSize = if directory { 0 } else { size as i64 };
-        item.FsMetadata.BasicInfo.FileAttributes = if directory {
-            FILE_ATTRIBUTE_DIRECTORY
-        } else {
-            FILE_ATTRIBUTE_NORMAL
-        };
-        item.FsMetadata.BasicInfo.LastWriteTime = modified_unix
-            .checked_add(11_644_473_600)
-            .and_then(|v| v.checked_mul(10_000_000))
-            .unwrap_or(0)
-            .max(0);
-        let mut done = 0;
-        hr(
-            unsafe {
-                CfCreatePlaceholders(
-                    wide(&parent).as_ptr(),
-                    &mut item,
-                    1,
-                    CF_CREATE_FLAG_STOP_ON_ERROR,
-                    &mut done,
-                )
-            },
-            "publish native placeholder",
-        )?;
-        hr(item.Result, "publish native entry")?;
-        if done != 1 {
-            return Err("native placeholder was not published".into());
+        Ok((parent, guards))
+    }
+
+    /// Capture a local atomic replacement within this owned root. Conversion
+    /// retains all resident bytes and never marks them in sync or dehydrates.
+    /// The engine must persist its edit intent and account/version binding first.
+    pub fn with_replacement_capture<T>(
+        &self,
+        relative: &Path,
+        identity: &[u8],
+        action: impl FnOnce(&NativeCapture<'_>) -> Result<T>,
+    ) -> Result<T> {
+        if self.connection.is_none() || identity.is_empty() || identity.len() > 4096 {
+            return Err("invalid native replacement capture".into());
         }
-        Ok(self.root().join(relative))
+        let (parent, _guards) = self.guard_relative_parent(relative)?;
+        let path = parent.join(relative.file_name().ok_or("missing native leaf")?);
+        let mut lease = RetainedPlaceholder::open_node(&path, identity, 0, false)?;
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                lease.handle.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                size_of_val(&tag) as u32,
+            )
+        } == 0
+            || unsafe { GetFileInformationByHandle(lease.handle.0, &mut info) } == 0
+            || tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0
+            || tag.ReparseTag & 0x20000000 != 0
+            || info.nNumberOfLinks != 1
+            || info.dwVolumeSerialNumber != self.receipt.volume_serial
+        {
+            return Err("replacement is not a unique retained file in the owned volume".into());
+        }
+        let mut size = 0i64;
+        if unsafe { GetFileSizeEx(lease.handle.0, &mut size) } == 0 || size < 0 {
+            return Err("replacement size unavailable".into());
+        }
+        lease.size = usize::try_from(size).map_err(|_| "replacement size overflow")?;
+        if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+            if tag.FileAttributes
+                & (FILE_ATTRIBUTE_OFFLINE
+                    | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                    | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+                    | FILE_ATTRIBUTE_SPARSE_FILE
+                    | FILE_ATTRIBUTE_ENCRYPTED)
+                != 0
+            {
+                return Err("replacement is not an ordinary complete resident file".into());
+            }
+            hr(
+                unsafe {
+                    CfConvertToPlaceholder(
+                        lease.handle.0,
+                        identity.as_ptr().cast(),
+                        identity.len() as u32,
+                        CF_CONVERT_FLAG_NONE,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    )
+                },
+                "retain replacement as dirty native placeholder",
+            )?;
+        }
+        // Also permits retry after conversion succeeded but journal publication
+        // failed. A foreign/unknown reparse point cannot pass both checks.
+        let (root_id, owner) = root_identity(lease.handle.0)?;
+        if root_id != self.receipt.file_id || owner != self.receipt.identity {
+            return Err("replacement root ownership changed".into());
+        }
+        let state = lease.inspect()?;
+        if !state.resident || state.partial || state.logical_size != size as u64 {
+            return Err("replacement does not contain all local bytes".into());
+        }
+        action(&NativeCapture(&lease))
     }
 
     #[cfg(feature = "native-test-hooks")]

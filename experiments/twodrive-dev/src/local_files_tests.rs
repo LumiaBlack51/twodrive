@@ -521,6 +521,130 @@ fn native_read_edit_capture_upload_preserves_complete_bytes() {
     twodrive_local_files::native::verify_unregistered(&root).unwrap();
     assert_eq!(fs::read(path).unwrap(), edited);
 }
+#[cfg(all(windows, feature = "native-sync", feature = "native-test-hooks"))]
+#[test]
+#[ignore = "explicit NEW generated CFAPI root; atomic replacement and conversion recovery"]
+fn native_atomic_replacement_retains_bytes_and_retries_after_conversion() {
+    use std::sync::atomic::AtomicBool;
+    use twodrive_local_files::native::{HydrationSource, persistent::PersistentSession};
+    struct Source;
+    impl HydrationSource for Source {
+        fn size(&self, id: &[u8]) -> Result<usize, String> {
+            if id != OBJECT.as_bytes() {
+                return Err("foreign generated identity".into());
+            }
+            Ok(INITIAL.len())
+        }
+        fn read_range(
+            &self,
+            id: &[u8],
+            offset: usize,
+            length: usize,
+            cancelled: &AtomicBool,
+        ) -> Result<Vec<u8>, String> {
+            self.size(id)?;
+            if cancelled.load(Ordering::SeqCst) {
+                return Err("cancelled".into());
+            }
+            INITIAL
+                .get(offset..offset + length)
+                .map(|b| b.to_vec())
+                .ok_or("invalid generated range".into())
+        }
+    }
+    let root = PathBuf::from(
+        std::env::var_os("TWODRIVE_APPROVED_NATIVE_REPLACEMENT_ROOT")
+            .expect("explicit new root required"),
+    );
+    assert!(
+        root.is_absolute()
+            && !root.exists()
+            && root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("twodrive-cfapi-fixture-office-")
+    );
+    let checkpoint = root.with_extension("receipt.json");
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    let mut owner = PersistentSession::create_new(
+        &root,
+        b"twodrive-dev-native-v1:generated-office-only",
+        &checkpoint,
+        Arc::new(Source),
+    )
+    .unwrap();
+    let relative = Path::new("generated-中文.txt");
+    let visible = owner
+        .publish_placeholder(relative, OBJECT.as_bytes(), INITIAL.len() as u64, false, 1)
+        .unwrap();
+    assert_eq!(fs::read(&visible).unwrap(), INITIAL);
+    let temporary = root.join("generated-save.tmp");
+    fs::write(&temporary, EDITED).unwrap();
+    fs::rename(&temporary, &visible).unwrap();
+    let reader = fs::File::open(&visible).unwrap();
+    assert!(
+        f.bridge
+            .capture_native_replacement(&owner, relative, OBJECT)
+            .is_err()
+    );
+    assert!(f.bridge.status(OBJECT).unwrap().native_dirty);
+    drop(reader);
+    f.bridge
+        .capture_native_replacement(&owner, relative, OBJECT)
+        .unwrap();
+    assert_eq!(fs::read(&visible).unwrap(), EDITED);
+    assert_eq!(bytes(&f.bridge), EDITED);
+    assert!(
+        owner
+            .with_replacement_capture(relative, b"foreign", |_| Ok(()))
+            .is_err()
+    );
+    assert!(!f.bridge.acknowledge_native(&visible, OBJECT).unwrap());
+    assert!(f.bridge.upload(OBJECT, no_progress()).unwrap());
+    assert!(f.bridge.acknowledge_native(&visible, OBJECT).unwrap());
+    assert_eq!(provider.download(OBJECT).unwrap(), EDITED);
+
+    let newer = vec![b'Z'; 512];
+    fs::write(&temporary, &newer).unwrap();
+    fs::rename(&temporary, &visible).unwrap();
+    f.bridge.journal.record_native_edit(OBJECT).unwrap();
+    assert!(
+        owner
+            .with_replacement_capture::<()>(relative, OBJECT.as_bytes(), |_| Err(
+                "injected interruption before journal publication".into()
+            ))
+            .is_err()
+    );
+    owner.disconnect().unwrap();
+    drop(owner);
+    drop(f.bridge);
+    let bridge = LocalFileBridge::open(
+        f.db.clone(),
+        &f.cache,
+        Backend::new(provider.clone()),
+        "generated-provider-account-1",
+    )
+    .unwrap();
+    assert!(bridge.status(OBJECT).unwrap().native_dirty);
+    let mut resumed =
+        PersistentSession::resume_from_checkpoint(&root, &checkpoint, Arc::new(Source)).unwrap();
+    bridge
+        .capture_native_replacement(&resumed, relative, OBJECT)
+        .unwrap();
+    assert!(bridge.upload(OBJECT, no_progress()).unwrap());
+    assert!(bridge.acknowledge_native(&visible, OBJECT).unwrap());
+    assert_eq!(fs::read(&visible).unwrap(), newer);
+    assert_eq!(provider.download(OBJECT).unwrap(), newer);
+    fs::remove_file(&visible).unwrap();
+    resumed.retire_empty_office_fixture().unwrap();
+    drop(resumed);
+    fs::remove_dir(&root).unwrap();
+    fs::remove_file(checkpoint).unwrap();
+}
+
 #[test]
 fn accepted_write_lost_reply_restarts_and_requires_verified_download() {
     let provider = MockProvider::new();

@@ -81,7 +81,8 @@
       "filesystem": 80,
       "ignored_environment": 11
     },
-    "pinned_cache_mismatch_records_dirty_recovery": true
+    "pinned_cache_mismatch_records_dirty_recovery": true,
+    "known_folder_ci_timing_test_fixed": "Condvar requires two actual upload entrants; local daemon seven tests and strict Clippy passed"
   },
   "cleanup": {
     "office_fixture_processes_and_roots_cleaned": true,
@@ -158,5 +159,27 @@
       "stale_version_refused": true,
       "cloud_and_native_generated_scope_cleaned": true
     }
+  },
+  "native_atomic_replacement": {
+    "actual_windows": true,
+    "backend": "MockProvider",
+    "busy_reader_deferral": true,
+    "ordinary_file_conversion_preserves_all_bytes": true,
+    "foreign_identity_refused": true,
+    "restart_after_conversion_before_journal_publish": true,
+    "full_conditional_upload_and_native_ack": true,
+    "generated_root_cleaned": true,
+    "actual_office_to_cloud": false
+  },
+  "office_open_document_probe": {
+    "hosts": [
+      "Word",
+      "Excel",
+      "PowerPoint"
+    ],
+    "local_save_and_sta_timer": "passed",
+    "exclusive_reader": "busy in all three while document open",
+    "read_oplock_acquisition": "available in all three; coherent snapshot not yet established",
+    "all_generated_processes_and_roots_cleaned": true
   }
 }
