@@ -81,6 +81,12 @@ void main() {
         ..selected = 'p'
         ..status = {'connected': true, 'profile': 'p'};
       c.setView(visible: true, files: true);
+      final skipped = c.refreshView(forceDirectory: true);
+      c.setView(visible: false);
+      await skipped;
+      expect(c.calls, isEmpty);
+
+      c.setView(visible: true, files: true);
       final refresh = c.refreshView(forceDirectory: true);
       await Future<void>.delayed(Duration.zero);
       expect(c.calls, ['status']);

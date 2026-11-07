@@ -185,8 +185,12 @@ mod tests {
             Disposition::SkipReparseOrOffline
         );
         let fifo = dir.join("pipe");
-        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let created = std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(created.success());
         assert_eq!(
             inspect_with_mounts(&fifo, SourceKind::OrdinaryDirectory, table).unwrap(),
             Disposition::SkipReparseOrOffline

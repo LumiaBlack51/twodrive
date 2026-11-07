@@ -625,12 +625,18 @@ class StorageClient extends ChangeNotifier {
   }
 
   Future<void> _pollOnce() async {
+    final wasShowingFiles = _showFiles;
     await Future<void>.value();
     try {
-      if (busy || !available || quitting || _disposed) return;
+      if (busy ||
+          !available ||
+          quitting ||
+          _disposed ||
+          (wasShowingFiles && !_showFiles)) {
+        return;
+      }
       final previous = selected;
       final epoch = _selectionEpoch;
-      final wasShowingFiles = _showFiles;
       await refreshStatus();
       if (_disposed || quitting || !available || epoch != _selectionEpoch) {
         return;
