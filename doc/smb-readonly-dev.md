@@ -114,4 +114,4 @@ This local review candidate adds manual SMB2/3 read-only connections to the exis
 
 ## dev 提交与审查（2026-11-07）
 
-用户已授权提交至 dev，并要求清理本轮构建缓存/一次性脚本及等待 CI、Dot 意见。工作分支为 `codex/smb-readonly-20261107`，采用目标为 dev 的 PR 与必需检查流程；提交及 PR 链接待产生后补充。此前本地验证结果不冒充 hosted CI。该授权不涉及 Release、现用程序替换或 SMB 写入阶段。
+用户已授权提交至 dev，并要求清理本轮构建缓存/一次性脚本及等待 CI、Dot 意见。工作分支为 `codex/smb-readonly-20261107`，采用目标为 dev 的 PR 与必需检查流程；源码已提交为 [`7e600c6`](https://github.com/LumiaBlack51/twodrive/commit/7e600c6b7f1fc86492994c60f623cd476c77569c)，已推送并创建 [PR #59](https://github.com/LumiaBlack51/twodrive/pull/59)，目标 dev。最新 head 的 CI 与 Dot 审查仍待完成。用户要求的推送后清理已完成：本轮 target 缓存、候选调试程序、私有测试 venv/Samba 解包、一次性探针、日志与重复 patch 已移除；永久回归脚本和源码保留，其他工作目录与现用程序未动。此前本地验证结果不冒充 hosted CI。该授权不涉及 Release、现用程序替换或 SMB 写入阶段。

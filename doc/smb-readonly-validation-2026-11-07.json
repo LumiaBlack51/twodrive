@@ -15,7 +15,7 @@
       50
     ],
     "branch": "codex/smb-readonly-20261107",
-    "changes": "local source submission prepared; no runtime installation"
+    "changes": "source submitted as 7e600c6; PR 59 targets dev"
   },
   "runtime": {
     "platform": "Linux x86_64",
@@ -308,7 +308,8 @@
     "sha256": {
       "twodrive-dav-engine": "bab4668ebb28032864349251bc7cd091f3454a1085a5b23ff4d5ff547efe7f9a",
       "twodrive-dev": "0722768b3dc28c831ddc7aa15537edaf62e319902bb4170e27680bc89e0400cc"
-    }
+    },
+    "retained": false
   },
   "source_sha256": {
     "experiments/twodrive-dev/src/smb.rs": "842e23977100d1be4d6d4b055cd540cd08360602312e809118f013f3298dc4eb",
@@ -319,17 +320,18 @@
     "owned_target_removed": true,
     "synthetic_servers_stopped": true,
     "one_off_scripts_and_deb_downloads_removed": true,
-    "retained": "source, review binaries, private Python venv and extracted Samba runtimes for repeatable testing, local logs",
-    "existing_daemon": "same PID 6459; no restart or replacement"
+    "retained": "source and Git history only; disposable review binaries, private venv/extracted Samba, logs and one-off scripts removed after push",
+    "existing_daemon": "same PID 6459; no restart or replacement",
+    "user_requested_post_push_cleanup": true
   },
   "status": "local review candidate validated within explicitly documented server policy; stock Samba refused",
   "submission": {
     "authorized_date": "2026-11-07",
     "target": "dev",
     "branch": "codex/smb-readonly-20261107",
-    "status": "source submission authorized; CI and Dot review pending",
-    "commit": "pending",
-    "pull_request": "pending",
+    "status": "pushed and PR open; current-head CI/Dot review pending",
+    "commit": "7e600c6b7f1fc86492994c60f623cd476c77569c",
+    "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/59",
     "release_or_deployment": "not requested; existing program unchanged"
   }
 }
