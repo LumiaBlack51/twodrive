@@ -79,7 +79,32 @@ class StorageClient extends ChangeNotifier {
   String? _selectingProfile;
   int? _directoryRequest;
   int? activeId;
-  Timer? _poll;
+  bool _showFiles = false;
+  bool _showQuota = false;
+  int _statusVersion = 0;
+
+  void setView({
+    required bool visible,
+    bool files = false,
+    bool quota = false,
+  }) {
+    _showFiles = visible && files;
+    _showQuota = visible && quota;
+  }
+
+  Future<void> refreshView({bool forceDirectory = false}) async {
+    if (_showFiles) {
+      await pollNow(forceDirectory: forceDirectory);
+      return;
+    }
+    if (busy || !available || quitting || _disposed) return;
+    try {
+      await refreshStatus();
+    } catch (_) {
+      // refreshStatus records the display error and notifies the view.
+    }
+  }
+
   bool get connected => status['connected'] == true;
   bool isProfileConnected(String id) => status['multi_connection'] == true
       ? ((status['connections'] as List?) ?? []).any((p) => p['id'] == id)
@@ -321,8 +346,8 @@ class StorageClient extends ChangeNotifier {
         }),
       );
       available = true;
-      // Older engines keep working through single-flight polling. Operation
-      // notifications are opt-in so older frontends never misread them as replies.
+      // Operation notifications are opt-in. Older engines still support
+      // the explicit reads made when a view opens or an action completes.
       try {
         await request('subscribe', {'operations': true});
       } on StateError {
@@ -342,9 +367,6 @@ class StorageClient extends ChangeNotifier {
           ),
         );
       }
-      _poll = Timer.periodic(const Duration(seconds: 3), (_) {
-        unawaited(pollNow());
-      });
     } catch (e) {
       fail('无法启动本地引擎：$e');
     }
@@ -386,7 +408,11 @@ class StorageClient extends ChangeNotifier {
         }
         _directoryStale = true;
         _browseGeneration++;
-        if (!quitting && message['op'] != 'quit') unawaited(pollNow());
+        if (!quitting &&
+            message['op'] != 'quit' &&
+            (_showFiles || message['status'] is! Map)) {
+          unawaited(refreshView());
+        }
       }
       notifyListeners();
       return;
@@ -482,6 +508,7 @@ class StorageClient extends ChangeNotifier {
   }
 
   void _applyStatus(Json next) {
+    _statusVersion++;
     final previous = status['profile'];
     final wasConnected = connected;
     if (wasConnected && previous is String && previous != next['profile']) {
@@ -519,7 +546,10 @@ class StorageClient extends ChangeNotifier {
         : status['mount_failed'] == true
         ? '挂载进程已退出；请卸载后重试。缓存已保留。'
         : null;
-    if (status['storage_usage'] == true && available && !quitting) {
+    if (_showQuota &&
+        status['storage_usage'] == true &&
+        available &&
+        !quitting) {
       for (final profile in connectedProfiles) {
         unawaited(refreshQuota(profile['id'] as String));
       }
@@ -600,6 +630,7 @@ class StorageClient extends ChangeNotifier {
       if (busy || !available || quitting || _disposed) return;
       final previous = selected;
       final epoch = _selectionEpoch;
+      final wasShowingFiles = _showFiles;
       await refreshStatus();
       if (_disposed || quitting || !available || epoch != _selectionEpoch) {
         return;
@@ -609,6 +640,7 @@ class StorageClient extends ChangeNotifier {
           connected &&
           available &&
           !quitting &&
+          (!wasShowingFiles || _showFiles) &&
           (_directoryStale ||
               _directoryChecked == null ||
               DateTime.now().difference(_directoryChecked!) >=
@@ -629,6 +661,7 @@ class StorageClient extends ChangeNotifier {
     if (busy) {
       return;
     }
+    final statusVersion = _statusVersion;
     busy = true;
     activity = label;
     error = null;
@@ -642,7 +675,9 @@ class StorageClient extends ChangeNotifier {
       activity = '';
       activeId = null;
       notifyListeners();
-      unawaited(pollNow());
+      if (_showFiles || statusVersion == _statusVersion) {
+        unawaited(refreshView());
+      }
     }
   }
 
@@ -749,7 +784,7 @@ class StorageClient extends ChangeNotifier {
       if (!_disposed && epoch == _selectionEpoch) {
         _selectingProfile = null;
         notifyListeners();
-        unawaited(pollNow());
+        if (_showFiles) unawaited(refreshView());
       }
     }
   }
@@ -1012,7 +1047,6 @@ class StorageClient extends ChangeNotifier {
       return false;
     }
     quitting = true;
-    _poll?.cancel();
     activity = '正在退出，正在收尾连接…';
     notifyListeners();
     try {
@@ -1033,12 +1067,6 @@ class StorageClient extends ChangeNotifier {
     } catch (e) {
       quitting = false;
       activity = '';
-      if (available && !_disposed) {
-        _poll = Timer.periodic(
-          const Duration(seconds: 3),
-          (_) => unawaited(pollNow()),
-        );
-      }
       error = '$e';
       notifyListeners();
       return false;
@@ -1049,7 +1077,6 @@ class StorageClient extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     if (!quitting) updates.dispose();
-    _poll?.cancel();
     super.dispose();
   }
 }

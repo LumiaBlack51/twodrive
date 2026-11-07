@@ -7,10 +7,12 @@ class TrayPanel extends StatelessWidget {
     super.key,
     required this.client,
     required this.onManage,
+    this.onRefresh,
     required this.onOpenFolder,
     required this.onQuit,
     this.onSignOut,
   });
+  final VoidCallback? onRefresh;
   final StorageClient client;
   final Future<void> Function([int page]) onManage;
   final Future<void> Function() onOpenFolder;
@@ -308,6 +310,16 @@ class TrayPanel extends StatelessWidget {
                                     ),
                                   ),
                                 ),
+                                if (onRefresh != null)
+                                  IconButton(
+                                    tooltip: '刷新状态',
+                                    onPressed:
+                                        c.available && !c.busy && !c.quitting
+                                        ? onRefresh
+                                        : null,
+                                    icon: const Icon(Icons.refresh, size: 16),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 8),

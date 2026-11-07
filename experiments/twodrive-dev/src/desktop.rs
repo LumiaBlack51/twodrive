@@ -303,7 +303,7 @@ impl App {
             .map(|d| d.next_retry_unix)
             .min();
         let released = if clear { db.prune_cache(0)? } else { 0 };
-        let records = db.all_records()?;
+        let records = db.cache_status_records()?;
         let pending = records
             .iter()
             .filter(|r| {
@@ -651,11 +651,12 @@ impl App {
         if gateway_dead {
             self.backend = None;
         }
-        let cache = self
-            .connected
-            .as_ref()
-            .map(|p| self.cache(p, false))
-            .transpose()?;
+        let cache = self.connected.as_ref().and_then(|profile| {
+            accounts
+                .iter()
+                .find(|account| account["profile"].as_str() == Some(profile.id.as_str()))
+                .map(|account| account["cache"].clone())
+        });
         let backup = self
             .connected
             .as_ref()

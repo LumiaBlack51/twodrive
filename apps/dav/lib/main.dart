@@ -24,7 +24,8 @@ Future<void> main(List<String> args) async {
   await windowManager.setTitle(option('--window-title', 'TwoDrive'));
 
   final root = File(Platform.resolvedExecutable).parent.path;
-  final client = StorageClient();
+  final client = StorageClient()
+    ..setView(visible: !args.contains('--background'), files: true);
   final fixtureRoot = option('--native-local-fixture-root', '');
   runApp(DavApp(client: client, desktop: true));
   await client.start(
@@ -48,6 +49,7 @@ Future<void> main(List<String> args) async {
     );
   }
   if (args.contains('--background') && trayReady) {
+    client.setView(visible: false);
     await windowManager.hide();
   }
 }

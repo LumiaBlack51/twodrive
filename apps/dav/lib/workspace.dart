@@ -101,17 +101,38 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     await tray.icon(icon, title: c.trayTitle);
   }
 
+  void refreshWorkspace({bool forceDirectory = false}) {
+    c.setView(
+      visible: true,
+      files: !panel && page == WorkspacePage.files.index,
+      quota: panel || page == WorkspacePage.connections.index,
+    );
+    unawaited(c.refreshView(forceDirectory: forceDirectory));
+  }
+
+  void navigateTo(int destination) {
+    setState(() => page = destination);
+    if (widget.desktop) refreshWorkspace(forceDirectory: true);
+  }
+
   @override
-  void onWindowFocus() => unawaited(c.pollNow(forceDirectory: true));
+  void onWindowFocus() {
+    if (!presenting) refreshWorkspace(forceDirectory: true);
+  }
+
+  @override
+  void onWindowMinimize() => c.setView(visible: false);
 
   @override
   void onWindowClose() {
     if (c.quitting) return;
+    c.setView(visible: false);
     unawaited(windowManager.hide());
   }
 
   @override
   void onWindowBlur() {
+    c.setView(visible: false);
     if (!Platform.isLinux && !Platform.isWindows && panel && !presenting) {
       unawaited(windowManager.hide());
     }
@@ -120,10 +141,12 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   Future<void> showPanel(Offset position) async {
     if (presenting) return;
     if (panel && await windowManager.isVisible()) {
+      c.setView(visible: false);
       await windowManager.hide();
       return;
     }
     presenting = true;
+    c.setView(visible: false);
     await windowManager.hide();
     setState(() => panel = true);
     await windowManager.setFullScreen(false);
@@ -143,11 +166,13 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       await windowManager.focus();
     }
     presenting = false;
+    if (mounted) refreshWorkspace();
   }
 
   Future<void> showManagement([int destination = 0]) async {
     if (presenting) return;
     presenting = true;
+    c.setView(visible: false);
     final fromPanel = panel;
     var veiled = false;
     try {
@@ -185,6 +210,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       presenting = false;
       if (veiled) await windowManager.setOpacity(1);
     }
+    if (mounted) refreshWorkspace(forceDirectory: true);
   }
 
   Future<void> show() => showManagement(page);
@@ -207,6 +233,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       if (widget.desktop) {
         // Keep the visible window independent of mount/pipe cleanup latency.
         // A refused shutdown must restore it instead of hiding unsaved writes.
+        c.setView(visible: false);
         try {
           await windowManager.hide();
         } catch (_) {}
@@ -390,6 +417,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       return TrayPanel(
         client: c,
         onManage: showManagement,
+        onRefresh: refreshWorkspace,
         onOpenFolder: () async {
           if (!c.canMount) {
             await showManagement(0);
@@ -456,8 +484,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                             ),
                             leading: Icon(destination.icon),
                             title: Text(destination.label),
-                            onTap: () =>
-                                setState(() => page = destination.index),
+                            onTap: () => navigateTo(destination.index),
                           ),
                         ),
                     ],
@@ -498,6 +525,14 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                         ),
                       ),
                       const Spacer(),
+                      if (page != WorkspacePage.files.index)
+                        IconButton(
+                          tooltip: '刷新状态',
+                          onPressed: !c.available || c.busy || c.quitting
+                              ? null
+                              : () => refreshWorkspace(),
+                          icon: const Icon(Icons.refresh),
+                        ),
                       const SizedBox(width: 12),
                       FilledButton.tonalIcon(
                         onPressed: c.busy || c.selected == null || !c.available
@@ -689,7 +724,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         '连接你的文件',
         '选择存储提供者并连接你的账号或设备。',
         OutlinedButton(
-          onPressed: () => setState(() => page = 2),
+          onPressed: () => navigateTo(WorkspacePage.connections.index),
           child: const Text('管理连接'),
         ),
       );

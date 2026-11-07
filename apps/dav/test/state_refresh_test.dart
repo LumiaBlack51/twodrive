@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
 
@@ -14,7 +15,83 @@ class DelayedClient extends StorageClient {
   }
 }
 
+class IdleClient extends StorageClient {
+  final calls = <String>[];
+
+  @override
+  Future<Json> request(
+    String op, [
+    Json args = const {},
+    int? requestId,
+  ]) async {
+    calls.add(op);
+    return switch (op) {
+      'profiles' => {
+        'selected': 'p',
+        'profiles': [
+          {'id': 'p', 'revision': 'r'},
+        ],
+      },
+      'status' => {'connected': true, 'profile': 'p', 'storage_usage': true},
+      'list' => {'entries': []},
+      _ => {},
+    };
+  }
+}
+
 void main() {
+  test(
+    'idle desktop sends no status, directory, or quota requests',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('twodrive-idle-');
+      final c = IdleClient();
+      addTearDown(() async {
+        await c.shutdown();
+        c.dispose();
+        await temp.delete(recursive: true);
+      });
+      // The fake transport owns a real child so start exercises the same
+      // lifecycle as the desktop, including the old repeating timer.
+      final engine = File('${temp.path}/engine');
+      await engine.writeAsString('#!/bin/sh\nexec cat >/dev/null\n');
+      expect((await Process.run('chmod', ['700', engine.path])).exitCode, 0);
+      await c.start(engine.path, temp.path, '', '');
+      expect(c.calls, ['subscribe', 'profiles', 'status']);
+      c.calls.clear();
+      await Future<void>.delayed(const Duration(milliseconds: 3300));
+      expect(c.calls, isEmpty);
+
+      c.setView(visible: true, quota: true);
+      await c.refreshView();
+      expect(c.calls, ['status', 'quota']);
+      c.calls.clear();
+
+      c.setView(visible: true, files: true);
+      await c.refreshView(forceDirectory: true);
+      expect(c.calls, ['status', 'list']);
+    },
+    skip: Platform.isWindows,
+  );
+
+  test(
+    'closing Files during status skips the follow-up directory read',
+    () async {
+      final c = DelayedClient()
+        ..available = true
+        ..selected = 'p'
+        ..status = {'connected': true, 'profile': 'p'};
+      c.setView(visible: true, files: true);
+      final refresh = c.refreshView(forceDirectory: true);
+      await Future<void>.delayed(Duration.zero);
+      expect(c.calls, ['status']);
+      c.setView(visible: false);
+      c.replies.single.complete({'connected': true, 'profile': 'p'});
+      await refresh;
+      expect(c.calls, ['status']);
+      c.dispose();
+    },
+  );
+
   test('long operation coalesces a hundred status refreshes', () async {
     final c = DelayedClient();
     final refreshes = List.generate(100, (_) => c.refreshStatus());

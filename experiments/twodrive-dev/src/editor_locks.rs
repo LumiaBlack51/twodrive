@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn queue_rejects_paths_outside_the_narrow_office_lock_namespace() {
         let root = tempfile::tempdir().unwrap();
-        let state = State::new(root.path().to_owned()).unwrap();
+        let state = State::new(root.path().join("editor-locks")).unwrap();
         let job = Job {
             id: "../escape".into(),
             path: "/ordinary.xlsx".into(),

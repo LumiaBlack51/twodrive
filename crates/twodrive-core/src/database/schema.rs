@@ -33,6 +33,9 @@ impl Database {
                 pin_inheritance_blocked INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_files_parent_path ON files(parent_path);
+            CREATE INDEX IF NOT EXISTS idx_files_cache_status ON files(path)
+                WHERE cache_path IS NOT NULL
+                   OR state IN ('writing', 'dirty', 'uploading', 'conflict', 'error');
             CREATE TABLE IF NOT EXISTS app_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
