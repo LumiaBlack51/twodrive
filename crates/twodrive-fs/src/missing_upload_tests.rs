@@ -19,7 +19,7 @@ const EDIT: &[u8] = b"durable local edit after remote deletion";
 type OnAck = Box<dyn FnOnce(MetadataEntry) + Send>;
 
 struct Backend {
-    inner: MockBackend,
+    inner: std::sync::Arc<MockBackend>,
     bound_attempts: AtomicUsize,
     copies: AtomicUsize,
     operation: RequestOperation,
@@ -34,7 +34,7 @@ struct Backend {
 impl Backend {
     fn new() -> Self {
         Self {
-            inner: MockBackend::new(),
+            inner: std::sync::Arc::new(MockBackend::new()),
             bound_attempts: AtomicUsize::new(0),
             copies: AtomicUsize::new(0),
             operation: RequestOperation::Graph,
@@ -707,6 +707,45 @@ fn check_renamed_recovery(test: &Test, destination: &str, moves: usize) {
         .unwrap();
     assert_eq!(test.backend.download(&remote.remote_id).unwrap(), EDIT);
     assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 0);
+}
+
+#[test]
+fn recovery_copy_deleted_and_settled_before_upload_ack_is_not_resurrected() {
+    let test = Test::new("dot-copy-delete-completed");
+    test.backend.delete(CLOUD).unwrap();
+    let db = test.db.clone();
+    let deletion_backend = test.backend.inner.clone();
+    let copy_id = std::sync::Arc::new(Mutex::new(String::new()));
+    let seen = std::sync::Arc::clone(&copy_id);
+    *test.backend.on_ack.lock().unwrap() = Some(Box::new(move |uploaded| {
+        db.upsert_metadata(&uploaded).unwrap();
+        let copy = db
+            .get_by_cloud_remote_id(&uploaded.remote_id)
+            .unwrap()
+            .unwrap();
+        db.queue_pending_delete(&copy).unwrap();
+        assert_eq!(
+            crate::recover_pending_deletes(&db, deletion_backend.as_ref()).unwrap(),
+            1
+        );
+        assert!(db.pending_deletes().unwrap().is_empty());
+        assert!(
+            deletion_backend
+                .get_metadata(&uploaded.remote_id)
+                .unwrap()
+                .is_none()
+        );
+        *seen.lock().unwrap() = uploaded.remote_id;
+    }));
+    assert_eq!(recover_dirty_uploads(&test.db, &test.backend).unwrap(), 1);
+    let id = copy_id.lock().unwrap().clone();
+    assert!(!id.is_empty());
+    let reopened = Database::new(test.db.path());
+    reopened.init().unwrap();
+    assert!(reopened.get_by_cloud_remote_id(&id).unwrap().is_none());
+    assert!(reopened.get_by_remote_id(LOCAL).unwrap().is_none());
+    assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 0);
+    assert_eq!(test.backend.copies.load(Ordering::SeqCst), 1);
 }
 
 #[test]

@@ -359,7 +359,7 @@ pub(crate) fn recover_pending_delete_id<B: CloudBackend>(
                 Err(err) => return Err(err.into()),
             }
         }
-        db.remove_pending_delete(&delete.remote_id)?;
+        db.complete_pending_delete(&delete.remote_id)?;
         Ok(true)
     })();
     if let Err(error) = &result {

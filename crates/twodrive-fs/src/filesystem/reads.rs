@@ -77,24 +77,27 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn release_read_handle(&mut self, fh: u64) -> anyhow::Result<()> {
-        if let Some(handle) = self.read_handles.get(&fh)
+        let access = if let Some(handle) = self.read_handles.get(&fh)
             && !handle.unlinked
         {
             // Close already commits release bookkeeping. Record the final access
             // before dropping its cache lease, so eviction cannot overtake a
-            // queued periodic touch. A failed commit retains the lease.
-            self.db.mark_cache_path_accessed(&handle.cache_path)?;
-        }
+            // successful touch. Accounting failure is reported, but FUSE will
+            // not send another release: always consume this final handle.
+            self.db.mark_cache_path_accessed(&handle.cache_path)
+        } else {
+            Ok(())
+        };
         let Some(handle) = self.read_handles.remove(&fh) else {
             return Ok(());
         };
         let cache_path = handle.unlinked.then(|| handle.cache_path.clone());
         drop(handle);
-        if let Some(cache_path) = cache_path {
-            self.cleanup_unlinked_cache(&cache_path)?;
-        }
-        self.db.finish_pending_releases()?;
-        Ok(())
+        let cleanup = cache_path
+            .as_ref()
+            .map_or(Ok(()), |path| self.cleanup_unlinked_cache(path));
+        let releases = self.db.finish_pending_releases();
+        access.and(cleanup).and(releases.map(|_| ()))
     }
 
     pub(super) fn note_read_access(&self, handle: &ReadHandle) {

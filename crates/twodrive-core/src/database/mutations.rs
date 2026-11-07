@@ -558,6 +558,26 @@ impl Database {
         Ok(())
     }
 
+    /// Call only after the remote deletion succeeded. Unlike cancellation of a
+    /// stale cleanup job, completion leaves durable identity evidence: a delayed
+    /// upload receipt may still refer to this now-absent object.
+    pub fn complete_pending_delete(&self, remote_id: &str) -> anyhow::Result<()> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO completed_cloud_deletes(cloud_remote_id,completed_unix)
+             SELECT cloud_remote_id,?2 FROM pending_deletes
+             WHERE remote_id=?1 AND cloud_remote_id IS NOT NULL",
+            params![remote_id, now_unix()],
+        )?;
+        tx.execute(
+            "DELETE FROM pending_deletes WHERE remote_id=?1",
+            params![remote_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn is_pending_delete(&self, remote_id: &str, path: &str) -> anyhow::Result<bool> {
         let conn = self.connect()?;
         let path = normalize_cloud_path(path);

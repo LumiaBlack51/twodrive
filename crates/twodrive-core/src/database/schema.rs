@@ -52,6 +52,10 @@ impl Database {
             CREATE TABLE IF NOT EXISTS retired_cache (
                 cache_path TEXT PRIMARY KEY
             );
+            CREATE TABLE IF NOT EXISTS completed_cloud_deletes (
+                cloud_remote_id TEXT PRIMARY KEY,
+                completed_unix INTEGER NOT NULL
+            );
             "#,
         )?;
         ensure_column(

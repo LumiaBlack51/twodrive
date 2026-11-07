@@ -1951,6 +1951,37 @@ fn untouched_writable_handle_does_not_hide_new_remote_attributes() {
 }
 
 #[test]
+fn failed_final_access_update_does_not_leak_a_closed_reader() {
+    let mut test = TestFs::new("cached-read-access-failure");
+    let record = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let ino = test.fs.inodes.ino_for_path(&record.metadata.path).unwrap();
+    let cache = test.fs.ensure_cached(&record).unwrap();
+    let fh = test.fs.open_read_handle(ino, cache.clone()).unwrap();
+    drop(std::mem::replace(
+        &mut test.fs.read_pool,
+        crate::read_pool::ReadPool::new(),
+    ));
+    let conn = rusqlite::Connection::open(test.fs.db.path()).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_access BEFORE UPDATE OF cache_accessed_unix ON files BEGIN SELECT RAISE(ABORT,'injected access update failure'); END;").unwrap();
+    assert!(test.fs.release_read_handle(fh).is_err());
+    assert!(!test.fs.read_handles.contains_key(&fh));
+    let unlocked = std::fs::File::open(&cache).unwrap();
+    unlocked
+        .try_lock()
+        .expect("final close must release its cache lock even on accounting failure");
+    drop(unlocked);
+    conn.execute_batch("DROP TRIGGER fail_access;").unwrap();
+    let next = test.fs.open_read_handle(ino, cache.clone()).unwrap();
+    test.fs.release_read_handle(next).unwrap();
+    assert!(test.fs.read_handles.is_empty());
+}
+
+#[test]
 fn cached_read_and_close_refresh_retention_before_releasing_the_lease() {
     let mut test = TestFs::new("cached-read-retention");
     let record = test

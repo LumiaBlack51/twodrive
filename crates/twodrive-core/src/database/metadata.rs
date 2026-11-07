@@ -40,6 +40,11 @@ impl Database {
         let copy_delete: Option<String> = tx.query_row(
             "SELECT remote_id FROM pending_deletes WHERE cloud_remote_id=?1 OR remote_id=?1 LIMIT 1",
             params![uploaded.remote_id], |row| row.get(0)).optional()?;
+        let already_deleted: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM completed_cloud_deletes WHERE cloud_remote_id=?1)",
+            params![uploaded.remote_id],
+            |row| row.get(0),
+        )?;
         if let Some(deleted_id) = copy_delete {
             // This is the COPY's deletion intent, not the original's. Never
             // recreate it or clear an unrelated newer upload on its tombstone.
@@ -49,7 +54,7 @@ impl Database {
                 params![deleted_id, cache_path.to_string_lossy(), uploaded.path],
             )?;
             anyhow::ensure!(settled == 1, "recovery copy deletion settlement rejected");
-        } else {
+        } else if !already_deleted {
             let existing = self.query_record(&tx,
                 "SELECT remote_id,path,parent_path,name,is_dir,size,modified_unix,etag,state,cache_path,cache_accessed_unix,pin_explicit,pin_origin_remote_id,pin_inheritance_blocked,cloud_remote_id,local_mode FROM files WHERE remote_id=?1",
                 params![copy_id])?;
@@ -98,6 +103,9 @@ impl Database {
             // back. Preserve its metadata/cache and retire only the acknowledged
             // original claim below. The unattached old cache remains recoverable.
         }
+        // Completed deletion evidence survives queue removal and restarts. It
+        // suppresses only this late receipt, not a later ordinary delta import
+        // of an intentionally restored cloud object.
         tx.execute(
             "DELETE FROM files WHERE remote_id = ?1 AND state = 'conflict'
                AND cache_path IS ?2 AND cloud_remote_id IS ?3

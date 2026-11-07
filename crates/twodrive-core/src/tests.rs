@@ -152,6 +152,44 @@ fn recovery_copy_deleted_before_acknowledgement_is_not_resurrected() {
 }
 
 #[test]
+fn completed_delete_evidence_is_atomic_and_does_not_hide_a_later_restore() {
+    let (test, original, copy, cache) = recovery_completion_fixture("copy-delete-evidence");
+    test.db.upsert_metadata(&copy).unwrap();
+    let imported = test
+        .db
+        .get_by_cloud_remote_id(&copy.remote_id)
+        .unwrap()
+        .unwrap();
+    let pending = test.db.queue_pending_delete(&imported).unwrap();
+    let conn = Connection::open(test.db.path()).unwrap();
+    conn.execute_batch("CREATE TRIGGER reject_delete_evidence BEFORE INSERT ON completed_cloud_deletes BEGIN SELECT RAISE(ABORT,'injected evidence failure'); END;").unwrap();
+    assert!(test.db.complete_pending_delete(&pending.remote_id).is_err());
+    assert_eq!(test.db.pending_deletes().unwrap().len(), 1);
+    conn.execute_batch("DROP TRIGGER reject_delete_evidence;")
+        .unwrap();
+    test.db.complete_pending_delete(&pending.remote_id).unwrap();
+    assert!(test.db.pending_deletes().unwrap().is_empty());
+    let restored = MetadataEntry::new_file(&copy.remote_id, &copy.path, 6, 4, "restored-v2");
+    test.db.upsert_metadata(&restored).unwrap();
+    assert!(
+        test.db
+            .complete_missing_conflict_upload(&original, &copy, &cache)
+            .unwrap()
+    );
+    let current = test
+        .db
+        .get_by_cloud_remote_id(&copy.remote_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.metadata.etag, restored.etag);
+    assert_eq!(current.metadata.path, restored.path);
+    assert_eq!(current.metadata.size, restored.size);
+    assert_eq!(current.metadata.modified_unix, restored.modified_unix);
+    assert_eq!(current.state, FileState::OnlineOnly);
+    assert!(current.cache_path.is_none());
+}
+
+#[test]
 fn delayed_recovery_acknowledgement_preserves_an_imported_newer_copy() {
     let (test, original, copy, cache) = recovery_completion_fixture("copy-newer-before-ack");
     let newer = MetadataEntry::new_file(&copy.remote_id, &copy.path, 5, 3, "copy-v2");

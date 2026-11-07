@@ -69,11 +69,18 @@
     ],
     "native_checkpoint_recovery_and_nested_publication": "passed on actual Windows with generated roots; rejects mismatched IDs and junction parents",
     "windows_core_fs_default": {
-      "core": 57,
-      "filesystem": 22
+      "core": 58,
+      "filesystem": 23
     },
     "strict_clippy": "Windows core/fs and CFAPI, Linux core/fs passed",
-    "remaining": "final CI and follow-up review for this revision; full native takeover is still incomplete"
+    "remaining": "final CI and follow-up review for this revision; full native takeover is still incomplete",
+    "followup_deletion_completion_evidence": true,
+    "followup_failed_close_releases_handle": true,
+    "linux_core_fs_default": {
+      "core": 59,
+      "filesystem": 80,
+      "ignored_environment": 11
+    }
   },
   "cleanup": {
     "office_fixture_processes_and_roots_cleaned": true,
