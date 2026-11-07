@@ -1,0 +1,3 @@
+# Protocol implementation pinned and checked by smb_readonly.py. Install in a
+# dedicated venv; no sudo, kernel mount, OS credential pool or service required.
+smbprotocol==1.17.0

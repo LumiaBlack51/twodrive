@@ -1,0 +1,373 @@
+{
+  "date": "2026-11-07",
+  "timezone": "Asia/Shanghai",
+  "scope": "isolated SMB read-only candidate and authorized PR 59 submission to dev; no release, installation or live user share access",
+  "baseline": {
+    "remote": "https://github.com/LumiaBlack51/twodrive.git",
+    "dev": "f2d2ee40a1341f49b4f2f5d7280ee7df202be524",
+    "main": "a64ce65c8282398aafa79e66f8279b518e8d6e1c",
+    "pr47": "b8c066f010c9fb16f9777f1976c8c346792b8712",
+    "pr50": "dfedcb6da51cdc4a7d20778c11c8f5cf8874538d",
+    "open_prs": [
+      45,
+      46,
+      47,
+      50
+    ],
+    "branch": "codex/smb-readonly-20261107",
+    "changes": "source submitted as 7e600c6; PR 59 targets dev"
+  },
+  "runtime": {
+    "platform": "Linux x86_64",
+    "rust": "rustc 1.96.0",
+    "python": "3.12",
+    "smbprotocol": "1.17.0",
+    "pyspnego": "0.12.4",
+    "cryptography": "50.0.2",
+    "samba": "4.22.6 Debian bookworm-backports, private extraction; positive fixture follow symlinks=no and share:fake_fscaps=128; stock 4.19.5/4.22.6 refused",
+    "authentication": "Linux explicit password NTLM, LM_COMPAT_LEVEL=5; synthetic local account and empty domain only",
+    "tested_dialects": {
+      "0x0311": "encryption required",
+      "0x0210": "explicit signed-only policy; server signing mandatory"
+    },
+    "default_policy": "require signing and SMB3 encryption; no SMB1/guest/security downgrade",
+    "server_contract": "requires advertised and correctly implemented reparse/no-follow; server-transparent Unix links and false capability declarations unsupported; no product override"
+  },
+  "commands": [
+    {
+      "command": "git fetch origin main dev; git fetch origin refs/pull/47/head:refs/remotes/origin/pr47 refs/pull/50/head:refs/remotes/origin/pr50",
+      "result": "passed; read-only remote inspection"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "passed"
+    },
+    {
+      "command": "cargo fmt --manifest-path experiments/twodrive-dev/Cargo.toml --all -- --check",
+      "result": "passed"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "cargo clippy --manifest-path experiments/twodrive-dev/Cargo.toml --all-targets --features mount --locked -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "result": "passed"
+    },
+    {
+      "command": "cargo build --manifest-path experiments/twodrive-dev/Cargo.toml --features mount --locked --bins",
+      "result": "passed"
+    },
+    {
+      "command": "cargo test --workspace --locked",
+      "result": {
+        "passed": 175,
+        "failed": 0,
+        "ignored": 8
+      }
+    },
+    {
+      "command": "cargo test --manifest-path experiments/twodrive-dev/Cargo.toml --features mount --locked",
+      "result": {
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "command": "python scripts/test_smb_component.py",
+      "result": {
+        "passed": 7
+      }
+    },
+    {
+      "command": "TWODRIVE_TEST_SMB_COMPONENT=<saved pre-fix component> python scripts/test_smb_component.py ComponentTests.test_real_library_integer_filetime_and_directory_datetime_have_matching_observation",
+      "result": "expected failure; actual integer FILETIME AttributeError on old component, current test passes"
+    },
+    {
+      "command": "python scripts/test-smb-readonly.py --smbd <private smbd> --engine <candidate twodrive-dav-engine> --peer <candidate twodrive-dev> --advertise-test-reparse-capability",
+      "result": {
+        "fixture_reparse_advertisement_override": true,
+        "fixture_follow_symlinks": false,
+        "passed": [
+          "schema_private_credentials_and_readonly_permission",
+          "SMB311_encrypted_browse_metadata_unicode_empty_128MiB_hash",
+          "backend_and_UI_IPC_reject_all_writes_mount_and_noclobber",
+          "path_traversal_dangerous_server_name_and_symlink_escape_rejected",
+          "file_and_directory_subroot_link_escape_refused_under_supported_server_policy",
+          "cancel_after_content_keeps_partial_private_and_next_request_works",
+          "server_local_truncation_cannot_publish_complete_download",
+          "file_read_permission_error_cannot_publish_content",
+          "real_midstream_disconnect_no_publish_reconnect_new_binding",
+          "separate_share_root_binding_and_auth_permission_errors_redacted",
+          "IPC_identity_edits_do_not_inherit_credentials",
+          "SMB210_signed_only_explicit_and_encryption_downgrade_refused",
+          "stalled_negotiation_cancelled_within_three_seconds"
+        ],
+        "unverified": [
+          "Windows",
+          "physical NAS",
+          "Kerberos",
+          "Windows junction/DFS interoperability",
+          "SMB 2.0.2/3.0/3.0.2 dialects"
+        ]
+      }
+    },
+    {
+      "command": "python3 scripts/test-storage-connections.py --engine <candidate engine> --peer <candidate peer>",
+      "result": {
+        "mode": "isolated-local-IPC-UDP-QUIC",
+        "checks": {
+          "online_add_edit_remove_preserves_active_revision": true,
+          "onedrive_schema_and_independent_defaults_without_login": true,
+          "actual_signed_udp_discovery_without_pairing_secret": true,
+          "actual_invitation_pairing_and_quic_read_write_modify_delete": true,
+          "paired_reconnect_without_reusing_invitation": true,
+          "switch_back_to_existing_connection": true
+        },
+        "not_verified": [
+          "real-OneDrive-OAuth-and-cloud",
+          "physical-NAS",
+          "cross-network-NAT-hole-punching",
+          "native-Windows"
+        ]
+      }
+    },
+    {
+      "command": "python3 scripts/test-dav-desktop.py --engine <candidate engine> --peer <candidate peer>",
+      "result": {
+        "mode": "local-WebDAV",
+        "checks": {
+          "private_profiles": true,
+          "connect": true,
+          "connected_profile_management_preserves_active_account": true,
+          "connection_affinity_enforced": true,
+          "roundtrip_bytes": 2097356,
+          "roundtrip_sha256": "25e13b8004eab67ba7723f8ff39dd3b180edd968c2902d3e0ed47e9a74723b65",
+          "shallow_directory": true,
+          "no_clobber": true,
+          "traversal_rejected": true,
+          "rename": true,
+          "progress_events": 2,
+          "backup_committed_upload_recovery_by_hash": true,
+          "backup_conflict_preserves_remote": true,
+          "folder_backup_create_update_pause_resume_symlink_guard": true,
+          "remote_test_removed": true,
+          "readonly_enforced": true,
+          "autostart_toggle_isolated_default_off": true
+        },
+        "passed": true
+      }
+    },
+    {
+      "command": "flutter analyze (apps/dav)",
+      "result": "passed; no issues"
+    },
+    {
+      "command": "flutter test (apps/dav)",
+      "result": {
+        "passed": 44
+      }
+    },
+    {
+      "command": "dart format --output=none --set-exit-if-changed apps/dav/lib/profile_dialog.dart apps/dav/test/provider_contract_test.dart",
+      "result": "passed"
+    },
+    {
+      "command": "python3 -m unittest discover -s packaging/nautilus -p 'test_*.py'",
+      "result": {
+        "passed": 25
+      }
+    },
+    {
+      "command": "python3 -m unittest discover -s scripts -p 'test_twodrive_settings.py'",
+      "result": {
+        "passed": 4
+      }
+    },
+    {
+      "command": "python3 scripts/check-debian-policy.py",
+      "result": "passed; policy check only, no Debian build/release"
+    },
+    {
+      "command": "python3 scripts/check-local-package-locks.py",
+      "result": "failed: file absent in selected dev baseline; no manifest/lock changes"
+    },
+    {
+      "command": "direct Python tomllib comparison of local package versions in both Cargo.lock files against Cargo.toml",
+      "result": "passed; 12 local entries match; does not substitute for missing script implementation"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "python scripts/test-smb-readonly.py --smbd <stock private Samba 4.19.5> --engine <candidate> --expect-reparse-rejection --follow-test-symlinks",
+      "result": {
+        "passed": [
+          "server_without_reparse_advertisement_refused"
+        ],
+        "unverified": [
+          "positive transfers in this mode"
+        ]
+      }
+    },
+    {
+      "command": "python scripts/test-smb-readonly.py --smbd <stock private Samba 4.22.6> --engine <candidate> --expect-reparse-rejection --follow-test-symlinks",
+      "result": {
+        "passed": [
+          "server_without_reparse_advertisement_refused"
+        ],
+        "unverified": [
+          "positive transfers in this mode"
+        ]
+      }
+    },
+    {
+      "command": "TWODRIVE_TEST_SMB_COMPONENT=<saved pre-no-follow component> python scripts/test_smb_component.py ComponentTests.test_low_level_receive_cannot_follow_symlink_even_when_caller_requests_it",
+      "result": "expected old failure: True is not False; corrected component forces false"
+    },
+    {
+      "command": "candidate component with system Python lacking smbprotocol",
+      "result": "passed negative check: redacted actionable component_missing"
+    },
+    {
+      "command": "python3 -m unittest discover -s scripts -p 'test_*.py' (before test relocation; no smbprotocol)",
+      "result": {
+        "expected_failure": true,
+        "ran": 32,
+        "errors": 5,
+        "skipped": 5
+      }
+    },
+    {
+      "command": "python3 -m unittest discover -s scripts -p 'test_*.py' (after test relocation; no smbprotocol)",
+      "result": {
+        "ran": 25,
+        "passed": 20,
+        "skipped": 5,
+        "failed": 0
+      }
+    },
+    {
+      "command": "private venv: python -m pip install --no-cache-dir -r experiments/twodrive-dev/components/requirements-smb.txt; python experiments/twodrive-dev/components/test_smb_component.py",
+      "result": {
+        "passed": 7,
+        "failed": 0
+      }
+    }
+  ],
+  "build_policy": "separate target; CARGO_BUILD_JOBS=2, nice 15, ionice idle for initial/primary builds",
+  "observed_failures": [
+    {
+      "incident": "TD-20261107-02",
+      "result": "initial component metadata failed on integer FILETIME; fixed and old-fail/new-pass regression retained"
+    },
+    {
+      "incident": "TD-20261107-03",
+      "result": "first dev run: existing test_agent system start returned error; root cause unconfirmed; isolated rerun 2/2 and later complete runs passed"
+    },
+    {
+      "result": "initial Samba fixture needed private initial log/ncalrpc paths and nonzero synthetic password timestamp; corrected without system edits"
+    },
+    {
+      "result": "Samba may return legal mangled aliases for Unix-only names; test changed to verify safe returned names rather than falsely require raw unsafe row"
+    },
+    {
+      "result": "Samba SMB2-only fixture with global encryption desired returned an encryption flag; explicit SMB2 fixture uses encryption off. Client production encryption requirement unchanged and downgrade still fails"
+    },
+    {
+      "result": "first strict Clippy found needless_question_mark in new code; corrected; final strict check passed"
+    },
+    {
+      "incident": "TD-20261107-04",
+      "result": "upstream low-level receive also follows symlinks by default; explicit false guard added; old-fail/new-pass unit regression"
+    },
+    {
+      "incident": "TD-20261107-05",
+      "result": "one-off report generator used wrong array index and protective assertion stopped before saving; command-key lookup corrected"
+    },
+    {
+      "incident": "TD-20261107-06",
+      "result": "Samba transparent Unix links can bypass subroot even with client no-follow requests. Stock servers without reparse capability are now refused. Manually advertising a capability while retaining transparent following is unsupported and still cannot establish confinement. Positive tests use an explicitly controlled server policy; no stock Samba compatibility claim"
+    },
+    {
+      "result": "link-negative test initially required a nonzero error for every stat; Samba may instead hide the link with end/missing=true. Corrected assertion requires no visible entry/data/verified result; hidden links are not reported as a product failure"
+    },
+    {
+      "result": "Samba 4.22 local runtime required private matching LDAP/ICU/LDB libraries; downloaded official packages and verified hashes, no system installation or apt-source changes"
+    },
+    {
+      "incident": "TD-20261107-07",
+      "commit": "1edf3b9652e52ca68298f0b90fbf2ae955171d2e",
+      "result": "Linux desktop generic discovery picked up optional SMB tests and failed with 5 missing-smbprotocol errors; reproduced locally. Tests relocated to their dev component and explicit dependency-owning CI; generic discovery now passes without optional dependency. Protocol sources unchanged."
+    }
+  ],
+  "unverified": [
+    "native Windows build/runtime and credential ACL/process crash cleanup",
+    "real Windows share",
+    "physical NAS",
+    "Kerberos (not implemented)",
+    "DFS/reparse interoperability (unsupported/refused)",
+    "SMB 2.0.2, 3.0, 3.0.2 negotiation",
+    "IPv6",
+    "independent network/NAT",
+    "real user cloud or NAS data",
+    "desktop mouse interaction and full GUI build",
+    "normally ignored root FUSE cases",
+    "release/deployment not requested; latest hosted CI tracked separately under submission",
+    "Active Directory/domain authentication",
+    "stock Samba positive transfers (intentionally refused)",
+    "servers that falsely advertise capabilities or transparently follow Unix links (unsupported)"
+  ],
+  "privacy": "synthetic fixtures only; no real credentials, session URLs, server GUIDs, personal listings, backup mappings or raw private logs in this report",
+  "incidents": [
+    "TD-20261107-01",
+    "TD-20261107-02",
+    "TD-20261107-03",
+    "TD-20261107-04",
+    "TD-20261107-05",
+    "TD-20261107-06",
+    "TD-20261107-07"
+  ],
+  "review_binaries": {
+    "kind": "local debug candidates, not installed/released",
+    "sha256": {
+      "twodrive-dav-engine": "bab4668ebb28032864349251bc7cd091f3454a1085a5b23ff4d5ff547efe7f9a",
+      "twodrive-dev": "0722768b3dc28c831ddc7aa15537edaf62e319902bb4170e27680bc89e0400cc"
+    },
+    "retained": false
+  },
+  "source_sha256": {
+    "experiments/twodrive-dev/src/smb.rs": "842e23977100d1be4d6d4b055cd540cd08360602312e809118f013f3298dc4eb",
+    "experiments/twodrive-dev/src/providers/smb.rs": "407a2eac3611f1df27fae4f54ded9c857d9ab0c580d9f21c33d2dee70e12b12e",
+    "experiments/twodrive-dev/components/smb_readonly.py": "ac59d5082fa5b6a6fd27e1b4cbb74648a39119559e05fc882d53e16cde6fda35"
+  },
+  "cleanup": {
+    "owned_target_removed": true,
+    "synthetic_servers_stopped": true,
+    "one_off_scripts_and_deb_downloads_removed": true,
+    "retained": "source and Git history only; disposable review binaries, private venv/extracted Samba, logs and one-off scripts removed after push",
+    "existing_daemon": "same PID 6459; no restart or replacement",
+    "user_requested_post_push_cleanup": true
+  },
+  "status": "local review candidate validated within explicitly documented server policy; stock Samba refused",
+  "submission": {
+    "authorized_date": "2026-11-07",
+    "target": "dev",
+    "branch": "codex/smb-readonly-20261107",
+    "status": "test ownership CI failure fixed locally; corrected head CI/Dot review pending; final authoritative status at PR 59",
+    "commit": "7e600c6b7f1fc86492994c60f623cd476c77569c",
+    "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/59",
+    "release_or_deployment": "not requested; existing program unchanged",
+    "prior_review": {
+      "commit": "1edf3b9652e52ca68298f0b90fbf2ae955171d2e",
+      "url": "https://github.com/LumiaBlack51/twodrive/pull/59#issuecomment-6704871852",
+      "result": "Dot static review: no new high-confidence actionable defect; await final applicable CI and retain narrow experimental server boundary. Not executed tests."
+    }
+  }
+}

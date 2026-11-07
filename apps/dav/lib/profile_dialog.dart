@@ -31,8 +31,10 @@ class _ProfileDialogState extends State<ProfileDialog> {
   Json? pickedItem;
   Json? get provider =>
       widget.providers.where((p) => p['id'] == kind).firstOrNull;
-  List<Json> get providerFields =>
-      ((provider?['fields'] as List?) ?? []).cast<Json>();
+  List<Json> get providerFields => ((provider?['fields'] as List?) ?? [])
+      .cast<Json>()
+      .where((f) => f['internal'] != true)
+      .toList();
   List<String> get networkModes =>
       ((provider?['network_modes'] as List?) ?? ['auto', 'direct', 'system'])
           .cast<String>();
@@ -349,9 +351,13 @@ class _ProfileDialogState extends State<ProfileDialog> {
                       child: Text('仅直连（绕过代理）'),
                     ),
                   if (networkModes.contains('system'))
-                    const DropdownMenuItem(
+                    DropdownMenuItem(
                       value: 'system',
-                      child: Text('使用系统路由和代理'),
+                      child: Text(
+                        (provider?['network_labels'] as Map?)?['system']
+                                as String? ??
+                            '使用系统路由和代理',
+                      ),
                     ),
                 ],
                 onChanged: runningAction
@@ -359,15 +365,19 @@ class _ProfileDialogState extends State<ProfileDialog> {
                     : (value) => setState(() => route = value!),
               ),
               const SizedBox(height: 14),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('允许修改远端文件'),
-                subtitle: const Text('可用操作取决于提供者和远端授权。'),
-                value: writable,
-                onChanged: runningAction
-                    ? null
-                    : (value) => setState(() => writable = value),
-              ),
+              if ((provider?['capabilities'] as Map?) == null ||
+                  ['upload', 'mkdir', 'rename', 'delete'].any(
+                    (key) => (provider!['capabilities'] as Map)[key] == true,
+                  ))
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('允许修改远端文件'),
+                  subtitle: const Text('可用操作取决于提供者和远端授权。'),
+                  value: writable,
+                  onChanged: runningAction
+                      ? null
+                      : (value) => setState(() => writable = value),
+                ),
               ExpansionTile(
                 title: const Text('高级设置'),
                 tilePadding: EdgeInsets.zero,

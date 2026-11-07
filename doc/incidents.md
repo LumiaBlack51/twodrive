@@ -2,6 +2,253 @@
 
 从 2026-09-15 起持续维护。每次故障新增条目，最近的条目放在前面；复发也单独记录并关联历史条目。请在下方最新记录区（[记录模板](#记录模板)之前）新增条目，保留模板后既有记录与分隔空行，避免重新占用旧分支共用的插入位置。维护流程见 [AGENTS.md](../AGENTS.md)。更早的调查保留在[文档索引](README.md#engineering-notes)，不追溯标记为已按本流程验证。
 
+本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
+
+## TD-20261107-07：可选 SMB 单元测试被通用桌面测试发现，缺少组件依赖
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：已修复并通过本地前后对照；新 head 的 hosted CI/Dot 待完成
+- 影响版本与环境：PR #59 的 `1edf3b9`；Linux 桌面 CI 和未安装可选 smbprotocol 的本地 Python
+- 关联历史故障：无；不是 SMB 协议或运行时连接错误
+
+### 症状与影响
+
+[Linux 桌面 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/42358173734/job/128360717712) 在 Desktop IPC and WebDAV operations 步骤失败。通用 discovery 共运行 32 项，其中 5 项 SMB 组件测试报 ModuleNotFoundError: smbprotocol，5 项平台测试按既有条件跳过。没有触及真实共享或现用程序。
+
+### 触发条件与复现
+
+在未安装 SMB 可选依赖的 Python 中运行 `python3 -m unittest discover -s scripts -p 'test_*.py'`。本地已复现同样的 5 个错误；专用 dev CI 已安装锁定的组件依赖，同批 7 项组件测试在 Linux/Windows 均通过。
+
+### 根因与证据
+
+新增测试放在通用 scripts discovery 范围内，但它属于需要 smbprotocol 的可选 dev 组件。通用桌面流程本身并不使用该组件，也没有安装其依赖；测试归属与依赖边界不一致。不是应将缺少依赖静默跳过的问题。
+
+### 解决办法与恢复操作
+
+将七项测试移至 dev 组件目录，调整相邻组件加载路径，并由已安装 requirements-smb.txt 的专用 Linux/Windows dev CI 显式执行。通用桌面 discovery 不增加可选依赖，也不屏蔽任何所属测试。无需修改产品协议实现或恢复用户状态。
+
+### 验证结果与边界
+
+旧布局已证实 5 项错误；修复后系统 Python（未安装 smbprotocol）通用 discovery 运行 25 项，20 项通过、5 项按既有平台条件跳过；私有 venv 安装 smbprotocol==1.17.0 后，移动后的七项组件测试全部通过。Debian policy 与 diff 检查通过；产品源码三项 SHA-256 与原协议验证一致，未重复构建。新 head 的 hosted CI/Dot 待完成；Windows CI 单元测试通过不能等同真实 Windows SMB 共享互通。
+
+### 防复发措施与后续
+
+保持可选组件测试和其依赖安装步骤位于同一专用 CI；同时保留无 SMB 依赖的通用 discovery 回归。
+
+### 交付记录
+
+本条随测试归属修复提交；最新提交与最终检查见 [PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 交付至 dev，等待新 head 的 CI/Dot，无 Release 或部署。
+
+## TD-20261107-06：旧 Samba 透明跟随 Unix 链接绕过客户端子根范围
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：已定位并新增 fail-closed 准入；最终支持范围见汇总
+- 影响版本与环境：未发布 SMB 候选；真实回环 Samba 4.19.5、允许同共享内跟随链接
+- 关联历史故障：TD-20261107-04 禁止库客户端重试，但不能解决服务端透明解析；属于另一层缺口
+
+### 症状与影响
+
+合成共享的子根 box 内有 jump 指向同共享兄弟目录。服务端 follow symlinks=yes 时，客户端 FILE_OPEN_REPARSE_POINT 及属性检查未阻止 /jump/inside 的元数据查询，返回了子根外合成对象。没有访问用户数据；未对用户 NAS 或真实 Windows 进行探测。
+
+### 触发条件与复现
+
+允许透明 Unix 链接的旧 Samba 4.19.5。此前 follow symlinks=no 的正向测试不包含该触发条件，不能视为充分的客户端范围验收。
+
+### 根因与证据
+
+旧服务端不向普通 SMB2/3 客户端表示这些 Unix 链接为可拒绝的 reparse 对象；禁止客户端重试不改变服务端已完成的解析。独立 QUERY_INFO 还观察到规范化名称在最终链接本身保留原名，进入其孩子时才暴露兄弟目录，故单靠规范化路径也不能建立对所有文件/目录链接可靠的隔离。
+
+### 解决办法与恢复操作
+
+访问根内容前以既有库的 QUERY_INFO/Structure 查询文件系统属性；未声明 FILE_SUPPORTS_REPARSE_POINTS 的服务器直接拒绝，不提供关闭保护的选项。保留全部逐层 no-follow、属性及祖先句柄检查。旧 Samba 4.19.5 实际返回能力缺失并被新候选拒绝；目录元数据必须逐项通过 no-follow 打开后才公开。另用私有解包 Samba 4.22.6、关闭透明跟随并在合成 fixture 显式声明能力，验证支持的读取路径；默认 4.22.6 同样拒绝。服务端测试组件不安装、不修改现用系统组件。
+
+### 验证结果与边界
+
+新增能力缺失/存在单元回归；旧版真实服务器的拒绝已执行。较新服务器的最终读取及受控服务器策略下的子根拒绝等结果见 [汇总](smb-readonly-validation-2026-11-07.json)。人为给 Samba 开启能力位但继续透明跟随的反例仍不能隔离子根，不支持这种错误声明模式，也不提供产品绕过选项。必须依照服务端协议正确实现 reparse/no-follow，不宣传为兼容所有 NAS；Windows 与实体 NAS 仍未验证。此前 4.19.5 的正向传输结果只保留为历史开发结果，不能归给最终受限候选。
+
+### 防复发措施与后续
+
+保留服务端开启跟随的合成测试和不具备安全能力时的拒绝测试；不能靠服务器 fixture 禁用功能掩盖客户端限制。后续支持旧 NAS 必须先另行解决可验证的链接范围语义，不能用用户勾选不安全假设替代保证。
+
+### 交付记录
+
+仅本地候选，未提交、推送、发布或部署；现用 daemon 未重启。
+
+## TD-20261107-05：本地验证汇总脚本按位置查找命令触发断言
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：已纠正并核验报告
+- 影响版本与环境：本轮一次性本地汇总脚本；非产品运行路径
+- 关联历史故障：无
+
+### 症状与影响
+
+清理已归属本轮的 target、保存候选程序后，报告生成器用错误数组下标定位 Samba 命令，保护断言失败。没有保存该内存中的错误赋值；磁盘报告仍为此前版本，未覆盖其他任务或用户状态。
+
+### 触发条件与复现
+
+脚本的 commands[12] 实际为 storage-connections，而非 Samba；检查命令字符串的断言阻止保存。
+
+### 根因与证据
+
+按人工计数的位置查找会随命令列表变化失效。错误不涉及测试执行结果、协议实现或当前 daemon。
+
+### 解决办法与恢复操作
+
+改为按命令中的稳定脚本路径唯一匹配，重读已成功的 Samba 汇总、核验候选 SHA-256 和 target 已清理状态，再保存 JSON。后续复核曾因 python/python3 前缀不同触发 StopIteration；报告内容已正确保存，随后改为按脚本路径核对，Samba、storage-connections 和两项拒绝结果的映射均通过。没有重放网络写入或替换现用软件。
+
+### 验证结果与边界
+
+最终 JSON 可解析，Samba 与既有 storage-connections 结果各归各位，候选摘要由实际文件计算。一次性生成器不进入产品，未为其新增常驻产品测试；最终文件另做结构/结果检查。
+
+### 防复发措施与后续
+
+汇总按稳定命令键匹配并核实唯一性，不依赖位置；只有实际已完成检查可写 passed。
+
+### 交付记录
+
+见本轮 [验证汇总](smb-readonly-validation-2026-11-07.json)；仅本地候选，未提交、推送、发布或部署。
+
+## TD-20261107-04：SMB 低层客户端默认也可能重试同共享符号链接
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：已修复，最终回归见验证汇总
+- 影响版本与环境：仅本轮未发布的 SMB 候选，smbprotocol 1.17.0
+- 关联历史故障：无；不是此前 FILETIME 类型问题
+
+### 症状与影响
+
+最终源码复核发现：即使不用高层 smbclient，库的 Connection.receive 默认 resolve_symlinks=true，也会在 STATUS_STOPPED_ON_SYMLINK 时尝试同共享内的新路径。共享内重定向仍可能越过用户选定的子根；不能仅以“不用高层池”宣称不跟随链接。没有访问用户共享或发现真实越界读取。
+
+### 触发条件与复现
+
+服务端返回带重解析信息的 STOPPED_ON_SYMLINK。初版 Samba fixture 的 follow symlinks=no 会由服务端拒绝链接，无法单独证明客户端行为。
+
+### 根因与证据
+
+实际安装的 connection.py 的 receive 分支会调用 resolve_path 并重新发送 Open。初版组件继承其默认值。逐层打开/检查属性仍保留，但客户端还必须禁止库内部的自动重试。
+
+### 解决办法与恢复操作
+
+使用本组件专属 NoFollowConnection，所有 receive（包含库内部调用）强制 resolve_symlinks=false；不修改库协议实现，不新增链接支持。没有用户数据恢复。
+
+### 验证结果与边界
+
+新增直接检查传给真实基类 receive 的选项：旧组件实际为 true，回归失败；修复后强制 false，六项组件测试通过。放开 Samba 服务端跟随后发现客户端选项仍不够，另见 TD-20261107-06；受支持的最终策略及目录/文件链接测试结果见 [汇总](smb-readonly-validation-2026-11-07.json)。这不等同于 Windows junction/DFS 已互通，仍明确不支持并未验证。
+
+### 防复发措施与后续
+
+依赖升级须检查其低层默认行为；保留库选项回归、祖先句柄检查、目录项实际打开验证和不受支持服务器的 fail-closed；不能把受控服务器策略包装成任意 NAS 的客户端强保证。
+
+### 交付记录
+
+仅本地候选，未提交或部署。
+
+## TD-20261107-03：SMB 开发验收中的既有 QUIC agent 测试一次启动失败
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：调查中 / 根因未确认；单独复跑及随后完整 dev 测试通过
+- 影响版本与环境：本轮 dev=f2d2ee4 的隔离 Linux 合成测试；未发现现用服务受影响
+- 关联历史故障：TD-20261012 系列为真实网络路由/解析问题；本次没有同根因证据
+
+### 症状与影响
+
+首次 `cargo test --features mount --locked` 的 `paired_control_recovers_child_failure_rejects_replay_and_cleans_up` 在 tests/test_agent.rs:179 期望 start(system) 为 ok，实际为 error。其他既有和 SMB 测试没有因此记为全部通过。
+
+### 触发条件与复现
+
+全套 dev 测试第一次执行出现一次。单独执行 `--test test_agent` 两项通过；随后完整 dev 测试再次通过。没有稳定复现条件。
+
+### 根因与证据
+
+保留脱敏断言 `left: "error", right: "ok"`。未收集足以解释子进程 start 失败的内部证据，不能凭复跑成功认定是负载、端口或网络原因，也不能归因 SMB 代码。
+
+### 解决办法与恢复操作
+
+没有修改 QUIC/agent 或既有网络路径；仅对该测试独立复跑，再执行完整回归。没有用户本地数据恢复、服务重启或系统网络修改。
+
+### 验证结果与边界
+
+失败和两次后续成功分别记录在 [验证汇总](smb-readonly-validation-2026-11-07.json)。这不构成既有 agent 逻辑已修复或真实跨网络互通的结论。
+
+### 防复发措施与后续
+
+若再次出现，收集该 start 响应的受限类别/退出状态，使用独立合成 state 定位后再补回归；不通过无限重试隐藏失败。
+
+### 交付记录
+
+本地审查候选，未提交、推送、开 PR、发布或部署。
+
+## TD-20261107-02：SMB 新适配器将 FILETIME 整数误按 datetime 读取
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：已修复并验证（真实回环 Samba、实际 smbprotocol 结构及单元回归）
+- 影响版本与环境：仅本轮尚未发布的 SMB 候选；smbprotocol 1.17.0 / Linux
+- 关联历史故障：无；不是已有 Google 媒体 ETag 或云端缓存故障
+
+### 症状与影响
+
+首次真实 SMB 3.1.1 加密鉴权成功后目录/元数据查询失败，未发布下载结果。组件对外只返回受限错误，没有将路径、账号或异常全文写入 IPC。
+
+### 触发条件与复现
+
+读取 `FileBasicInformation.last_write_time`；1.17.0 的该字段为整数 FILETIME，而目录结构的对应字段解码为 datetime。旧候选实际失败于 `AttributeError: 'int' object has no attribute 'timestamp'`。
+
+### 根因与证据
+
+把目录时间字段表示误用于 QUERY_INFO。另发现目录 datetime 只有微秒精度，基本信息保留 100ns；直接比较两种序列化 change time 会误拒绝合法观察。它们均不是强版本。
+
+### 解决办法与恢复操作
+
+明确转换 FILETIME 到 Unix 秒；change time 统一到共有微秒精度，仅作连接内附加变化检查，etag 为空。保持读取期间共享锁和完成后检查，不以时间戳替代强版本。没有现用数据恢复操作。
+
+### 验证结果与边界
+
+实际回环 Samba 的目录、stat、空/Unicode/128 MiB 流式下载通过。`test_real_library_integer_filetime_and_directory_datetime_have_matching_observation` 使用实际库结构和含非整微秒的时间：旧候选真实运行失败，当前代码通过；不是编译失败充当旧行为复现。完整范围见 [SMB 指南](smb-readonly-dev.md) 和[汇总](smb-readonly-validation-2026-11-07.json)。Windows/NAS 未验证。
+
+### 防复发措施与后续
+
+固定库版本，升级必须重跑真实结构回归和独立 SMB 服务器验收；不把 change time/路径/长度宣传成可跨重连版本。
+
+### 交付记录
+
+本地审查候选，未提交或发布。
+
+## TD-20261107-01：dev 的通用 FUSE 上传及缓存路径尚不等效于近期 main 修复
+
+- 日期：2026-11-07（Asia/Shanghai）
+- 状态：已定位差异待另行整合；本轮只读 SMB 不使用受影响路径
+- 影响版本与环境：dev=f2d2ee4 的普通 Linux FUSE 路径；不是 main=0.2.23 再次出现现场故障
+- 关联历史故障：main 的 TD-20261101-01/02/05、TD-20261021-01、未修改可写句柄及 known-folder 后续修复；保留其原有验证结论
+
+### 症状与影响
+
+用户要求核查协议接入基线，源码审计发现 dev 部分公共路径仍保留 main 近期修复前的机制。本轮未观察、触发或恢复用户文件故障。
+
+### 触发条件与复现
+
+比较最新 main/dev 对应函数及历史调查。潜在触发涉及迟到上传确认/改名所有权、缺失目标恢复、缓存版本变化和仅 writable open；未在 dev 主动重放这些竞争。
+
+### 根因与证据
+
+dev `queue_remote_delete` 仍直接插入无所有权前置检查；`preserve_conflict_copy` 仍要求原对象存在；普通 `has_existing_cache` 只检查状态/存在，metadata upsert 缺少 main 的版本/大小变更退休事务；read handle 仍按路径读取，writable open 即 Writing。另一方面 dev **已经有** NativeCacheJournal 的 generation/digest/lease/uncertain-upload 及 Backend::upload_snapshot，不能把提交不在祖先链等同为所有修复均缺失。详细逐机制对照和源码位置见 [基线说明](smb-readonly-dev.md#main-修复的机制核对)。
+
+### 解决办法与恢复操作
+
+本轮不迁移公共同步引擎：SMB 禁止写入、备份、挂载、递归索引和持久 worker 恢复，下载只经现有私有临时文件及不覆盖发布。未清队列、改生产数据库、读取用户挂载或重启程序。
+
+### 验证结果与边界
+
+上述差异是实际源码核对，不是相应 dev 竞争回归已经执行；main 的旧验证不自动继承为 dev 成功。SMB 有独立真实 Samba/合同/IPC 测试，后续公共修复须另立回归。贡献指南提及的 check-local-package-locks.py 在 dev 不存在，执行失败已记录；直接以 TOML 核对两锁文件的本地包版本通过，未将它冒称为缺失脚本已通过。
+
+### 防复发措施与后续
+
+按 [阶段方案](lan-storage-roadmap.md) 在 SMB 写入前单独审查相关公共差异，并协调仍开放的 #47/#50；本轮未自行合并。用户主工作区与其他 worktree 的既有修改均保留。
+
+### 交付记录
+
+仅本地审查候选，分支 codex/smb-readonly-20261107，未提交、推送、PR、合并、发布或部署。完整基线 SHA、已运行命令/结果和未验证范围见 [验证汇总](smb-readonly-validation-2026-11-07.json)。
+
 ## TD-20261029-03：开放贡献 PR 与新增 dev 增量上传分支发生整合冲突
 
 - 日期：2026-10-29（Asia/Shanghai）
