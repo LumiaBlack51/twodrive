@@ -2,6 +2,7 @@
 """Cross-platform, isolated process test. Never discovers normal application paths."""
 import argparse
 import json
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -64,7 +65,14 @@ try:
             break
         time.sleep(.1)
     assert snap["recent"][0]["outcome"] == "completed"
-    assert (root / "cache" / item["id"]).read_text() == "isolated round trip"
+    with sqlite3.connect((root / "engine.sqlite3").as_uri() + "?mode=ro", uri=True) as database:
+        state, cache_path, size = database.execute(
+            "SELECT state, cache_path, size FROM files WHERE remote_id = ?", (item["id"],)
+        ).fetchone()
+    assert state == "cached" and size == len(b"isolated round trip")
+    cache = Path(cache_path).resolve(strict=True)
+    assert cache.is_relative_to((root / "cache").resolve()), "cache escaped isolated state"
+    assert cache.read_bytes() == b"isolated round trip"
     assert rpc({"type": "set_paused", "paused": True})["ok"]
     server.terminate()
     server.wait(timeout=8)

@@ -84,10 +84,11 @@ fn pause_blocks_real_scheduler_and_upload_confirmations() {
     );
     assert!(call(&engine, "download", Command::Download { id: id.clone() }).ok);
     assert!(engine.run_one().unwrap());
-    assert_eq!(
-        std::fs::read(root.path().join("cache").join(id)).unwrap(),
-        b"synthetic bytes"
-    );
+    let db = twodrive_core::Database::new(root.path().join("engine.sqlite3"));
+    let downloaded = db.get_by_remote_id(&id).unwrap().unwrap();
+    let cache = downloaded.cache_path.expect("download published its cache");
+    assert!(cache.starts_with(root.path().join("cache")));
+    assert_eq!(std::fs::read(cache).unwrap(), b"synthetic bytes");
 }
 #[test]
 fn listing_does_not_hydrate_and_default_has_no_mock_data() {

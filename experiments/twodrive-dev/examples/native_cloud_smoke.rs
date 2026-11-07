@@ -1,0 +1,267 @@
+//! Explicit, disposable real-OneDrive validation. Never accepts an existing
+//! native root or an arbitrary cloud destination. No user work files are used.
+#[cfg(all(windows, feature = "native-local-fixture"))]
+fn run() -> anyhow::Result<()> {
+    use anyhow::{Context, ensure};
+    use sha2::{Digest, Sha256};
+    use std::{
+        fs,
+        io::{Read, Seek, SeekFrom, Write},
+        path::{Path, PathBuf},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+    use twodrive_dev::{
+        local_files::{LocalFileBridge, no_progress},
+        model::CloudBackend,
+        onedrive::{self, OneDrive},
+    };
+    use twodrive_local_files::native::{HydrationSource, Session};
+    let mut args = std::env::args_os().skip(1);
+    ensure!(
+        args.next().as_deref() == Some(std::ffi::OsStr::new("--allow-generated-cloud-write")),
+        "explicit generated-cloud-write flag required"
+    );
+    let account = PathBuf::from(args.next().context("account state required")?);
+    let expected = args
+        .next()
+        .context("expected personal owner required")?
+        .to_string_lossy()
+        .into_owned();
+    let root = PathBuf::from(args.next().context("NEW native root required")?);
+    ensure!(
+        args.next().is_none()
+            && account.is_absolute()
+            && root.is_absolute()
+            && !root.exists()
+            && root.file_name().is_some_and(|n| n
+                .to_string_lossy()
+                .starts_with("twodrive-cfapi-fixture-live-")),
+        "invalid validation scope"
+    );
+    let provider = OneDrive::open(&account, true)?;
+    let identity = provider.graph.readonly_identity(&mut || Ok(()))?;
+    ensure!(
+        identity.account.eq_ignore_ascii_case(&expected),
+        "current personal account mismatch; cloud writes refused"
+    );
+    let state = tempfile::Builder::new()
+        .prefix("twodrive-native-cloud-")
+        .tempdir()?;
+    let private = state.path().canonicalize()?;
+    let cache = private.join("cache");
+    fs::create_dir(&cache)?;
+    let cloud_folder = format!(
+        "/TwoDrive-native-validation-{:032x}",
+        rand::random::<u128>()
+    );
+    let cloud_file = format!("{cloud_folder}/generated.bin");
+    let initial = (0..(1024 * 1024 + 123))
+        .map(|i| (i % 251) as u8)
+        .collect::<Vec<_>>();
+    let edited = initial.iter().map(|b| b ^ 0x5a).collect::<Vec<_>>();
+    let input = private.join("generated-input.bin");
+    fs::write(&input, &initial)?;
+    // Private recovery evidence precedes any cloud mutation. It names only this
+    // generated scope and never includes tokens or upload-session URLs.
+    fs::write(
+        private.join("scope.json"),
+        serde_json::to_vec(
+            &serde_json::json!({"cloud_folder":cloud_folder,"cloud_file":cloud_file,
+        "initial_sha256":format!("{:x}",Sha256::digest(&initial)),"edited_sha256":format!("{:x}",Sha256::digest(&edited))}),
+        )?,
+    )?;
+    let result = (|| -> anyhow::Result<()> {
+        ensure!(
+            provider.get_metadata_by_path(&cloud_folder)?.is_none(),
+            "validation namespace already exists"
+        );
+        let folder = provider.create_folder(&cloud_folder)?;
+        let remote =
+            provider
+                .upload_file_with_version(&cloud_file, &input, None, None, &mut |_, _| Ok(()))?;
+        let bridge = onedrive::open_local_session(
+            twodrive_core::Database::new(private.join("journal.sqlite3")),
+            &cache,
+            &account,
+            true,
+        )?;
+        struct Source {
+            bridge: LocalFileBridge,
+            id: String,
+            size: usize,
+        }
+        impl HydrationSource for Source {
+            fn size(&self, id: &[u8]) -> Result<usize, String> {
+                if id != self.id.as_bytes() {
+                    return Err("outside generated cloud scope".into());
+                }
+                Ok(self.size)
+            }
+            fn read_range(
+                &self,
+                id: &[u8],
+                offset: usize,
+                len: usize,
+                cancelled: &AtomicBool,
+            ) -> Result<Vec<u8>, String> {
+                self.size(id)?;
+                if cancelled.load(Ordering::SeqCst) {
+                    return Err("cancelled".into());
+                }
+                let record = self
+                    .bridge
+                    .journal()
+                    .database()
+                    .get_by_cloud_remote_id(&self.id)
+                    .map_err(|e| e.to_string())?;
+                let local_id = if let Some(r) = record.filter(|r| r.cache_path.is_some()) {
+                    r.metadata.remote_id
+                } else {
+                    self.bridge
+                        .hydrate_cancellable(&self.id, cancelled)
+                        .map_err(|e| e.to_string())?
+                };
+                let mut lease = self
+                    .bridge
+                    .journal()
+                    .open_read(&local_id)
+                    .map_err(|e| e.to_string())?;
+                lease
+                    .seek(SeekFrom::Start(offset as u64))
+                    .map_err(|e| e.to_string())?;
+                let mut bytes = vec![0; len];
+                lease.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+                Ok(bytes)
+            }
+        }
+        let mut session = Session::create_with_source(
+            &root,
+            Arc::new(Source {
+                bridge: bridge.clone(),
+                id: remote.remote_id.clone(),
+                size: initial.len(),
+            }),
+        )
+        .map_err(anyhow::Error::msg)?;
+        let visible = session
+            .placeholder_for(
+                Path::new("generated.bin"),
+                remote.remote_id.as_bytes(),
+                initial.len(),
+            )
+            .map_err(anyhow::Error::msg)?;
+        let operation = (|| -> anyhow::Result<()> {
+            ensure!(
+                fs::read(&visible)? == initial,
+                "native hydration bytes differ"
+            );
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&visible)?;
+            file.write_all(&edited)?;
+            file.sync_all()?;
+            drop(file);
+            let record = bridge
+                .journal()
+                .database()
+                .get_by_cloud_remote_id(&remote.remote_id)?
+                .context("missing captured identity")?;
+            bridge.capture_native_edit(&visible, &record.metadata.remote_id)?;
+            ensure!(
+                bridge.upload(&record.metadata.remote_id, no_progress())?,
+                "native generation not acknowledged"
+            );
+            ensure!(
+                provider.download(&remote.remote_id)? == edited,
+                "real OneDrive readback differs"
+            );
+            let stale = provider.upload_file_with_version(
+                &cloud_file,
+                &input,
+                Some(&remote.remote_id),
+                Some(&remote.etag),
+                &mut |_, _| Ok(()),
+            );
+            ensure!(
+                stale.as_ref().is_err_and(|e| provider.is_conflict_error(e)),
+                "stale version was not rejected"
+            );
+            ensure!(
+                provider.download(&remote.remote_id)? == edited,
+                "stale attempt changed real cloud bytes"
+            );
+            ensure!(fs::read(&visible)? == edited, "local native bytes changed");
+            Ok(())
+        })();
+        let cleanup = session.finish().map_err(anyhow::Error::msg);
+        drop(session);
+        operation?;
+        cleanup?;
+        twodrive_local_files::native::verify_unregistered(&root).map_err(anyhow::Error::msg)?;
+        // Delete only the exact generated object and then an empty generated
+        // folder. Never recursively delete an uninspected cloud directory.
+        let observed = provider
+            .get_metadata(&remote.remote_id)?
+            .context("generated object disappeared before cleanup")?;
+        ensure!(
+            observed.path == cloud_file,
+            "generated object moved; cleanup stopped"
+        );
+        provider.delete(&remote.remote_id)?;
+        ensure!(
+            provider
+                .graph
+                .desktop_directory(&cloud_folder, &mut || Ok(()))?
+                .is_empty(),
+            "validation folder contains unexpected data; retained"
+        );
+        provider.delete(&folder.remote_id)?;
+        ensure!(
+            provider.get_metadata_by_path(&cloud_folder)?.is_none(),
+            "cloud validation folder cleanup unconfirmed"
+        );
+        ensure!(fs::read(&visible)? == edited, "retained local bytes differ");
+        fs::remove_file(&visible)?;
+        fs::remove_dir(&root)?;
+        drop(bridge);
+        println!(
+            "{}",
+            serde_json::json!({"actual_personal_onedrive":true,"bytes":edited.len(),"native_hydration":true,
+            "native_edit_capture":true,"conditional_upload":true,"full_cloud_readback":true,
+            "stale_version_rejected":true,"cloud_fixture_removed":true,"native_fixture_unregistered_and_removed":true,
+            "production_root_migration":false,"native_sync_icons_verified":false})
+        );
+        Ok(())
+    })();
+    if result.is_err() {
+        let retained = state.keep();
+        eprintln!(
+            "generated validation recovery state retained at {}",
+            retained.display()
+        );
+    } else {
+        ensure!(
+            private.starts_with(std::env::temp_dir().canonicalize()?)
+                && state.path().canonicalize()? == private,
+            "unexpected generated cleanup path"
+        );
+        state.close()?;
+    }
+    result
+}
+#[cfg(all(windows, feature = "native-local-fixture"))]
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("{}", twodrive_backend::diagnostics::safe_error(&error));
+        std::process::exit(1);
+    }
+}
+#[cfg(not(all(windows, feature = "native-local-fixture")))]
+fn main() {
+    eprintln!("requires Windows native-local-fixture and explicit generated-cloud-write opt-in");
+    std::process::exit(2);
+}

@@ -30,6 +30,9 @@ use windows_sys::{
 };
 
 type Result<T> = std::result::Result<T, String>;
+#[cfg(feature = "native-sync")]
+#[path = "native_persistent.rs"]
+pub mod persistent;
 const ID: &[u8] = Dataset::StandardV1.root_identity();
 const SIZE: usize = 65536;
 const OFFLINE: i32 = 0xC000CF11u32 as i32;
@@ -1777,6 +1780,60 @@ pub fn with_exclusive_placeholder<T>(
     };
     locked.inspect()?;
     action(&locked)
+}
+
+/// A synchronous no-recall, no-follow, share-none lease for copying native
+/// edits. Busy files are deferred instead of reading a writer's partial save.
+pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
+impl NativeCapture<'_> {
+    pub fn modified_time(&self) -> Result<std::time::SystemTime> {
+        use std::os::windows::io::BorrowedHandle;
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(self.0.handle.0) };
+        let file = std::fs::File::from(borrowed.try_clone_to_owned().map_err(|e| e.to_string())?);
+        file.metadata()
+            .and_then(|metadata| metadata.modified())
+            .map_err(|e| e.to_string())
+    }
+    pub fn copy_resident_to(&self, output: &mut impl std::io::Write) -> Result<u64> {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::os::windows::io::BorrowedHandle;
+        let state = self.0.inspect()?;
+        if !state.resident || state.partial {
+            return Err("native capture requires resident bytes".into());
+        }
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(self.0.handle.0) };
+        let mut file =
+            std::fs::File::from(borrowed.try_clone_to_owned().map_err(|e| e.to_string())?);
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let mut buffer = [0u8; 65536];
+        let mut total = 0u64;
+        loop {
+            let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..count])
+                .map_err(|e| e.to_string())?;
+            total = total
+                .checked_add(count as u64)
+                .ok_or("capture size overflow")?;
+        }
+        if total != state.logical_size || self.0.inspect()?.logical_size != state.logical_size {
+            return Err("native capture size changed".into());
+        }
+        Ok(total)
+    }
+}
+pub fn with_native_capture<T>(
+    path: &Path,
+    identity: &[u8],
+    size: usize,
+    action: impl FnOnce(&NativeCapture<'_>) -> Result<T>,
+) -> Result<T> {
+    let lease = RetainedPlaceholder::open_node(path, identity, size, false)?;
+    lease.inspect()?;
+    action(&NativeCapture(&lease))
 }
 
 pub fn inspect(path: &Path, engine_state: FileState) -> Result<LocalStatus> {

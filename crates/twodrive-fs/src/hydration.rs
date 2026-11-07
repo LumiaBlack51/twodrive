@@ -3,10 +3,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use twodrive_backend::CloudBackend;
-use twodrive_core::{Database, FileRecord, FileState, normalize_cloud_path};
+use twodrive_core::{Database, FileRecord, normalize_cloud_path};
 
 use crate::activity::ActivityGuard;
-use crate::cache_io::sanitize_cache_name;
+use crate::cache_io::{download_cache_path, has_existing_cache, reconcile_cached_record};
 use crate::locks::item_sync_lock;
 
 pub fn hydrate_pending_pins<B: CloudBackend>(
@@ -18,9 +18,7 @@ pub fn hydrate_pending_pins<B: CloudBackend>(
         .all_records()?
         .into_iter()
         .filter(|record| {
-            !record.metadata.is_dir
-                && record.effective_pinned()
-                && !record.cache_path.as_deref().is_some_and(Path::exists)
+            !record.metadata.is_dir && record.effective_pinned() && !has_existing_cache(record)
         })
         .collect::<Vec<_>>();
     let mut hydrated = 0;
@@ -44,8 +42,10 @@ pub fn hydrate_record<B: CloudBackend>(
     backend: &B,
     record: &FileRecord,
 ) -> anyhow::Result<PathBuf> {
+    let current = db.get_by_remote_id(&record.metadata.remote_id)?;
+    let record = reconcile_cached_record(db, current.as_ref().unwrap_or(record))?;
     let generation = db.download_generation(&record.metadata.remote_id)?;
-    hydrate_generation(db, cache_dir, backend, record, generation)
+    hydrate_generation(db, cache_dir, backend, &record, generation)
 }
 
 pub(crate) fn hydrate_generation<B: CloudBackend>(
@@ -66,15 +66,8 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
     let refreshed = db.get_by_remote_id(&record.metadata.remote_id)?;
     let record = refreshed.as_ref().unwrap_or(record);
 
-    if matches!(
-        record.state,
-        FileState::Cached
-            | FileState::Pinned
-            | FileState::Writing
-            | FileState::Dirty
-            | FileState::Uploading
-    ) && let Some(cache_path) = &record.cache_path
-        && cache_path.exists()
+    if has_existing_cache(record)
+        && let Some(cache_path) = &record.cache_path
     {
         db.mark_cache_accessed(&record.metadata.remote_id)?;
         return Ok(cache_path.clone());
@@ -92,7 +85,7 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         &record.metadata.name,
         Some(record.metadata.size),
     );
-    let cache_path = cache_dir.join(sanitize_cache_name(&record.metadata.remote_id));
+    let cache_path = download_cache_path(cache_dir, &record.metadata.remote_id, generation);
     let tmp_path = cache_path.with_extension("tmp");
     let mut tmp_file = OpenOptions::new()
         .create(true)
@@ -104,21 +97,30 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content to hydrate"))?;
     let mut last_check = std::time::Instant::now();
-    let result = backend.download_sized_to(
-        cloud_remote_id,
-        record.metadata.size,
-        &mut tmp_file,
-        &mut |bytes_done| {
-            if last_check.elapsed() >= Duration::from_millis(100) {
-                check_download_generation(db, &record.metadata.remote_id, generation)?;
-                last_check = std::time::Instant::now();
-            }
-            activity.set_progress(bytes_done, Some(record.metadata.size));
-            Ok(())
-        },
-    );
+    let result = verify_remote_version(db, backend, record).and_then(|_| {
+        backend.download_sized_to(
+            cloud_remote_id,
+            record.metadata.size,
+            &mut tmp_file,
+            &mut |bytes_done| {
+                if last_check.elapsed() >= Duration::from_millis(100) {
+                    check_download_generation(db, &record.metadata.remote_id, generation)?;
+                    last_check = std::time::Instant::now();
+                }
+                activity.set_progress(bytes_done, Some(record.metadata.size));
+                Ok(())
+            },
+        )
+    });
     drop(tmp_file);
-    let result = check_download_generation(db, &record.metadata.remote_id, generation).and(result);
+    let result = result.and_then(|count| {
+        anyhow::ensure!(
+            count == record.metadata.size,
+            "download returned an unexpected length"
+        );
+        verify_remote_version(db, backend, record)?;
+        check_download_generation(db, &record.metadata.remote_id, generation)
+    });
     let result = result.and_then(|_| {
         if db.finish_hydration(
             &record.metadata.remote_id,
@@ -136,6 +138,27 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         let _ = db.fail_hydration(&record.metadata.remote_id, generation);
     }
     result
+}
+
+// A cloud edit can race a ranged download before the next delta poll. Do not
+// publish bytes (including same-size edits) under an older version's metadata.
+fn verify_remote_version<B: CloudBackend>(
+    db: &Database,
+    backend: &B,
+    record: &FileRecord,
+) -> anyhow::Result<()> {
+    let cloud_id = record
+        .cloud_remote_id
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content"))?;
+    let remote = backend
+        .get_metadata(cloud_id)?
+        .ok_or_else(|| anyhow::anyhow!("cloud file no longer exists"))?;
+    if remote.size != record.metadata.size || remote.etag != record.metadata.etag {
+        db.upsert_metadata(&remote)?;
+        return Err(hydration_cancelled().into());
+    }
+    Ok(())
 }
 
 pub(crate) fn check_download_generation(

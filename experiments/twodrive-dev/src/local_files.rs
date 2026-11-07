@@ -5,14 +5,12 @@ use crate::model::{CloudBackend, MetadataEntry};
 use crate::provider::{Backend, Progress};
 use anyhow::{Context, ensure};
 use sha2::{Digest, Sha256};
-#[cfg(any(test, all(windows, feature = "native-local-fixture")))]
 use std::path::Path;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     sync::Arc,
 };
-#[cfg(test)]
 use twodrive_core::Database;
 use twodrive_core::{CacheJournal, CacheSnapshot, CacheWriteLease};
 
@@ -54,10 +52,17 @@ impl LocalFileBridge {
             }),
         })
     }
-    // Real-provider construction is not exposed until the registered adapter's
-    // verified profile/revision identity is passed as a typed session authority.
     #[cfg(test)]
     pub(crate) fn open(
+        db: Database,
+        private_cache: &Path,
+        backend: Backend,
+        provider_binding: &str,
+    ) -> anyhow::Result<Self> {
+        Self::open_bound(db, private_cache, backend, provider_binding)
+    }
+
+    pub(crate) fn open_bound(
         db: Database,
         private_cache: &Path,
         backend: Backend,
@@ -90,6 +95,48 @@ impl LocalFileBridge {
     }
     pub fn edit(&self, id: &str) -> anyhow::Result<CacheWriteLease> {
         self.journal.open_write(id)
+    }
+
+    #[cfg(all(windows, feature = "native-local-fixture"))]
+    pub fn capture_native_edit(&self, path: &Path, id: &str) -> anyhow::Result<i64> {
+        let record = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("unknown native item")?;
+        let cloud_id = record
+            .cloud_remote_id
+            .as_deref()
+            .context("unbound native item")?;
+        self.journal.record_native_edit(cloud_id)?;
+        let generation = self.status(id)?.generation;
+        twodrive_local_files::native::with_native_capture(
+            path,
+            cloud_id.as_bytes(),
+            usize::try_from(record.metadata.size)?,
+            |locked| {
+                let modified = locked.modified_time()?;
+                let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
+                    .map_err(|e| e.to_string())?;
+                let size = locked.copy_resident_to(temporary.as_file_mut())?;
+                if modified != locked.modified_time()? {
+                    return Err("native source timestamp changed during capture".into());
+                }
+                temporary
+                    .as_file()
+                    .set_times(std::fs::FileTimes::new().set_modified(modified))
+                    .map_err(|e| e.to_string())?;
+                temporary.as_file().sync_all().map_err(|e| e.to_string())?;
+                // Keep the owned file on any commit error: it contains user edits,
+                // and must not be mistaken for a disposable download cache.
+                let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
+                drop(file);
+                self.journal
+                    .stage_native_edit(id, generation, &captured, size)
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .map_err(anyhow::Error::msg)
     }
 
     /// Download by opaque object identity; recheck provider version after EOF.

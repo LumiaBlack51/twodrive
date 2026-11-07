@@ -15,7 +15,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo test -p twodrive-peer -p twodrive-core -p twodrive-backend --locked
+      - run: cargo test -p twodrive-peer -p twodrive-core -p twodrive-backend -p twodrive-fs --locked
       - name: Repeat concurrent database regression
         shell: pwsh
         run: |

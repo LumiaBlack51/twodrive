@@ -233,7 +233,6 @@ impl CloudBackend for Backend {
             progress(done)
         })
     }
-    #[cfg(target_os = "linux")]
     fn download_sized_to(
         &self,
         id: &str,

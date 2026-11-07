@@ -1,5 +1,4 @@
 use super::Database;
-use anyhow::Context;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::path::Path;
 
@@ -7,21 +6,116 @@ use crate::paths::{cloud_name, normalize_cloud_path, parent_cloud_path};
 use crate::{FileRecord, FileState, MetadataEntry, now_unix};
 
 impl Database {
+    /// Publish the acknowledged recovery copy before retiring only the exact
+    /// conflicted generation. A concurrent new save/move must remain pending.
+    pub fn complete_missing_conflict_upload(
+        &self,
+        original: &FileRecord,
+        uploaded: &MetadataEntry,
+        cache_path: &Path,
+    ) -> anyhow::Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let present = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE remote_id = ?1)
+             AND NOT EXISTS(SELECT 1 FROM pending_deletes WHERE local_id = ?1)",
+            params![original.metadata.remote_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !present {
+            return Ok(false);
+        }
+        let copy_id = tx
+            .query_row(
+                "SELECT remote_id FROM files WHERE cloud_remote_id = ?1",
+                params![uploaded.remote_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| uploaded.remote_id.clone());
+        anyhow::ensure!(
+            copy_id != original.metadata.remote_id,
+            "recovery copy reused the missing identity"
+        );
+        tx.execute(
+            "INSERT OR IGNORE INTO retired_cache(cache_path)
+             SELECT cache_path FROM files WHERE remote_id = ?1
+               AND state IN ('cached', 'pinned') AND cache_path IS NOT NULL AND cache_path <> ?2",
+            params![copy_id, cache_path.to_string_lossy()],
+        )?;
+        let changed = tx.execute(
+            "INSERT INTO files(remote_id, cloud_remote_id, path, parent_path, name,
+                is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, local_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 'cached', ?9, ?10, ?11)
+             ON CONFLICT(remote_id) DO UPDATE SET
+                -- This ID may have been imported and renamed while the PUT
+                -- acknowledgement was in flight. Attach its bytes without
+                -- rolling back the copy's current name or ancestor moves.
+                size = excluded.size, modified_unix = excluded.modified_unix, etag = excluded.etag,
+                state = CASE WHEN files.pin_explicit = 1 OR files.pin_origin_remote_id IS NOT NULL
+                    THEN 'pinned' ELSE 'cached' END,
+                cache_path = excluded.cache_path, cache_accessed_unix = excluded.cache_accessed_unix
+             WHERE files.cloud_remote_id = excluded.cloud_remote_id
+               AND files.state IN ('online_only', 'cached', 'pinned', 'hydrating')",
+            params![copy_id, uploaded.remote_id, uploaded.path, uploaded.parent_path,
+                uploaded.name, uploaded.size as i64, original.metadata.modified_unix,
+                uploaded.etag, cache_path.to_string_lossy(), now_unix(), original.local_mode],
+        )?;
+        anyhow::ensure!(
+            changed == 1,
+            "recovery copy has a protected local generation"
+        );
+        tx.execute(
+            "DELETE FROM files WHERE remote_id = ?1 AND state = 'conflict'
+               AND cache_path IS ?2 AND cloud_remote_id IS ?3
+               AND size = ?4 AND modified_unix = ?5 AND etag = ?6
+               AND upload_path = ?7 AND upload_cache_path IS ?2 AND upload_target_id IS NULL
+               AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations WHERE local_id = ?1)",
+            params![
+                original.metadata.remote_id,
+                cache_path.to_string_lossy(),
+                original.cloud_remote_id,
+                original.metadata.size as i64,
+                original.metadata.modified_unix,
+                original.metadata.etag,
+                uploaded.path
+            ],
+        )?;
+        // If a newer local generation kept this row, retire just the failed
+        // generation's acknowledged claim, never its newer cache or state.
+        tx.execute(
+            "UPDATE files SET upload_path = NULL, upload_target_id = NULL, upload_cache_path = NULL
+             WHERE remote_id = ?1 AND upload_path = ?2 AND upload_cache_path IS ?3
+               AND upload_target_id IS NULL",
+            params![
+                original.metadata.remote_id,
+                uploaded.path,
+                cache_path.to_string_lossy()
+            ],
+        )?;
+        tx.commit()?;
+        self.recompute_pin_inheritance()?;
+        Ok(true)
+    }
+
     pub fn upsert_metadata(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
-        // SQLite permits one writer at a time. Admit the whole metadata update,
-        // including pin recomputation, so cloned callers cannot starve one
-        // another while competing for its separate write transactions.
-        let _writer = self
-            .metadata_write_lock
-            .lock()
-            .map_err(|_| anyhow::anyhow!("metadata write lock is poisoned"))?;
-        self.upsert_metadata_inner(entry, true)
+        self.upsert_metadata_entries([entry], false)
     }
 
     pub fn upsert_metadata_batch<'a>(
         &self,
         entries: impl IntoIterator<Item = &'a MetadataEntry>,
     ) -> anyhow::Result<()> {
+        self.upsert_metadata_entries(entries, true)
+    }
+
+    fn upsert_metadata_entries<'a>(
+        &self,
+        entries: impl IntoIterator<Item = &'a MetadataEntry>,
+        block_new_pin_inheritance: bool,
+    ) -> anyhow::Result<()> {
+        // Keep identity resolution, local-generation protection and cache
+        // invalidation in one writer transaction for both import paths.
         let _writer = self
             .metadata_write_lock
             .lock()
@@ -67,7 +161,7 @@ impl Database {
                     SELECT 1 FROM files
                     WHERE path = ?1
                       AND remote_id <> ?2
-                      AND state IN ('writing', 'dirty', 'uploading')
+                      AND state IN ('writing', 'dirty', 'uploading', 'conflict')
                 )
                 "#,
                 params![entry.path, local_id],
@@ -78,7 +172,7 @@ impl Database {
                 SELECT EXISTS(
                     SELECT 1 FROM files
                     WHERE remote_id = ?1
-                      AND state IN ('writing', 'dirty', 'uploading')
+                      AND state IN ('writing', 'dirty', 'uploading', 'conflict')
                 )
                 "#,
                 params![local_id],
@@ -88,6 +182,32 @@ impl Database {
                 continue;
             }
 
+            // Detach and retire the old version atomically. Reclamation waits
+            // for every durable reference and locked reader/upload to finish.
+            let obsolete = tx
+                .query_row(
+                    "SELECT cache_path, size FROM files WHERE remote_id = ?1 AND is_dir = 0
+                   AND cache_path IS NOT NULL AND state IN ('cached', 'pinned')
+                   AND (etag <> ?2 OR size <> ?3 OR is_dir <> ?4)",
+                    params![local_id, entry.etag, entry.size as i64, entry.is_dir as i64],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+                )
+                .optional()?;
+            if let Some((path, size)) = obsolete
+                && std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() == size)
+            {
+                tx.execute(
+                    "INSERT OR IGNORE INTO retired_cache(cache_path) VALUES (?1)",
+                    params![path],
+                )?;
+            }
+            tx.execute(
+                "UPDATE files SET cache_path = NULL, cache_accessed_unix = NULL,
+                    state = 'online_only', download_generation = download_generation + 1
+                 WHERE remote_id = ?1 AND is_dir = 0
+                   AND (etag <> ?2 OR size <> ?3 OR is_dir <> ?4)",
+                params![local_id, entry.etag, entry.size as i64, entry.is_dir as i64],
+            )?;
             let old_path = tx
                 .query_row(
                     "SELECT path FROM files WHERE remote_id = ?1",
@@ -106,7 +226,7 @@ impl Database {
                     cloud_remote_id,
                     pin_inheritance_blocked
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 ON CONFLICT(remote_id) DO UPDATE SET
                     path = excluded.path,
                     parent_path = excluded.parent_path,
@@ -132,7 +252,8 @@ impl Database {
                     entry.modified_unix,
                     entry.etag,
                     FileState::OnlineOnly.as_str(),
-                    entry.remote_id,
+                    (!entry.remote_id.starts_with("local-upload-")).then_some(&entry.remote_id),
+                    block_new_pin_inheritance as i64,
                 ],
             )?;
 
@@ -168,134 +289,6 @@ impl Database {
         }
         tx.commit()?;
         self.recompute_pin_inheritance()
-    }
-
-    pub(super) fn upsert_metadata_inner(
-        &self,
-        entry: &MetadataEntry,
-        recompute_pins: bool,
-    ) -> anyhow::Result<()> {
-        if self
-            .is_pending_delete(&entry.remote_id, &entry.path)
-            .context("metadata upsert: checking pending deletion")?
-        {
-            return Ok(());
-        }
-        let incoming_cloud_id =
-            (!entry.remote_id.starts_with("local-upload-")).then_some(entry.remote_id.clone());
-        let existing = match incoming_cloud_id.as_deref() {
-            Some(cloud_remote_id) => self.get_by_cloud_remote_id(cloud_remote_id),
-            None => self.get_by_remote_id(&entry.remote_id),
-        }
-        .context("metadata upsert: reading cloud identity")?;
-        let local_id = existing
-            .as_ref()
-            .map(|record| record.metadata.remote_id.clone())
-            .unwrap_or_else(|| entry.remote_id.clone());
-        if self
-            .has_pending_metadata_at_or_above(&entry.path)
-            .context("metadata upsert: checking path operations")?
-            || self
-                .has_pending_metadata_at_or_above(
-                    existing
-                        .as_ref()
-                        .map(|record| record.metadata.path.as_str())
-                        .unwrap_or(&entry.path),
-                )
-                .context("metadata upsert: checking existing operations")?
-        {
-            return Ok(());
-        }
-        if self
-            .get_by_path(&entry.path)
-            .context("metadata upsert: reading path")?
-            .is_some_and(|record| {
-                record.metadata.remote_id != local_id
-                    && matches!(
-                        record.state,
-                        FileState::Writing | FileState::Dirty | FileState::Uploading
-                    )
-            })
-        {
-            return Ok(());
-        }
-        if self
-            .get_by_remote_id(&local_id)
-            .context("metadata upsert: reading local identity")?
-            .is_some_and(|record| {
-                matches!(
-                    record.state,
-                    FileState::Writing | FileState::Dirty | FileState::Uploading
-                )
-            })
-        {
-            if recompute_pins {
-                self.recompute_pin_inheritance()
-                    .context("metadata upsert: recomputing pin inheritance")?;
-            }
-            return Ok(());
-        }
-        let old_path = self
-            .get_by_remote_id(&local_id)
-            .context("metadata upsert: reading previous path")?
-            .map(|record| record.metadata.path);
-        let mut conn = self
-            .connect()
-            .context("metadata upsert: opening write connection")?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("metadata upsert: beginning write transaction")?;
-        tx.execute(
-            "DELETE FROM files WHERE path = ?1 AND remote_id <> ?2",
-            params![entry.path, local_id],
-        )
-        .context("metadata upsert: removing displaced path")?;
-        tx.execute(
-            r#"
-            INSERT INTO files (
-                remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state,
-                cloud_remote_id
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-            ON CONFLICT(remote_id) DO UPDATE SET
-                path = excluded.path,
-                parent_path = excluded.parent_path,
-                name = excluded.name,
-                is_dir = excluded.is_dir,
-                size = excluded.size,
-                modified_unix = CASE
-                        WHEN files.is_dir = 0 AND files.etag <> ''
-                             AND files.etag = excluded.etag AND files.size = excluded.size
-                        THEN files.modified_unix
-                        ELSE excluded.modified_unix
-                    END,
-                etag = excluded.etag,
-                cloud_remote_id = excluded.cloud_remote_id
-            "#,
-            params![
-                local_id,
-                entry.path,
-                entry.parent_path,
-                entry.name,
-                entry.is_dir as i64,
-                entry.size as i64,
-                entry.modified_unix,
-                entry.etag,
-                FileState::OnlineOnly.as_str(),
-                incoming_cloud_id,
-            ],
-        )?;
-        tx.commit()
-            .context("metadata upsert: committing write transaction")?;
-        if let Some(old_path) = old_path.filter(|old_path| old_path != &entry.path) {
-            self.move_descendants(&old_path, &entry.path)
-                .context("metadata upsert: moving descendants")?;
-        }
-        if recompute_pins {
-            self.recompute_pin_inheritance()
-                .context("metadata upsert: recomputing pin inheritance")?;
-        }
-        Ok(())
     }
 
     pub fn bind_cloud_identity(
@@ -343,6 +336,39 @@ impl Database {
             .is_none_or(|remote_id| remote_id == uploaded.remote_id);
         let needs_cloud_move = current.metadata.path != normalize_cloud_path(requested_path)
             && current.cloud_remote_id.is_none();
+        if current.cloud_remote_id.is_none() {
+            // A first PUT can be visible to delta before its acknowledgement.
+            // If the user has already renamed the unbound local record, delta
+            // may import a clean alias at the old name. Coalesce only an exact
+            // server echo, never another edited/pinned/moving local identity.
+            let alias: Option<(String, Option<String>)> = tx
+                .query_row(
+                    "SELECT remote_id, cache_path FROM files
+                 WHERE cloud_remote_id = ?1 AND remote_id <> ?2 AND path = ?3
+                   AND etag = ?4 AND size = ?5 AND is_dir = 0 AND pin_explicit = 0
+                   AND state IN ('online_only', 'cached', 'pinned', 'hydrating')
+                   AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations op
+                       WHERE op.local_id = files.remote_id)",
+                    params![
+                        uploaded.remote_id,
+                        local_id,
+                        normalize_cloud_path(requested_path),
+                        uploaded.etag,
+                        uploaded.size as i64
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((alias_id, cache)) = alias {
+                if let Some(cache) = cache {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO retired_cache(cache_path) VALUES (?1)",
+                        params![cache],
+                    )?;
+                }
+                tx.execute("DELETE FROM files WHERE remote_id = ?1", params![alias_id])?;
+            }
+        }
         tx.execute(
             r#"
             UPDATE files

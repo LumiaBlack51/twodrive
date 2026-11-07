@@ -352,6 +352,7 @@ impl CloudBackend for GraphBackend {
     }
 
     fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+        validate_graph_file_path(path)?;
         let access_token = self.access_token()?;
         let (parent_path, name) = split_cloud_parent_name(path)?;
         let url = if parent_path == "/" {
@@ -379,6 +380,7 @@ impl CloudBackend for GraphBackend {
     }
 
     fn rename(&self, remote_id: &str, new_path: &str) -> anyhow::Result<MetadataEntry> {
+        validate_graph_file_path(new_path)?;
         let access_token = self.access_token()?;
         let (parent_path, name) = split_cloud_parent_name(new_path)?;
         let parent_url = graph_parent_lookup_url(&parent_path);
