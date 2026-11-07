@@ -321,8 +321,9 @@ impl CacheJournal {
         Ok(result)
     }
 
-    /// Record a full-byte mismatch observed under with_clean_cache. A later
-    /// writer wins its generation CAS; this can never acknowledge any bytes.
+    /// Record a full-byte mismatch observed under a verified cache lease. Pin
+    /// intent prevents eviction, not dirty/recovery recording. A later writer
+    /// wins its generation CAS; this can never acknowledge any bytes.
     pub fn record_external_edit(&self, id: &str, generation: i64) -> anyhow::Result<bool> {
         let _guard = self
             .0
@@ -332,14 +333,14 @@ impl CacheJournal {
         let mut conn = journal_connection(&self.0.db)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let state = snapshot(&tx, id)?;
-        if state.generation != generation || !state.engine_release_ready() {
+        if state.generation != generation || !state.sync_confirmed() || !state.resident {
             return Ok(false);
         }
         let next = generation
             .checked_add(1)
             .context("cache generation exhausted")?;
         tx.execute(
-            "UPDATE local_cache_journal SET generation=?2,dirty_intent=1 WHERE local_id=?1",
+            "UPDATE local_cache_journal SET generation=?2,dirty_intent=1,recovery_required=1 WHERE local_id=?1",
             params![id, next],
         )?;
         tx.execute("UPDATE files SET state='dirty' WHERE remote_id=?1", [id])?;

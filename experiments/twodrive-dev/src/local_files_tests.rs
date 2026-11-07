@@ -615,6 +615,36 @@ fn external_byte_change_invalidates_stale_cached_generation() {
     assert_eq!(bytes(&f.bridge), EDITED);
 }
 #[test]
+#[cfg(all(windows, feature = "native-local-fixture"))]
+fn pinned_cache_mismatch_during_native_ack_is_durable_recovery_work() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    f.db.mark_pinned(OBJECT).unwrap();
+    let record = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    fs::write(record.cache_path.unwrap(), EDITED).unwrap();
+    // The changed private snapshot must be rejected before opening any native
+    // path; no registered root is needed to test this acknowledgement branch.
+    assert!(
+        !f.bridge
+            .acknowledge_native(&f.cache.join("not-a-native-path"), OBJECT)
+            .unwrap()
+    );
+    let state = f.bridge.status(OBJECT).unwrap();
+    assert!(!state.sync_confirmed());
+    assert!(state.pinned && state.dirty_intent && state.recovery_required);
+    assert_eq!(state.generation, 1);
+    assert_eq!(bytes(&f.bridge), EDITED);
+    assert_eq!(provider.download(OBJECT).unwrap(), INITIAL);
+    assert!(!f.bridge.journal.record_external_edit(OBJECT, 0).unwrap());
+    f.bridge.journal.recover_write(OBJECT).unwrap();
+    assert!(f.bridge.upload(OBJECT, no_progress()).unwrap());
+    assert!(f.bridge.status(OBJECT).unwrap().pinned);
+    assert_eq!(provider.download(OBJECT).unwrap(), EDITED);
+    assert!(!f.bridge.engine_release_ready(OBJECT, 1).unwrap());
+}
+
+#[test]
 fn missing_conditional_capability_never_starts_upload() {
     let mut provider = MockProvider::new();
     provider.conditional = false;

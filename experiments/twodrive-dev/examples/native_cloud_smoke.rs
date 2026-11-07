@@ -158,27 +158,38 @@ fn run() -> anyhow::Result<()> {
                 fs::read(&visible)? == initial,
                 "native hydration bytes differ"
             );
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&visible)?;
-            file.write_all(&edited)?;
-            file.sync_all()?;
-            drop(file);
-            let record = bridge
-                .journal()
-                .database()
-                .get_by_cloud_remote_id(&remote.remote_id)?
-                .context("missing captured identity")?;
-            bridge.capture_native_edit(&visible, &record.metadata.remote_id)?;
-            ensure!(
-                bridge.upload(&record.metadata.remote_id, no_progress())?,
-                "native generation not acknowledged"
-            );
-            ensure!(
-                provider.download(&remote.remote_id)? == edited,
-                "real OneDrive readback differs"
-            );
+            for content in [
+                b"short".to_vec(),
+                Vec::new(),
+                vec![0xa7; initial.len() + 8193],
+                edited.clone(),
+            ] {
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&visible)?;
+                file.write_all(&content)?;
+                file.sync_all()?;
+                drop(file);
+                let record = bridge
+                    .journal()
+                    .database()
+                    .get_by_cloud_remote_id(&remote.remote_id)?
+                    .context("missing captured identity")?;
+                bridge.capture_native_edit(&visible, &record.metadata.remote_id)?;
+                ensure!(
+                    bridge.upload(&record.metadata.remote_id, no_progress())?,
+                    "native generation not acknowledged"
+                );
+                ensure!(
+                    provider.download(&remote.remote_id)? == content,
+                    "real OneDrive resized readback differs"
+                );
+                ensure!(
+                    bridge.acknowledge_native(&visible, &record.metadata.remote_id)?,
+                    "native sync state not acknowledged"
+                );
+            }
             let stale = provider.upload_file_with_version(
                 &cloud_file,
                 &input,
@@ -232,6 +243,7 @@ fn run() -> anyhow::Result<()> {
             "{}",
             serde_json::json!({"actual_personal_onedrive":true,"bytes":edited.len(),"native_hydration":true,
             "native_edit_capture":true,"conditional_upload":true,"full_cloud_readback":true,
+            "tested_sizes":[5,0,initial.len()+8193,edited.len()],"native_in_sync_state_confirmed":true,
             "stale_version_rejected":true,"cloud_fixture_removed":true,"native_fixture_unregistered_and_removed":true,
             "production_root_migration":false,"native_sync_icons_verified":false})
         );

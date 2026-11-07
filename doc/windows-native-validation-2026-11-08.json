@@ -80,7 +80,8 @@
       "core": 59,
       "filesystem": 80,
       "ignored_environment": 11
-    }
+    },
+    "pinned_cache_mismatch_records_dirty_recovery": true
   },
   "cleanup": {
     "office_fixture_processes_and_roots_cleaned": true,
@@ -90,7 +91,8 @@
     "office_bytecode_and_test_binaries_recycled": {
       "directories": 3,
       "files": 2
-    }
+    },
+    "additional_resized_generated_roots_recycled_and_verified": 4
   },
   "linux_recovery_port": {
     "source_commit": "a64ce65c8282398aafa79e66f8279b518e8d6e1c",
@@ -133,7 +135,7 @@
       5,
       0,
       131079,
-      33
+      34
     ],
     "actual_windows_cfapi": true,
     "cloud_backend": "MockProvider",
@@ -142,6 +144,19 @@
     "later_same_size_edit_refuses_stale_sync_ack": true,
     "pinned_sync_ack_retains_release_veto": true,
     "journal_tests_passed": 19,
-    "live_graph_variable_size": "not run"
+    "live_graph_variable_size": {
+      "passed": true,
+      "tested_sizes": [
+        5,
+        0,
+        1056892,
+        1048699
+      ],
+      "conditional_upload": true,
+      "full_cloud_readback": true,
+      "native_in_sync_state": true,
+      "stale_version_refused": true,
+      "cloud_and_native_generated_scope_cleaned": true
+    }
   }
 }

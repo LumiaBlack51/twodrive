@@ -129,3 +129,9 @@ under the retained native lease and the acknowledged journal generation; a later
 same-size edit is refused and marked dirty. Pinned acknowledgement does not grant
 eviction. Live Graph variable-size/Office validation and worker integration remain
 required; this does not enable production takeover capabilities.
+
+The generated personal OneDrive validation subsequently passed 5-byte, empty,
+1,056,892-byte and 1,048,699-byte saves with full cloud readback and native in-sync
+state confirmation. The stale original ETag was rejected, and the generated cloud
+folder and native root were cleaned. This still does not establish Office atomic
+replacement, Explorer icon behavior or original-folder takeover.
