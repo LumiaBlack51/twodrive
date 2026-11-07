@@ -40,6 +40,7 @@ fn main() -> anyhow::Result<()> {
     let mut owner = PersistentSession::create_new(
         &root,
         b"twodrive-dev-native-v1:generated-office-only",
+        &root.with_extension("receipt.json"),
         Arc::new(NoCloud),
     )
     .map_err(anyhow::Error::msg)?;
@@ -56,6 +57,7 @@ fn main() -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?;
     drop(owner);
     std::fs::remove_dir(&root)?;
+    std::fs::remove_file(root.with_extension("receipt.json"))?;
     println!("finished:unregistered-empty-root");
     Ok(())
 }

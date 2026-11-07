@@ -71,7 +71,10 @@ instead of compiling a separate Windows model. Its lockfile adds that dependency
 closure; ordinary CI tests do not contact a cloud account.
 
 An opt-in `native-sync` platform owner now retains registration on disconnect and
-resumes only the saved root identity, volume serial and directory file ID. The
+resumes only the saved root identity, volume serial and directory file ID. A new
+root now requires an external checkpoint, flushed before registration. Recovery
+can complete an interrupted registration only for that exact empty ordinary
+directory, and refuses a replaced directory or foreign registration. The
 explicit generated test passed cached offline reads, retained online-only entries,
 wrong-receipt refusal and resumed hydration. Its two generated files were retained
 as ordinary files before that test alone unregistered its root. The production
@@ -111,3 +114,10 @@ cloud directory was used; ordinary delete removed its file and then its verified
 empty directory. The native fixture retained its bytes before unregistration and
 was then removed. This does not establish the remaining full-root operations or
 Office-document-to-cloud synchronization. See the [scope-specific results](windows-native-validation-2026-11-08.json).
+
+Dot review follow-up: recovery-copy deletion and version precedence, untouched
+writable-handle attributes, and cached read retention now have targeted
+regressions. Four old-code regressions failed before their fixes. The native
+checkpoint test exercises a real rejected second connection and recovery, and
+nested publication accepts owned cloud directories while refusing ordinary and
+junction parents. See incidents TD-20261108-07 through 09.

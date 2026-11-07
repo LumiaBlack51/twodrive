@@ -9,6 +9,7 @@ use std::io;
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use twodrive_backend::CloudBackend;
@@ -101,7 +102,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         if let Some(record) = self.record_for_ino(ino) {
             // Writers publish size in memory before close; clean files may
             // have received new cloud metadata without a directory listing.
-            let record = if self.write_handles.values().any(|handle| handle.ino == ino) {
+            let record = if self.write_handles.values().any(|handle| {
+                handle.ino == ino && handle.changed && !handle.uploaded && !handle.unlinked
+            }) {
                 self.inodes.record_for_ino(ino).cloned().unwrap_or(record)
             } else {
                 record
@@ -182,6 +185,7 @@ struct ReadHandle {
     unlinked: bool,
     deferred_record: Option<FileRecord>,
     download_generation: i64,
+    last_cache_touch: AtomicI64,
 }
 
 #[derive(Debug)]

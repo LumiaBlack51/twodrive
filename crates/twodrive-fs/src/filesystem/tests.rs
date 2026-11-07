@@ -1928,6 +1928,66 @@ fn remote_update_refreshes_inode_size_without_a_directory_listing() {
     assert_eq!(test.fs.attr_for_ino(ino).unwrap().size, 7);
 }
 
+#[test]
+fn untouched_writable_handle_does_not_hide_new_remote_attributes() {
+    let mut test = TestFs::new("untouched-handle-remote-size");
+    let record = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let (ino, fh, _) = test
+        .fs
+        .create_overwrite_upload(record.clone(), false)
+        .unwrap();
+    assert!(!test.fs.write_handles[&fh].changed);
+    let mut changed = record.metadata;
+    changed.size += 100;
+    changed.etag = "changed-remotely".into();
+    test.fs.db.upsert_metadata(&changed).unwrap();
+    assert_eq!(test.fs.attr_for_ino(ino).unwrap().size, changed.size);
+    test.fs.write_handles.remove(&fh);
+}
+
+#[test]
+fn cached_read_and_close_refresh_retention_before_releasing_the_lease() {
+    let mut test = TestFs::new("cached-read-retention");
+    let record = test
+        .fs
+        .db
+        .get_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    let ino = test.fs.inodes.ino_for_path(&record.metadata.path).unwrap();
+    let cache = test.fs.ensure_cached(&record).unwrap();
+    rusqlite::Connection::open(test.fs.db.path())
+        .unwrap()
+        .execute(
+            "UPDATE files SET cache_accessed_unix=1 WHERE remote_id=?1",
+            [&record.metadata.remote_id],
+        )
+        .unwrap();
+    let handle = test.fs.open_read_handle(ino, cache.clone()).unwrap();
+    assert!(!test.fs.read_open_handle(handle, 0, 16).unwrap().is_empty());
+    test.fs.release_read_handle(handle).unwrap();
+    // Drain the actual read/retention worker before checking the durable value.
+    let reads = std::mem::replace(&mut test.fs.read_pool, crate::read_pool::ReadPool::new());
+    drop(reads);
+    assert!(
+        test.fs
+            .db
+            .get_by_remote_id(&record.metadata.remote_id)
+            .unwrap()
+            .unwrap()
+            .cache_accessed_unix
+            .unwrap()
+            > 1
+    );
+    assert_eq!(test.fs.db.prune_cache(60).unwrap(), 0);
+    assert!(cache.exists());
+}
+
 struct EditingDownloadBackend {
     inner: MockBackend,
     revision: AtomicUsize,

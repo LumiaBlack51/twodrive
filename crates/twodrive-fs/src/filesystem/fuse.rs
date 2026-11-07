@@ -267,6 +267,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                             unlinked: false,
                             deferred_record: Some(record),
                             download_generation: generation,
+                            last_cache_touch: AtomicI64::new(0),
                         },
                     );
                     reply.opened(fh, 0);
@@ -304,6 +305,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                 return;
             }
             let reader = request_process_identity(req);
+            self.note_read_access(handle);
             let generation = handle.download_generation;
             let guard = Arc::clone(&handle._cache_guard);
             let db = self.db.clone();

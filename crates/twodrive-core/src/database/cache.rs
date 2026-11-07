@@ -312,6 +312,16 @@ impl Database {
         Ok(())
     }
 
+    /// A retained reader of an older generation must not extend the retention
+    /// of a replacement cache that it has never read.
+    pub fn mark_cache_path_accessed(&self, cache_path: &Path) -> anyhow::Result<()> {
+        self.connect()?.execute(
+            "UPDATE files SET cache_accessed_unix=?1 WHERE cache_path=?2",
+            params![now_unix(), cache_path.to_string_lossy()],
+        )?;
+        Ok(())
+    }
+
     pub fn release_record(&self, record: &FileRecord) -> anyhow::Result<bool> {
         self.release_cached_record(record, None)
     }

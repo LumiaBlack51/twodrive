@@ -4,6 +4,67 @@
 
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
+## TD-20261108-09：缓存直接读取未续期，空开可写句柄遮住远端属性
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：两项 Linux 旧逻辑回归失败；修复后全部 77 项默认 filesystem 测试通过
+- 关联：Linux 后续缓存保留/空开不上传机制的组合遗漏；来自 PR #60 Dot 审查
+
+旧 attr_for_ino 只要存在任意可写句柄便使用 inode 表旧属性，空开且未修改也会遮住
+远端已更新的文件大小。新增回归观察到旧大小 90 而非 190。现在只有 changed 且尚未
+上传、未 unlink 的句柄覆盖当前数据库属性；原有本地写入即时属性回归保持通过。
+
+缓存命中绕过 hydrate，因此旧 cache_accessed_unix 保持过期。隔离回归将时间设为 1，
+实际 open/read/close 后旧代码仍为 1。现在打开和读取按每个句柄一分钟合并到后台更新，
+关闭前在现有释放记账阶段同步提交最终访问，成功后才放开缓存租约；不逐块写 SQLite。
+更新按精确缓存路径匹配，旧句柄不会续期另一个版本。错误不伪装成功。
+
+验证使用 WSL/Linux 模拟后端和生成文件；不是生产负载或真实 OneDrive 测试。
+未操作用户缓存。跨平台完整检查与最终 CI 待完成。
+
+## TD-20261108-08：恢复副本的删除或较新版本被迟到上传确认覆盖
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：两项旧代码回归失败；修复后 Windows core 定向回归通过
+- 关联：Linux missing-target recovery 移植；PR #60 Dot 审查
+
+上传恢复副本 C 后，delta 可先导入 C，用户随即删除 C 或收到 C 的新版本。
+complete_missing_conflict_upload 原本仅检查原文件删除记录，并以旧确认覆盖 C。
+两项隔离回归分别复现副本复活与 etag 从 copy-v2 退回 copy-v1。
+
+现在同一事务检查副本的删除身份，将旧快照交给删除恢复，不清除该副本其他上传意图；
+已观察到不同版本的副本保留其完整元数据和缓存。只有相同版本及大小才能接收旧上传
+快照，并推进下载代际以拒绝在途旧 hydration。受保护本地写入不被覆盖；原始上传
+claim 仍按原有精确代际条件结算。另加真实恢复 worker 的删除/重启测试。
+
+全量检查曾发现候选修复遗漏旧的 SQL affected-row 断言，既有触发器拒绝插入回归失败；
+恢复断言后，提交被拒时事务仍回滚且原 claim 保留。
+
+只使用生成数据与 MockBackend，无本地用户数据恢复；不将回归当作真实 Graph 并发证明。
+Windows core 57 项、portable fs 22 项及严格 Clippy 通过；最终 CI 待完成。
+
+## TD-20261108-07：CFAPI 首次注册成功后连接失败缺少可恢复凭据
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：已改为注册前持久化；实际 Windows 中断/连接失败回归通过
+- 范围：未部署的 persistent native owner；来自 PR #60 Dot 审查
+
+旧 create_new 只在连接成功后暴露 RootReceipt。注册成功、连接失败后不会注销根，
+但调用者拿不到 resume 所需的卷/目录 ID。新 API 必须提供根外的新 checkpoint 文件，
+在持有目录身份租约时写入并 sync_all，之后才注册和连接。祖先禁止 reparse，文件以
+create_new 和 no-delete-sharing 打开，禁止覆盖旧 checkpoint。
+
+resume_from_checkpoint 校验实际卷、目录文件 ID、注册 identity；仅原始空普通目录
+允许完成中断的首次注册，已注册根仍必须匹配全部身份。失败不注销、不删除内容。
+实机生成测试覆盖注册前中断、注册后真实第二连接被 OS 拒绝、原连接退出后的恢复、
+错误目录 ID 和错误注册 identity 拒绝。两个空生成根验证后由测试自行注销清理。
+
+另加实际嵌套发布验证：接受自身云目录、拒绝普通目录及 junction 父路径，测试通过并清理生成范围。
+
+这里验证的是持久凭据和平台恢复，不是完整同步器的断电/账号恢复或原 OneDrive 迁移。
+API 参考：[CfRegisterSyncRoot](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfregistersyncroot)、
+[CfConnectSyncRoot](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfconnectsyncroot)。
+
 ## TD-20261108-06：代际化缓存文件名移植后，旧引擎测试仍拼接历史路径
 
 - 日期：2026-11-08（Asia/Shanghai）
@@ -19,7 +80,7 @@
 根内并完整核对内容；Python 用只读 SQLite。保留暂停、脏内容保护、上传确认和重启断言，
 没有恢复旧文件名或删掉测试。Windows 11 项引擎检查和实际命名管道 IPC 通过；Linux
 完整工作区 223 项通过、12 项默认忽略。另把 portable filesystem 测试纳入 Windows 原生 CI，
-本地该组合 backend/core/fs 132 项通过。最终新 head CI 待完成。
+本地该组合 backend/core/fs 132 项通过。477e9e4 的 12 项适用 CI 已通过，report 可选任务跳过。
 
 ## TD-20261108-05：原生编辑快照使用临时文件时间而非源文件时间
 

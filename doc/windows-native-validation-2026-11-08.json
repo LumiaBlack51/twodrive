@@ -58,7 +58,22 @@
   },
   "review": {
     "maintainer_approval_claimed": false,
-    "user_waived_waiting_for_maintainer_review": true
+    "user_waived_waiting_for_maintainer_review": true,
+    "dot_review_received": true,
+    "addressed_findings": [
+      "durable root checkpoint before first registration/connection",
+      "recovery-copy tombstone precedence",
+      "preserve an imported different recovery-copy version",
+      "only actual pending writes override remote inode attributes",
+      "refresh cached read retention"
+    ],
+    "native_checkpoint_recovery_and_nested_publication": "passed on actual Windows with generated roots; rejects mismatched IDs and junction parents",
+    "windows_core_fs_default": {
+      "core": 57,
+      "filesystem": 22
+    },
+    "strict_clippy": "Windows core/fs and CFAPI, Linux core/fs passed",
+    "remaining": "final CI and follow-up review for this revision; full native takeover is still incomplete"
   },
   "cleanup": {
     "office_fixture_processes_and_roots_cleaned": true,

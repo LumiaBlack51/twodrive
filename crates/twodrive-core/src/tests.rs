@@ -83,6 +83,104 @@ fn add_file(db: &Database, id: &str, path: &str) {
         .unwrap();
 }
 
+fn recovery_completion_fixture(name: &str) -> (TestDatabase, FileRecord, MetadataEntry, PathBuf) {
+    let test = TestDatabase::new(name);
+    let cache = test.root.join("original-edit.cache");
+    fs::write(&cache, b"edit").unwrap();
+    test.db
+        .create_local_file("local-upload-missing", "/original.txt", &cache)
+        .unwrap();
+    test.db
+        .bind_cloud_identity("local-upload-missing", "missing-cloud-id", "original-v1")
+        .unwrap();
+    test.db
+        .mark_dirty_with_size("local-upload-missing", 4)
+        .unwrap();
+    test.db
+        .mark_state("local-upload-missing", FileState::Conflict)
+        .unwrap();
+    let original = test
+        .db
+        .get_by_remote_id("local-upload-missing")
+        .unwrap()
+        .unwrap();
+    let copy = MetadataEntry::new_file("recovery-cloud-id", "/recovery.txt", 4, 2, "copy-v1");
+    assert!(
+        test.db
+            .begin_conflict_upload(&original, &copy.path, &cache)
+            .unwrap()
+    );
+    (test, original, copy, cache)
+}
+
+#[test]
+fn recovery_copy_deleted_before_acknowledgement_is_not_resurrected() {
+    let (test, original, copy, cache) = recovery_completion_fixture("copy-deleted-before-ack");
+    test.db.upsert_metadata(&copy).unwrap();
+    let imported = test
+        .db
+        .get_by_cloud_remote_id(&copy.remote_id)
+        .unwrap()
+        .unwrap();
+    test.db.queue_pending_delete(&imported).unwrap();
+    assert!(
+        test.db
+            .complete_missing_conflict_upload(&original, &copy, &cache)
+            .unwrap()
+    );
+    assert!(
+        test.db
+            .get_by_cloud_remote_id(&copy.remote_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        test.db
+            .get_by_remote_id(&original.metadata.remote_id)
+            .unwrap()
+            .is_none()
+    );
+    let delete = test
+        .db
+        .pending_deletes()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.cloud_remote_id.as_deref() == Some(copy.remote_id.as_str()))
+        .unwrap();
+    assert_eq!(delete.cache_path.as_deref(), Some(cache.as_path()));
+    assert_eq!(fs::read(cache).unwrap(), b"edit");
+}
+
+#[test]
+fn delayed_recovery_acknowledgement_preserves_an_imported_newer_copy() {
+    let (test, original, copy, cache) = recovery_completion_fixture("copy-newer-before-ack");
+    let newer = MetadataEntry::new_file(&copy.remote_id, &copy.path, 5, 3, "copy-v2");
+    test.db.upsert_metadata(&newer).unwrap();
+    let newer_cache = test.root.join("newer-copy.cache");
+    fs::write(&newer_cache, b"newer").unwrap();
+    test.db.mark_cached(&copy.remote_id, &newer_cache).unwrap();
+    assert!(
+        test.db
+            .complete_missing_conflict_upload(&original, &copy, &cache)
+            .unwrap()
+    );
+    let current = test
+        .db
+        .get_by_cloud_remote_id(&copy.remote_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.metadata.etag, "copy-v2");
+    assert_eq!(current.metadata.size, 5);
+    assert_eq!(current.cache_path.as_deref(), Some(newer_cache.as_path()));
+    assert_eq!(fs::read(newer_cache).unwrap(), b"newer");
+    assert!(
+        test.db
+            .get_by_remote_id(&original.metadata.remote_id)
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[test]
 fn missing_conflict_copy_rejection_keeps_the_original_generation_and_claim() {
     let test = TestDatabase::new("missing-conflict-rollback");

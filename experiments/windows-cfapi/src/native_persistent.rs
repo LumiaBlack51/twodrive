@@ -65,22 +65,60 @@ fn root_identity(handle: HANDLE) -> Result<(u64, Vec<u8>)> {
 }
 
 impl PersistentSession {
-    /// The caller persists the account-bound identity and creation intent before
-    /// calling this method, then stores receipt() before publishing any files.
+    /// Persist the exact filesystem binding BEFORE registration or connection.
+    /// The checkpoint must be a new file outside the new root. Keep it with the
+    /// account state; failed startup never unregisters or deletes user content.
     pub fn create_new(
         root: &Path,
         identity: &[u8],
+        checkpoint: &Path,
         engine: Arc<dyn HydrationSource>,
     ) -> Result<Self> {
+        let (guard, receipt) = Self::prepare_new(root, identity, checkpoint)?;
+        Self::register_owned(&guard, &receipt.identity)?;
+        Self::connect_owned(guard, receipt, engine)
+    }
+
+    fn prepare_new(
+        root: &Path,
+        identity: &[u8],
+        checkpoint: &Path,
+    ) -> Result<(RootGuard, RootReceipt)> {
+        use std::io::Write;
+        use std::os::windows::fs::OpenOptionsExt;
         valid_identity(identity)?;
         let mut guard = RootGuard::lock_parent(root)?;
         guard.require_unmanaged_parent()?;
+        // Validate the checkpoint chain before creating any native root. It
+        // cannot be nested below the root, which does not yet exist.
+        let checkpoint_guard = RootGuard::lock_parent(checkpoint)?;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH)
+            .open(&checkpoint_guard.root)
+            .map_err(|e| e.to_string())?;
         guard.create_leaf()?;
         let handle = guard._handles.last().ok_or("missing root handle")?.0;
         let (volume_serial, file_id, directory) = file_binding(handle)?;
         if !directory {
             return Err("native root must be a directory".into());
         }
+        let receipt = RootReceipt {
+            schema_version: 1,
+            volume_serial,
+            file_id,
+            identity: identity.to_vec(),
+        };
+        let bytes = serde_json::to_vec(&receipt).map_err(|e| e.to_string())?;
+        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        Ok((guard, receipt))
+    }
+
+    fn register_owned(guard: &RootGuard, identity: &[u8]) -> Result<()> {
         let name = wide(Path::new("TwoDrive Development"));
         let version = wide(Path::new(env!("CARGO_PKG_VERSION")));
         let registration = CF_SYNC_REGISTRATION {
@@ -116,21 +154,59 @@ impl PersistentSession {
             },
             "register new Development root",
         )?;
-        // Never unregister on startup failure: a concurrent user can already
-        // have written data. The durable creation intent permits explicit resume.
-        let receipt = RootReceipt {
-            schema_version: 1,
-            volume_serial,
-            file_id,
-            identity: identity.to_vec(),
-        };
-        Self::connect_owned(guard, receipt, engine)
+        Ok(())
+    }
+
+    /// Resume an interrupted first registration as well as a normal restart.
+    /// Registration is only completed for the exact empty ordinary directory
+    /// recorded before the first attempt. Foreign/replaced roots fail closed.
+    pub fn resume_from_checkpoint(
+        root: &Path,
+        checkpoint: &Path,
+        engine: Arc<dyn HydrationSource>,
+    ) -> Result<Self> {
+        use std::io::Read;
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        let checkpoint_guard = RootGuard::lock_parent(checkpoint)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&checkpoint_guard.root)
+            .map_err(|e| e.to_string())?;
+        if file
+            .metadata()
+            .map_err(|e| e.to_string())?
+            .file_attributes()
+            & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)
+            != 0
+        {
+            return Err("checkpoint must be an ordinary retained file".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(65537)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 65536 {
+            return Err("oversized root checkpoint".into());
+        }
+        let receipt = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        Self::resume_owned(root, &receipt, engine, true)
     }
 
     pub fn resume(
         root: &Path,
         receipt: &RootReceipt,
         engine: Arc<dyn HydrationSource>,
+    ) -> Result<Self> {
+        Self::resume_owned(root, receipt, engine, false)
+    }
+
+    fn resume_owned(
+        root: &Path,
+        receipt: &RootReceipt,
+        engine: Arc<dyn HydrationSource>,
+        finish_registration: bool,
     ) -> Result<Self> {
         valid_identity(&receipt.identity)?;
         if receipt.schema_version != 1 {
@@ -154,17 +230,58 @@ impl PersistentSession {
         }
         let handle = Handle(raw, false);
         let (volume, id, directory) = file_binding(handle.0)?;
-        let (registered_id, identity) = root_identity(handle.0)?;
-        if !directory
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                handle.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                size_of_val(&tag) as u32,
+            )
+        } == 0
+            || !directory
             || volume != receipt.volume_serial
             || id != receipt.file_id
-            || id != registered_id
-            || identity != receipt.identity
+            || tag.ReparseTag & 0x20000000 != 0
         {
-            return Err("native root registration or filesystem identity changed".into());
+            return Err("native root filesystem identity changed".into());
         }
+        let mut basic = CF_SYNC_ROOT_BASIC_INFO::default();
+        let query = unsafe {
+            CfGetSyncRootInfoByHandle(
+                handle.0,
+                CF_SYNC_ROOT_INFO_BASIC,
+                (&mut basic as *mut CF_SYNC_ROOT_BASIC_INFO).cast(),
+                size_of_val(&basic) as u32,
+                ptr::null_mut(),
+            )
+        };
+        let needs_registration = if query >= 0 {
+            let (registered_id, identity) = root_identity(handle.0)?;
+            if id != registered_id || identity != receipt.identity {
+                return Err("native root registration identity changed".into());
+            }
+            false
+        } else {
+            require_unmanaged(query)?;
+            if !finish_registration
+                || tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                || std::fs::read_dir(root)
+                    .map_err(|e| e.to_string())?
+                    .next()
+                    .is_some()
+            {
+                return Err(
+                    "interrupted registration requires the original empty ordinary root".into(),
+                );
+            }
+            true
+        };
         guard._handles.push(handle);
         guard.root = root.canonicalize().map_err(|e| e.to_string())?;
+        if needs_registration {
+            Self::register_owned(&guard, &receipt.identity)?;
+        }
         Self::connect_owned(guard, receipt.clone(), engine)
     }
 
@@ -416,6 +533,102 @@ impl Drop for PersistentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct NoCloud;
+    impl HydrationSource for NoCloud {
+        fn size(&self, _: &[u8]) -> Result<usize> {
+            Err("no cloud".into())
+        }
+        fn read_range(&self, _: &[u8], _: usize, _: usize, _: &AtomicBool) -> Result<Vec<u8>> {
+            Err("no cloud".into())
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit NEW generated native roots; interrupted registration and actual connection failure"]
+    fn durable_checkpoint_recovers_interrupted_registration_and_first_connection() {
+        let base = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_PERSISTENT_FIXTURE_ROOT")
+                .expect("explicit root required"),
+        );
+        assert!(
+            base.is_absolute()
+                && base
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-")
+        );
+        for registered in [false, true] {
+            let root = base.with_extension(if registered { "registered" } else { "prepared" });
+            let checkpoint = root.with_extension(if registered {
+                "registered.json"
+            } else {
+                "prepared.json"
+            });
+            assert!(!root.exists() && !checkpoint.exists());
+            let (guard, receipt) = PersistentSession::prepare_new(
+                &root,
+                b"twodrive-dev-native-v1:interrupted-generated-test",
+                &checkpoint,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<RootReceipt>(&std::fs::read(&checkpoint).unwrap())
+                    .unwrap(),
+                receipt
+            );
+            if registered {
+                PersistentSession::register_owned(&guard, &receipt.identity).unwrap();
+                let blocker =
+                    PersistentSession::connect_owned(guard, receipt.clone(), Arc::new(NoCloud))
+                        .unwrap();
+                // The real OS refuses a second connection. Its failure must not
+                // remove the root, registration or already-durable receipt.
+                assert!(
+                    PersistentSession::resume_from_checkpoint(
+                        &root,
+                        &checkpoint,
+                        Arc::new(NoCloud)
+                    )
+                    .is_err()
+                );
+                assert!(root.exists() && checkpoint.exists());
+                drop(blocker);
+            } else {
+                drop(guard); // Process interruption before registration.
+            }
+            let mut resumed =
+                PersistentSession::resume_from_checkpoint(&root, &checkpoint, Arc::new(NoCloud))
+                    .unwrap();
+            assert_eq!(resumed.receipt(), &receipt);
+            resumed.disconnect().unwrap();
+            drop(resumed);
+            let mut wrong = receipt.clone();
+            wrong.file_id = wrong.file_id.wrapping_add(1);
+            std::fs::write(&checkpoint, serde_json::to_vec(&wrong).unwrap()).unwrap();
+            assert!(
+                PersistentSession::resume_from_checkpoint(&root, &checkpoint, Arc::new(NoCloud))
+                    .is_err()
+            );
+            wrong = receipt;
+            wrong.identity.extend_from_slice(b":foreign");
+            std::fs::write(&checkpoint, serde_json::to_vec(&wrong).unwrap()).unwrap();
+            assert!(
+                PersistentSession::resume_from_checkpoint(&root, &checkpoint, Arc::new(NoCloud))
+                    .is_err()
+            );
+            // Only these two empty, newly generated roots are retired.
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+            hr(
+                unsafe { CfUnregisterSyncRoot(wide(&root).as_ptr()) },
+                "retire interrupted fixture",
+            )
+            .unwrap();
+            verify_unregistered(&root).unwrap();
+            std::fs::remove_dir(&root).unwrap();
+            std::fs::remove_file(&checkpoint).unwrap();
+        }
+    }
     #[test]
     fn foreign_and_unversioned_root_identities_are_not_accepted() {
         for id in [
@@ -427,6 +640,83 @@ mod tests {
             assert!(valid_identity(id).is_err());
         }
         valid_identity(b"twodrive-dev-native-v1:generated-test-binding").unwrap();
+    }
+
+    #[test]
+    #[ignore = "explicit NEW generated native root; nested publication and junction refusal"]
+    fn publication_accepts_owned_subdirectories_and_refuses_ordinary_or_junction_parents() {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_PERSISTENT_FIXTURE_ROOT")
+                .expect("explicit root required"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-")
+        );
+        let checkpoint = root.with_extension("receipt.json");
+        let outside = root.with_extension("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let mut session = PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:nested-generated-test",
+            &checkpoint,
+            Arc::new(NoCloud),
+        )
+        .unwrap();
+        session
+            .publish_placeholder(Path::new("owned"), b"directory", 0, true, 1)
+            .unwrap();
+        let nested = session
+            .publish_placeholder(Path::new("owned/empty.bin"), b"empty", 0, false, 1)
+            .unwrap();
+        std::fs::create_dir(root.join("ordinary")).unwrap();
+        assert!(
+            session
+                .publish_placeholder(Path::new("ordinary/blocked.bin"), b"blocked", 0, false, 1)
+                .is_err()
+        );
+        let linked = root.join("junction");
+        let command = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&linked)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(
+            command.status.success(),
+            "generated junction creation failed"
+        );
+        assert!(
+            session
+                .publish_placeholder(Path::new("junction/blocked.bin"), b"blocked", 0, false, 1)
+                .is_err()
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(root.join("ordinary")).unwrap().count(), 0);
+        assert!(nested.exists());
+        // All entries were created in this test and are empty. remove_dir on
+        // the junction removes the link itself, not its target.
+        std::fs::remove_dir(&linked).unwrap();
+        std::fs::remove_file(&nested).unwrap();
+        std::fs::remove_dir(root.join("owned")).unwrap();
+        std::fs::remove_dir(root.join("ordinary")).unwrap();
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        session.disconnect().unwrap();
+        hr(
+            unsafe { CfUnregisterSyncRoot(wide(&root).as_ptr()) },
+            "retire nested fixture",
+        )
+        .unwrap();
+        drop(session);
+        verify_unregistered(&root).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::remove_dir(&outside).unwrap();
+        std::fs::remove_file(&checkpoint).unwrap();
     }
 
     #[test]
@@ -472,6 +762,7 @@ mod tests {
         let session = PersistentSession::create_new(
             &root,
             b"twodrive-dev-native-v1:generated-test-binding",
+            &root.with_extension("receipt.json"),
             Arc::new(Generated),
         )
         .unwrap();

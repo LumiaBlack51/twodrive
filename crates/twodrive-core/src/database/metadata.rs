@@ -37,34 +37,67 @@ impl Database {
             copy_id != original.metadata.remote_id,
             "recovery copy reused the missing identity"
         );
-        tx.execute(
-            "INSERT OR IGNORE INTO retired_cache(cache_path)
-             SELECT cache_path FROM files WHERE remote_id = ?1
-               AND state IN ('cached', 'pinned') AND cache_path IS NOT NULL AND cache_path <> ?2",
-            params![copy_id, cache_path.to_string_lossy()],
-        )?;
-        let changed = tx.execute(
-            "INSERT INTO files(remote_id, cloud_remote_id, path, parent_path, name,
-                is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, local_mode)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, 'cached', ?9, ?10, ?11)
-             ON CONFLICT(remote_id) DO UPDATE SET
-                -- This ID may have been imported and renamed while the PUT
-                -- acknowledgement was in flight. Attach its bytes without
-                -- rolling back the copy's current name or ancestor moves.
-                size = excluded.size, modified_unix = excluded.modified_unix, etag = excluded.etag,
-                state = CASE WHEN files.pin_explicit = 1 OR files.pin_origin_remote_id IS NOT NULL
-                    THEN 'pinned' ELSE 'cached' END,
-                cache_path = excluded.cache_path, cache_accessed_unix = excluded.cache_accessed_unix
-             WHERE files.cloud_remote_id = excluded.cloud_remote_id
-               AND files.state IN ('online_only', 'cached', 'pinned', 'hydrating')",
-            params![copy_id, uploaded.remote_id, uploaded.path, uploaded.parent_path,
-                uploaded.name, uploaded.size as i64, original.metadata.modified_unix,
-                uploaded.etag, cache_path.to_string_lossy(), now_unix(), original.local_mode],
-        )?;
-        anyhow::ensure!(
-            changed == 1,
-            "recovery copy has a protected local generation"
-        );
+        let copy_delete: Option<String> = tx.query_row(
+            "SELECT remote_id FROM pending_deletes WHERE cloud_remote_id=?1 OR remote_id=?1 LIMIT 1",
+            params![uploaded.remote_id], |row| row.get(0)).optional()?;
+        if let Some(deleted_id) = copy_delete {
+            // This is the COPY's deletion intent, not the original's. Never
+            // recreate it or clear an unrelated newer upload on its tombstone.
+            let settled = tx.execute(
+                "UPDATE pending_deletes SET cache_path=COALESCE(cache_path,?2),
+                uploaded_path=COALESCE(uploaded_path,?3) WHERE remote_id=?1",
+                params![deleted_id, cache_path.to_string_lossy(), uploaded.path],
+            )?;
+            anyhow::ensure!(settled == 1, "recovery copy deletion settlement rejected");
+        } else {
+            let existing = self.query_record(&tx,
+                "SELECT remote_id,path,parent_path,name,is_dir,size,modified_unix,etag,state,cache_path,cache_accessed_unix,pin_explicit,pin_origin_remote_id,pin_inheritance_blocked,cloud_remote_id,local_mode FROM files WHERE remote_id=?1",
+                params![copy_id])?;
+            if let Some(copy) = &existing {
+                anyhow::ensure!(
+                    !copy.metadata.is_dir
+                        && copy.cloud_remote_id.as_deref() == Some(uploaded.remote_id.as_str()),
+                    "recovery copy identity changed"
+                );
+                anyhow::ensure!(
+                    matches!(
+                        copy.state,
+                        FileState::OnlineOnly
+                            | FileState::Cached
+                            | FileState::Pinned
+                            | FileState::Hydrating
+                    ),
+                    "recovery copy has a protected local generation"
+                );
+            }
+            let same_version = existing.as_ref().is_none_or(|copy| {
+                copy.metadata.etag == uploaded.etag && copy.metadata.size == uploaded.size
+            });
+            if same_version {
+                tx.execute(
+                    "INSERT OR IGNORE INTO retired_cache(cache_path)
+                     SELECT cache_path FROM files WHERE remote_id=?1
+                       AND cache_path IS NOT NULL AND cache_path<>?2",
+                    params![copy_id, cache_path.to_string_lossy()],
+                )?;
+                let published = tx.execute(
+                    "INSERT INTO files(remote_id,cloud_remote_id,path,parent_path,name,
+                        is_dir,size,modified_unix,etag,state,cache_path,cache_accessed_unix,local_mode)
+                     VALUES(?1,?2,?3,?4,?5,0,?6,?7,?8,'cached',?9,?10,?11)
+                     ON CONFLICT(remote_id) DO UPDATE SET
+                        state=CASE WHEN files.pin_explicit=1 OR files.pin_origin_remote_id IS NOT NULL
+                            THEN 'pinned' ELSE 'cached' END,
+                        cache_path=excluded.cache_path,cache_accessed_unix=excluded.cache_accessed_unix,
+                        download_generation=files.download_generation+1",
+                    params![copy_id,uploaded.remote_id,uploaded.path,uploaded.parent_path,
+                        uploaded.name,uploaded.size as i64,original.metadata.modified_unix,
+                        uploaded.etag,cache_path.to_string_lossy(),now_unix(),original.local_mode])?;
+                anyhow::ensure!(published == 1, "recovery copy publication rejected");
+            }
+            // A different observed version is opaque, not permission to roll it
+            // back. Preserve its metadata/cache and retire only the acknowledged
+            // original claim below. The unattached old cache remains recoverable.
+        }
         tx.execute(
             "DELETE FROM files WHERE remote_id = ?1 AND state = 'conflict'
                AND cache_path IS ?2 AND cloud_remote_id IS ?3

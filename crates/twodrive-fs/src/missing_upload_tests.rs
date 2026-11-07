@@ -710,6 +710,38 @@ fn check_renamed_recovery(test: &Test, destination: &str, moves: usize) {
 }
 
 #[test]
+fn imported_recovery_copy_deleted_before_ack_finishes_delete_after_restart() {
+    let test = Test::new("dot-copy-delete");
+    test.backend.delete(CLOUD).unwrap();
+    let db = test.db.clone();
+    let copy_id = std::sync::Arc::new(Mutex::new(String::new()));
+    let seen = std::sync::Arc::clone(&copy_id);
+    *test.backend.on_ack.lock().unwrap() = Some(Box::new(move |uploaded| {
+        db.upsert_metadata(&uploaded).unwrap();
+        let copy = db
+            .get_by_cloud_remote_id(&uploaded.remote_id)
+            .unwrap()
+            .unwrap();
+        db.queue_pending_delete(&copy).unwrap();
+        *seen.lock().unwrap() = uploaded.remote_id;
+    }));
+    assert_eq!(recover_dirty_uploads(&test.db, &test.backend).unwrap(), 1);
+    let id = copy_id.lock().unwrap().clone();
+    assert!(!id.is_empty());
+    assert!(test.db.get_by_cloud_remote_id(&id).unwrap().is_none());
+    let reopened = Database::new(test.db.path());
+    reopened.init().unwrap();
+    assert_eq!(
+        crate::recover_pending_deletes(&reopened, &test.backend).unwrap(),
+        1
+    );
+    assert!(test.backend.get_metadata(&id).unwrap().is_none());
+    assert!(reopened.pending_deletes().unwrap().is_empty());
+    assert_eq!(recover_dirty_uploads(&reopened, &test.backend).unwrap(), 0);
+    assert_eq!(test.backend.copies.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn recovery_copy_rename_before_ack_survives_completion_and_restart() {
     let test = Test::new("dot-copy-rename");
     test.backend.delete(CLOUD).unwrap();

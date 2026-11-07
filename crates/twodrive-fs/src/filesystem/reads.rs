@@ -23,8 +23,10 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 unlinked: false,
                 deferred_record: None,
                 download_generation: 0,
+                last_cache_touch: AtomicI64::new(0),
             },
         );
+        self.note_read_access(&self.read_handles[&fh]);
         Ok(fh)
     }
 
@@ -46,6 +48,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             let mut bytes = vec![0; size as usize];
             let count = file.read_at(&mut bytes, offset)?;
             bytes.truncate(count);
+            self.note_read_access(handle);
             return Ok(bytes);
         }
         let cache_path = self
@@ -74,6 +77,14 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn release_read_handle(&mut self, fh: u64) -> anyhow::Result<()> {
+        if let Some(handle) = self.read_handles.get(&fh)
+            && !handle.unlinked
+        {
+            // Close already commits release bookkeeping. Record the final access
+            // before dropping its cache lease, so eviction cannot overtake a
+            // queued periodic touch. A failed commit retains the lease.
+            self.db.mark_cache_path_accessed(&handle.cache_path)?;
+        }
         let Some(handle) = self.read_handles.remove(&fh) else {
             return Ok(());
         };
@@ -84,6 +95,30 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         }
         self.db.finish_pending_releases()?;
         Ok(())
+    }
+
+    pub(super) fn note_read_access(&self, handle: &ReadHandle) {
+        if handle.unlinked {
+            return;
+        }
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let previous = handle.last_cache_touch.load(Ordering::Relaxed);
+        if now >= previous && now - previous < 60 {
+            return;
+        }
+        handle.last_cache_touch.store(now, Ordering::Relaxed);
+        let db = self.db.clone();
+        let cache = handle.cache_path.clone();
+        // No SQLite write on every read chunk or in the read dispatcher. The
+        // open handle retains its lease, and close commits before releasing it.
+        self.read_pool.spawn(move || {
+            if let Err(err) = db.mark_cache_path_accessed(&cache) {
+                eprintln!("twodrive cache access update failed: {err:#}");
+            }
+        });
     }
 
     pub(super) fn cleanup_unlinked_cache(&self, cache_path: &Path) -> anyhow::Result<()> {
