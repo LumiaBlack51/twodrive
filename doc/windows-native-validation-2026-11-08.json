@@ -200,7 +200,11 @@
     "foreign_volume_and_junction_refused": true,
     "hydration_callbacks": 0,
     "deleted_file_id_error_87": "unresolved; not treated as deletion authorization",
-    "cloud_mutation_worker_enabled": false
+    "cloud_mutation_worker_enabled": false,
+    "effective_directory_only_parent_leases": true,
+    "queued_ancestor_identity_chain_revalidated": true,
+    "old_race_oracles_failed": 2,
+    "native_race_regressions_passed": 3
   },
   "native_operation_events": {
     "actual_windows_external_process": true,
@@ -213,5 +217,18 @@
     "ordinary_unconverted_file_event_count": 0,
     "provider_own_io_is_not_application_notification": true,
     "cloud_consumer_connected": false
+  },
+  "readonly_personal_catalogue": {
+    "pages": 202,
+    "entries": 20159,
+    "files": 12733,
+    "folder_items": 7426,
+    "unsupported_indexer_objects": 0,
+    "logical_file_bytes": 105678248836,
+    "content_downloaded": false,
+    "cloud_mutations": false,
+    "native_root_registered": false,
+    "private_catalogue_retained": true,
+    "host_appdata_resolved_under_package_localcache": true
   }
 }

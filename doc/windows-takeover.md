@@ -174,3 +174,20 @@ identity-bound request and completion records without hydration. Provider-owned
 I/O and ordinary unconverted files did not produce these application callbacks.
 An independent ordinary-file watcher, account-bound coordinator and cloud
 mutation/recovery consumer remain required. Events alone enable no cloud writes.
+
+Directory observation now uses directory-only NT opens relative to retained
+parents, with enumeration access and no delete sharing. Queued directories carry
+the complete expected ancestor identity chain. Two old-code race oracles failed;
+three native regressions now pass, including replacement by an online-only file
+without a hydration callback. Nested publication and replacement parents use the
+same effective lease.
+
+A fresh read-only catalogue audit of the independently authenticated personal
+account completed 202 pages: 20,159 items, 12,733 files, 7,426 folder items, and
+105,678,248,836 logical file bytes. The indexer classified no remote-item/package
+objects as unsupported. This is metadata only, not file downloads, namespace
+compatibility certification or migration. The private catalogue is retained
+locally; no personal names, IDs or database are committed. The host resolved its
+AppData output under the desktop package's LocalCache, so deployment must account
+for the canonical state location instead of assuming an unpackaged process sees
+the same logical AppData path.

@@ -7,7 +7,7 @@
 ## TD-20261108-19：目录观察复用了无替换保护的属性句柄且丢失排队身份
 
 - 日期：2026-11-08（Asia/Shanghai）
-- 状态：两项旧代码实机竞争回归失败，修复验证中
+- 状态：两项旧代码实机竞争回归失败；修复后三项竞争检查、嵌套发布和原子替换通过
 - 关联：TD-20261021-02 的目录枚举访问保护；原注册 RootGuard 未回归，新观察层复用旧属性 helper 时遗漏
 
 Dot 指出 directory_handle 只请求 FILE_READ_ATTRIBUTES，历史实机证据已表明它不足以
@@ -16,10 +16,16 @@ Dot 指出 directory_handle 只请求 FILE_READ_ATTRIBUTES，历史实机证据�
 重获租约前替换目录；旧实现分别实际允许改名、返回混合清单，两个回归均失败。
 夹具在断言前校验生成字节并清理，旧代码复现没有留下注册根。
 
-新增具备目录枚举访问、no-recall 和 no-delete-sharing 的实际遍历租约；文件叶仍只
+新增相对已持有父句柄、仅允许目录类型、具备枚举访问且不共享 DELETE 的实际遍历租约；文件叶仍只
 读属性。队列保存完整祖先卷/文件 ID 链，重开逐项匹配，替换即失败重试。嵌套占位
 发布与普通替换捕获的父链也采用有效租约；不更改生成夹具独立排他 teardown 的句柄
-顺序。没有将扫描失败当作删除证据，也没有接通云端删除 worker。
+顺序。第三项回归让排队目录被在线占位文件取代：中间的 CreateFile 候选即使带
+OPEN_NO_RECALL 仍触发 FETCH_DATA，故改用 NtCreateFile 的 FILE_DIRECTORY_FILE 在
+打开阶段拒绝文件。曾误将 NT FILE_OPEN_NO_RECALL 与目录选项组合而得到
+0xC000000D；正向目录遍历用例因此失败，按实际兼容选项修正后全部通过。
+三个用例均核对零 hydration，并在断言前清理生成根；嵌套发布、原子替换/重启、
+严格 Clippy 及 CFAPI 默认回归通过。没有将扫描失败当作删除证据，也没有接通云端
+删除 worker。API 参考：[NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)。
 
 ## TD-20261108-18：父子改名回归错误要求一轮恢复全部完成
 
