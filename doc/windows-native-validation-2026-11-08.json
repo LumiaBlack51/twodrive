@@ -92,6 +92,18 @@
     "new_native_reference_cleanup_veto": true,
     "native_source_mtime_preserved": true,
     "windows_fixture_drop_order_regression": true,
-    "full_cfapi_takeover": false
+    "full_cfapi_takeover": false,
+    "linux_workspace_default": {
+      "passed": 223,
+      "ignored": 12
+    },
+    "windows_shared_default": {
+      "backend": 54,
+      "backend_contract": 2,
+      "core": 55,
+      "filesystem": 21
+    },
+    "windows_preview_engine_tests": 11,
+    "windows_preview_native_ipc": "passed after porting current published-cache-path assertions"
   }
 }

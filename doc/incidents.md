@@ -4,6 +4,23 @@
 
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
+## TD-20261108-06：代际化缓存文件名移植后，旧引擎测试仍拼接历史路径
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：CI 已定位；同步移植消费者测试后，本地完整工作区和原生 IPC 通过
+- 范围：5dc162e 的测试配套遗漏，不是缓存内容丢失
+- 证据：[Linux 检查](https://github.com/LumiaBlack51/twodrive/actions/runs/42397639531)、[Windows 双预览](https://github.com/LumiaBlack51/twodrive/actions/runs/42397639539)、[Debian 构建](https://github.com/LumiaBlack51/twodrive/actions/runs/42397639604)
+
+三个流程均在 pause_blocks_real_scheduler_and_upload_confirmations 的旧 cache/id 路径
+断言失败。Debian 诊断 artifact 也确认同一测试；不是未经核实地将不同失败归为同根因。
+缓存失效修复采用带下载代际的文件名，移植时漏掉了上游相应的旧 Windows 引擎/IPC 测试。
+
+从 main 同步两处消费者校验：从当前数据库读取已发布 cache_path，再检查仍在隔离 cache
+根内并完整核对内容；Python 用只读 SQLite。保留暂停、脏内容保护、上传确认和重启断言，
+没有恢复旧文件名或删掉测试。Windows 11 项引擎检查和实际命名管道 IPC 通过；Linux
+完整工作区 223 项通过、12 项默认忽略。另把 portable filesystem 测试纳入 Windows 原生 CI，
+本地该组合 backend/core/fs 132 项通过。最终新 head CI 待完成。
+
 ## TD-20261108-05：原生编辑快照使用临时文件时间而非源文件时间
 
 - 日期：2026-11-08（Asia/Shanghai）
