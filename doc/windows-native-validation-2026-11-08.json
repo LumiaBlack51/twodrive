@@ -1,0 +1,69 @@
+{
+  "date": "2026-11-08",
+  "timezone": "Asia/Shanghai",
+  "scope": "preparatory native CFAPI and Office components, not completed takeover",
+  "native_capture": {
+    "generated_real_cfapi_root": true,
+    "normal_os_hydration": true,
+    "same_length_edit_capture": true,
+    "conditional_mock_upload_and_full_bytes": true,
+    "owned_root_unregistered": true
+  },
+  "persistent_root": {
+    "cached_reads_after_disconnect": true,
+    "online_only_entries_retained": true,
+    "hydration_after_resume": true,
+    "wrong_root_receipt_rejected": true,
+    "metadata_publication_did_not_hydrate": true,
+    "traversal_reserved_names_and_existing_file_replacement_rejected": true,
+    "production_account_restart_recovery": false
+  },
+  "office": {
+    "version": "Microsoft 365 x64 16.0.20527.20112",
+    "word_excel_powerpoint_native_save_and_actual_sta_timer": true,
+    "persisted_ooxml_verified": true,
+    "real_generated_cfapi_root_guard": true,
+    "normal_office_registration_changed": false,
+    "registered_com_load_and_ribbon_verified": false,
+    "office_document_to_real_cloud_pipeline_verified": false
+  },
+  "real_personal_onedrive": {
+    "independent_explicit_login": true,
+    "owner_matches_current_personal_client": true,
+    "bytes": 1048699,
+    "native_hydration": true,
+    "native_edit_capture": true,
+    "conditional_upload": true,
+    "full_cloud_readback": true,
+    "stale_version_rejected": true,
+    "only_new_generated_cloud_scope_used": true,
+    "cloud_fixture_removed_with_ordinary_delete": true,
+    "native_fixture_unregistered_and_removed": true,
+    "user_work_files_used": false
+  },
+  "takeover": {
+    "microsoft_onedrive_stopped": false,
+    "original_folder_replaced": false,
+    "production_native_mount_enabled": false,
+    "complete": false,
+    "remaining": [
+      "persistent account-backed desktop/worker composition",
+      "Office atomic replacement and size-change upload",
+      "native creation, rename, delete and parent/child ordering",
+      "remote delta application and conflict recovery",
+      "cache eviction and native in-sync status acknowledgement",
+      "installed COM/ribbon and real Office cloud end-to-end validation",
+      "original-folder preservation, rollback and actual cutover"
+    ]
+  },
+  "review": {
+    "maintainer_approval_claimed": false,
+    "user_waived_waiting_for_maintainer_review": true
+  },
+  "cleanup": {
+    "office_fixture_processes_and_roots_cleaned": true,
+    "live_cloud_validation_scope_cleaned": true,
+    "earlier_unregistered_generated_files_and_disposable_old_login_copy": "retained after automatic tool safety review rejected cleanup, including narrowed deletion",
+    "build_caches": "pending final CI and cleanup"
+  }
+}

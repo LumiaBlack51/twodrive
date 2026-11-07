@@ -84,11 +84,19 @@ readiness or stop the Microsoft client on its basis.
 A read-only probe of an isolated copy of the older preview login succeeded, but
 its returned drive/owner identity did not match the current personal client's CID.
 It was not used for cloud writes or takeover. An independent explicit-account
-PKCE login was started; current-account confirmation and real-cloud validation
-are still pending. No personal identifiers or credentials are recorded here.
+PKCE login then completed with the user, and the resulting owner matched the
+current personal client. No personal identifiers or credentials are recorded here.
 
 `onedrive::open_local_session` obtains the service's account/drive identity through
 the existing provider before opening a journal; a missing authority cannot reset
 or recover an existing cache. The diagnostic probe exits unsuccessfully when an
 explicit expected owner does not match. Account selection is explicit for the
 migration login; the original login entry points retain their existing behavior.
+
+An explicit 1,048,699-byte generated-file test subsequently passed real personal
+OneDrive upload, native CFAPI hydration, same-length edit/capture, conditional
+upload, complete cloud readback and stale-version refusal. Only a fresh generated
+cloud directory was used; ordinary delete removed its file and then its verified
+empty directory. The native fixture retained its bytes before unregistration and
+was then removed. This does not establish the remaining full-root operations or
+Office-document-to-cloud synchronization. See the [scope-specific results](windows-native-validation-2026-11-08.json).

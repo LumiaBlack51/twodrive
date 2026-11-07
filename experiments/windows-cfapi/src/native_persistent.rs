@@ -225,6 +225,135 @@ impl PersistentSession {
         &self.guard.root
     }
 
+    /// Publish verified cloud metadata without downloading content. Never
+    /// replaces a file; every existing parent must be an owned cloud directory.
+    pub fn publish_placeholder(
+        &self,
+        relative: &Path,
+        identity: &[u8],
+        size: u64,
+        directory: bool,
+        modified_unix: i64,
+    ) -> Result<PathBuf> {
+        if self.connection.is_none()
+            || identity.is_empty()
+            || identity.len() > 4096
+            || size > i64::MAX as u64
+        {
+            return Err("invalid native publication".into());
+        }
+        let parts = relative.components().collect::<Vec<_>>();
+        if parts.is_empty()
+            || parts.len() > 128
+            || parts.iter().any(|p| !matches!(p, Component::Normal(_)))
+        {
+            return Err("bounded relative native path required".into());
+        }
+        for part in &parts {
+            let name = part.as_os_str().to_str().ok_or("invalid native name")?;
+            let stem = name
+                .split('.')
+                .next()
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            if name.is_empty()
+                || name.ends_with(['.', ' '])
+                || name.encode_utf16().count() > 255
+                || name.chars().any(|c| c < ' ' || "<>:\"/\\|?*".contains(c))
+                || ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
+                || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+                    && stem.len() == 4
+                    && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+            {
+                return Err("unsupported native file name".into());
+            }
+        }
+        let mut parent = self.root().to_path_buf();
+        let mut guards = Vec::new();
+        for part in &parts[..parts.len() - 1] {
+            parent.push(part.as_os_str());
+            let handle = directory_handle(&parent)?;
+            let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+            if unsafe {
+                GetFileInformationByHandleEx(
+                    handle.0,
+                    FileAttributeTagInfo,
+                    (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                    size_of_val(&tag) as u32,
+                )
+            } == 0
+                || tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+                || tag.ReparseTag & 0x20000000 != 0
+            {
+                return Err("native parent is not an owned directory".into());
+            }
+            let (root_id, owner) = root_identity(handle.0)?;
+            if root_id != self.receipt.file_id || owner != self.receipt.identity {
+                return Err("native parent owner changed".into());
+            }
+            let mut bytes = [0u64; 1024];
+            let mut count = 0;
+            hr(
+                unsafe {
+                    CfGetPlaceholderInfo(
+                        handle.0,
+                        CF_PLACEHOLDER_INFO_STANDARD,
+                        bytes.as_mut_ptr().cast(),
+                        size_of_val(&bytes) as u32,
+                        &mut count,
+                    )
+                },
+                "verify native parent placeholder",
+            )?;
+            if count < size_of::<CF_PLACEHOLDER_STANDARD_INFO>() as u32 {
+                return Err("short parent placeholder information".into());
+            }
+            guards.push(handle);
+        }
+        let name = wide(Path::new(parts.last().unwrap().as_os_str()));
+        let mut item = CF_PLACEHOLDER_CREATE_INFO {
+            RelativeFileName: name.as_ptr(),
+            FileIdentity: identity.as_ptr().cast(),
+            FileIdentityLength: identity.len() as u32,
+            Flags: CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC
+                | if directory {
+                    CF_PLACEHOLDER_CREATE_FLAG_DISABLE_ON_DEMAND_POPULATION
+                } else {
+                    0
+                },
+            ..Default::default()
+        };
+        item.FsMetadata.FileSize = if directory { 0 } else { size as i64 };
+        item.FsMetadata.BasicInfo.FileAttributes = if directory {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
+        item.FsMetadata.BasicInfo.LastWriteTime = modified_unix
+            .checked_add(11_644_473_600)
+            .and_then(|v| v.checked_mul(10_000_000))
+            .unwrap_or(0)
+            .max(0);
+        let mut done = 0;
+        hr(
+            unsafe {
+                CfCreatePlaceholders(
+                    wide(&parent).as_ptr(),
+                    &mut item,
+                    1,
+                    CF_CREATE_FLAG_STOP_ON_ERROR,
+                    &mut done,
+                )
+            },
+            "publish native placeholder",
+        )?;
+        hr(item.Result, "publish native entry")?;
+        if done != 1 {
+            return Err("native placeholder was not published".into());
+        }
+        Ok(self.root().join(relative))
+    }
+
     #[cfg(feature = "native-test-hooks")]
     pub fn retire_empty_office_fixture(&mut self) -> Result<()> {
         if self.receipt.identity != b"twodrive-dev-native-v1:generated-office-only"
@@ -348,33 +477,43 @@ mod tests {
         .unwrap();
         let receipt = session.receipt().clone();
         for id in ["first", "offline"] {
-            let name = wide(Path::new(&format!("{id}.bin")));
-            let mut item = CF_PLACEHOLDER_CREATE_INFO {
-                RelativeFileName: name.as_ptr(),
-                FileIdentity: id.as_ptr().cast(),
-                FileIdentityLength: id.len() as u32,
-                Flags: CF_PLACEHOLDER_CREATE_FLAG_MARK_IN_SYNC,
-                ..Default::default()
-            };
-            item.FsMetadata.FileSize = BYTES.len() as i64;
-            item.FsMetadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-            let mut done = 0;
-            hr(
-                unsafe {
-                    CfCreatePlaceholders(
-                        wide(&root).as_ptr(),
-                        &mut item,
-                        1,
-                        CF_CREATE_FLAG_STOP_ON_ERROR,
-                        &mut done,
-                    )
-                },
-                "generated persistent placeholder",
-            )
-            .unwrap();
-            hr(item.Result, "generated entry").unwrap();
-            assert_eq!(done, 1);
+            session
+                .publish_placeholder(
+                    Path::new(&format!("{id}.bin")),
+                    id.as_bytes(),
+                    BYTES.len() as u64,
+                    false,
+                    1,
+                )
+                .unwrap();
         }
+        for name in [
+            "../escape.bin",
+            "CON",
+            "sub/../escape.bin",
+            "file:stream",
+            "trailing.",
+        ] {
+            assert!(
+                session
+                    .publish_placeholder(Path::new(name), b"invalid", 0, false, 1)
+                    .is_err()
+            );
+        }
+        assert!(
+            session
+                .publish_placeholder(Path::new("first.bin"), b"replacement", 0, false, 1)
+                .is_err()
+        );
+        assert_eq!(
+            session
+                .source
+                .as_ref()
+                .unwrap()
+                .calls
+                .load(Ordering::SeqCst),
+            0
+        );
         assert_eq!(std::fs::read(root.join("first.bin")).unwrap(), BYTES);
         drop(session);
         assert_eq!(std::fs::read(root.join("first.bin")).unwrap(), BYTES);
