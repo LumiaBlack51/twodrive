@@ -21,7 +21,7 @@ impl GraphBackend {
         paths: &AppPaths,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> anyhow::Result<()> {
-        Self::login_impl(paths, cancelled, true)
+        Self::login_impl(paths, cancelled, true, None)
     }
 
     /// Desktop IPC must never mix browser instructions or authorization URLs into stdout.
@@ -29,12 +29,29 @@ impl GraphBackend {
         paths: &AppPaths,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> anyhow::Result<()> {
-        Self::login_impl(paths, cancelled, false)
+        Self::login_impl(paths, cancelled, false, None)
+    }
+
+    /// Explicit account selection for an independent migration login. Never
+    /// print the authorization URL, login hint, code or returned tokens.
+    pub fn login_select_account(
+        paths: &AppPaths,
+        login_hint: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !login_hint.trim().is_empty()
+                && login_hint.len() <= 320
+                && !login_hint.contains(['\0', '\r', '\n']),
+            "invalid login hint"
+        );
+        Self::login_impl(paths, cancelled, false, Some(login_hint))
     }
     fn login_impl(
         paths: &AppPaths,
         cancelled: &std::sync::atomic::AtomicBool,
         verbose: bool,
+        selection: Option<&str>,
     ) -> anyhow::Result<()> {
         let config = Config::load_or_create(paths)?;
         config.validate_graph_login()?;
@@ -76,6 +93,7 @@ impl GraphBackend {
             .append_pair("code_challenge", &challenge)
             .append_pair("code_challenge_method", "S256")
             .append_pair("state", &state);
+        append_account_selection(&mut auth_url, selection);
 
         if verbose {
             println!("Open this URL to sign in:\n{auth_url}\n");
@@ -218,6 +236,14 @@ impl GraphBackend {
             .map(|base| format!("{base}/token"))
             .unwrap_or(endpoint);
         refresh_token(&self.browse_client, &self.config, refresh, &endpoint)
+    }
+}
+
+fn append_account_selection(url: &mut Url, selection: Option<&str>) {
+    if let Some(hint) = selection {
+        url.query_pairs_mut()
+            .append_pair("prompt", "select_account")
+            .append_pair("login_hint", hint);
     }
 }
 
@@ -369,6 +395,24 @@ fn pkce_challenge(verifier: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_account_selection_preserves_state_and_encodes_the_hint() {
+        let original=Url::parse("https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?state=synthetic-state&code_challenge=synthetic-challenge").unwrap();
+        let mut unchanged = original.clone();
+        append_account_selection(&mut unchanged, None);
+        assert_eq!(unchanged, original);
+        let mut selected = original;
+        let hint = "generated+test@example.invalid&prompt=none";
+        append_account_selection(&mut selected, Some(hint));
+        let pairs = selected.query_pairs().into_owned().collect::<Vec<_>>();
+        assert_eq!(pairs.iter().filter(|(key, _)| key == "prompt").count(), 1);
+        let fields = pairs.into_iter().collect::<HashMap<_, _>>();
+        assert_eq!(fields["prompt"], "select_account");
+        assert_eq!(fields["login_hint"], hint);
+        assert_eq!(fields["state"], "synthetic-state");
+        assert_eq!(fields["code_challenge"], "synthetic-challenge");
+    }
 
     #[test]
     fn callback_requires_matching_state_path_method_and_one_result() {

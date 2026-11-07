@@ -5,14 +5,12 @@ use crate::model::{CloudBackend, MetadataEntry};
 use crate::provider::{Backend, Progress};
 use anyhow::{Context, ensure};
 use sha2::{Digest, Sha256};
-#[cfg(any(test, all(windows, feature = "native-local-fixture")))]
 use std::path::Path;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     sync::Arc,
 };
-#[cfg(test)]
 use twodrive_core::Database;
 use twodrive_core::{CacheJournal, CacheSnapshot, CacheWriteLease};
 
@@ -54,10 +52,17 @@ impl LocalFileBridge {
             }),
         })
     }
-    // Real-provider construction is not exposed until the registered adapter's
-    // verified profile/revision identity is passed as a typed session authority.
     #[cfg(test)]
     pub(crate) fn open(
+        db: Database,
+        private_cache: &Path,
+        backend: Backend,
+        provider_binding: &str,
+    ) -> anyhow::Result<Self> {
+        Self::open_bound(db, private_cache, backend, provider_binding)
+    }
+
+    pub(crate) fn open_bound(
         db: Database,
         private_cache: &Path,
         backend: Backend,

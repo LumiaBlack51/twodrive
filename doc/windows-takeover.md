@@ -78,3 +78,17 @@ cache eviction, installed Office integration, real-cloud end-to-end and the
 source-folder rollback/cutover remain incomplete. Desktop writable/native-root
 capabilities stay disabled. Do not treat this preparatory change as takeover
 readiness or stop the Microsoft client on its basis.
+
+## Account preflight, 2026-11-08
+
+A read-only probe of an isolated copy of the older preview login succeeded, but
+its returned drive/owner identity did not match the current personal client's CID.
+It was not used for cloud writes or takeover. An independent explicit-account
+PKCE login was started; current-account confirmation and real-cloud validation
+are still pending. No personal identifiers or credentials are recorded here.
+
+`onedrive::open_local_session` obtains the service's account/drive identity through
+the existing provider before opening a journal; a missing authority cannot reset
+or recover an existing cache. The diagnostic probe exits unsuccessfully when an
+explicit expected owner does not match. Account selection is explicit for the
+migration login; the original login entry points retain their existing behavior.
