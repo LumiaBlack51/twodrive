@@ -67,6 +67,37 @@ fn edit(j: &CacheJournal) {
 }
 
 #[test]
+fn pinned_acknowledgement_keeps_release_and_dirty_generation_vetoes() {
+    let (_temp, j, _path) = fixture();
+    j.database().mark_pinned(ID).unwrap();
+    assert_eq!(
+        j.with_acknowledged_cache(ID, 0, |file, expected| Ok(digest(file)? == expected))
+            .unwrap(),
+        Some(true)
+    );
+    assert!(
+        j.with_clean_cache::<()>(ID, 0, |_, _| panic!("pin forbids release"))
+            .unwrap()
+            .is_none()
+    );
+    edit(&j);
+    assert!(
+        j.with_acknowledged_cache::<()>(ID, 1, |_, _| panic!(
+            "dirty generation forbids acknowledgement"
+        ))
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        j.with_acknowledged_cache::<()>(ID, 0, |_, _| panic!(
+            "stale generation forbids acknowledgement"
+        ))
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
 fn retired_cache_cleanup_cannot_bypass_a_native_journal_reference() {
     let (_temp, j, path) = fixture();
     edit(&j);

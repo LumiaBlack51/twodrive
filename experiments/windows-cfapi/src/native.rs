@@ -1786,6 +1786,27 @@ pub fn with_exclusive_placeholder<T>(
 /// edits. Busy files are deferred instead of reading a writer's partial save.
 pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
 impl NativeCapture<'_> {
+    /// Call only while the engine's acknowledged generation is held and its
+    /// full digest matches this retained native file. The share-none lease
+    /// prevents a write/rename between verification and CfSetInSyncState.
+    pub fn set_in_sync_after_verification(&self) -> Result<()> {
+        hr(
+            unsafe {
+                CfSetInSyncState(
+                    self.0.handle.0,
+                    CF_IN_SYNC_STATE_IN_SYNC,
+                    CF_SET_IN_SYNC_FLAG_NONE,
+                    ptr::null_mut(),
+                )
+            },
+            "acknowledge verified native bytes",
+        )?;
+        if !self.0.inspect()?.os_in_sync {
+            return Err("native sync acknowledgement not observed".into());
+        }
+        Ok(())
+    }
+
     pub fn modified_time(&self) -> Result<std::time::SystemTime> {
         use std::os::windows::io::BorrowedHandle;
         let borrowed = unsafe { BorrowedHandle::borrow_raw(self.0.handle.0) };
@@ -1828,10 +1849,16 @@ impl NativeCapture<'_> {
 pub fn with_native_capture<T>(
     path: &Path,
     identity: &[u8],
-    size: usize,
     action: impl FnOnce(&NativeCapture<'_>) -> Result<T>,
 ) -> Result<T> {
-    let lease = RetainedPlaceholder::open_node(path, identity, size, false)?;
+    let mut lease = RetainedPlaceholder::open_node(path, identity, 0, false)?;
+    // The committed cloud version can have a different size. Residency must
+    // describe the current local generation, under the SAME exclusive lease.
+    let mut current_size = 0i64;
+    if unsafe { GetFileSizeEx(lease.handle.0, &mut current_size) } == 0 || current_size < 0 {
+        return Err("cannot inspect native capture length".into());
+    }
+    lease.size = usize::try_from(current_size).map_err(|_| "native capture length overflow")?;
     lease.inspect()?;
     action(&NativeCapture(&lease))
 }

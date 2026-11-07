@@ -613,6 +613,27 @@ impl CacheJournal {
         generation: i64,
         action: impl FnOnce(&mut File, &str) -> anyhow::Result<T>,
     ) -> anyhow::Result<Option<T>> {
+        self.with_verified_cache(id, generation, true, action)
+    }
+
+    /// Acknowledging native sync is also valid for pinned content. Retain the
+    /// same generation/owner/transaction/file locks; this grants no eviction.
+    pub fn with_acknowledged_cache<T>(
+        &self,
+        id: &str,
+        generation: i64,
+        action: impl FnOnce(&mut File, &str) -> anyhow::Result<T>,
+    ) -> anyhow::Result<Option<T>> {
+        self.with_verified_cache(id, generation, false, action)
+    }
+
+    fn with_verified_cache<T>(
+        &self,
+        id: &str,
+        generation: i64,
+        release: bool,
+        action: impl FnOnce(&mut File, &str) -> anyhow::Result<T>,
+    ) -> anyhow::Result<Option<T>> {
         let _guard = self
             .0
             .gate
@@ -621,7 +642,12 @@ impl CacheJournal {
         let mut conn = journal_connection(&self.0.db)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let state = snapshot(&tx, id)?;
-        if state.generation != generation || !state.engine_release_ready() {
+        let eligible = if release {
+            state.engine_release_ready()
+        } else {
+            state.sync_confirmed() && state.resident
+        };
+        if state.generation != generation || !eligible {
             return Ok(None);
         }
         let mut file = self.file(&self.record(id)?, false)?;

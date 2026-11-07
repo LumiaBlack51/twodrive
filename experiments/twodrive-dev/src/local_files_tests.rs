@@ -470,27 +470,51 @@ fn native_read_edit_capture_upload_preserves_complete_bytes() {
     let edited = vec![b'X'; INITIAL.len()];
     let result = (|| -> anyhow::Result<()> {
         assert_eq!(fs::read(&path)?, INITIAL);
-        fs::write(&path, &edited)?;
-        let source_modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_042);
-        std::fs::File::options()
-            .write(true)
-            .open(&path)?
-            .set_times(std::fs::FileTimes::new().set_modified(source_modified))?;
-        let generation = f.bridge.capture_native_edit(&path, OBJECT)?;
-        assert_eq!(
-            f.db.get_by_remote_id(OBJECT)?
-                .unwrap()
-                .metadata
-                .modified_unix,
-            1_700_000_042
-        );
-        assert_eq!(bytes(&f.bridge), edited);
-        assert!(!f.bridge.engine_release_ready(OBJECT, generation)?);
-        assert!(f.bridge.upload(OBJECT, no_progress())?);
-        assert_eq!(provider.download(OBJECT)?, edited);
-        assert_eq!(fs::read(&path)?, edited);
+        for content in [
+            b"short".to_vec(),
+            Vec::new(),
+            vec![b'G'; 131_079],
+            edited.clone(),
+        ] {
+            fs::write(&path, &content)?;
+            let source_modified =
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_042);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)?
+                .set_times(std::fs::FileTimes::new().set_modified(source_modified))?;
+            let generation = f.bridge.capture_native_edit(&path, OBJECT)?;
+            let captured = f.db.get_by_remote_id(OBJECT)?.unwrap();
+            assert_eq!(captured.metadata.modified_unix, 1_700_000_042);
+            assert_eq!(captured.metadata.size, content.len() as u64);
+            assert_eq!(bytes(&f.bridge), content);
+            assert!(!f.bridge.engine_release_ready(OBJECT, generation)?);
+            assert!(!f.bridge.acknowledge_native(&path, OBJECT)?);
+            assert!(f.bridge.upload(OBJECT, no_progress())?);
+            assert_eq!(provider.download(OBJECT)?, content);
+            assert_eq!(fs::read(&path)?, content);
+            if content == b"short" {
+                // Same-size later edit: an old cloud receipt is insufficient.
+                fs::write(&path, b"later")?;
+                assert!(!f.bridge.acknowledge_native(&path, OBJECT)?);
+                assert!(f.bridge.status(OBJECT)?.native_dirty);
+                assert_eq!(fs::read(&path)?, b"later");
+                fs::write(&path, &content)?;
+                f.bridge.capture_native_edit(&path, OBJECT)?;
+                assert!(f.bridge.upload(OBJECT, no_progress())?);
+            }
+            f.db.mark_pinned(OBJECT)?;
+            assert!(f.bridge.acknowledge_native(&path, OBJECT)?);
+            f.db.mark_unpinned(OBJECT)?;
+            assert!(f.bridge.acknowledge_native(&path, OBJECT)?);
+        }
         Ok(())
     })();
+    // The generated fixture's retirement contract deliberately expects its
+    // original size. Restore only these synthetic bytes if a regression fails.
+    if result.is_err() {
+        fs::write(&path, &edited).unwrap();
+    }
     let cleanup = session.finish();
     result.unwrap();
     cleanup.unwrap();

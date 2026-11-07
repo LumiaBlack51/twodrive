@@ -120,5 +120,21 @@
     },
     "windows_preview_engine_tests": 11,
     "windows_preview_native_ipc": "passed after porting current published-cache-path assertions"
+  },
+  "native_resize_and_acknowledgement": {
+    "sizes": [
+      5,
+      0,
+      131079,
+      33
+    ],
+    "actual_windows_cfapi": true,
+    "cloud_backend": "MockProvider",
+    "old_code_failed_shrink": true,
+    "full_byte_and_mtime_checks": true,
+    "later_same_size_edit_refuses_stale_sync_ack": true,
+    "pinned_sync_ack_retains_release_veto": true,
+    "journal_tests_passed": 19,
+    "live_graph_variable_size": "not run"
   }
 }

@@ -110,33 +110,100 @@ impl LocalFileBridge {
             .context("unbound native item")?;
         self.journal.record_native_edit(cloud_id)?;
         let generation = self.status(id)?.generation;
-        twodrive_local_files::native::with_native_capture(
-            path,
-            cloud_id.as_bytes(),
-            usize::try_from(record.metadata.size)?,
-            |locked| {
-                let modified = locked.modified_time()?;
-                let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
-                    .map_err(|e| e.to_string())?;
-                let size = locked.copy_resident_to(temporary.as_file_mut())?;
-                if modified != locked.modified_time()? {
-                    return Err("native source timestamp changed during capture".into());
-                }
-                temporary
-                    .as_file()
-                    .set_times(std::fs::FileTimes::new().set_modified(modified))
-                    .map_err(|e| e.to_string())?;
-                temporary.as_file().sync_all().map_err(|e| e.to_string())?;
-                // Keep the owned file on any commit error: it contains user edits,
-                // and must not be mistaken for a disposable download cache.
-                let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
-                drop(file);
-                self.journal
-                    .stage_native_edit(id, generation, &captured, size)
-                    .map_err(|e| e.to_string())
-            },
-        )
+        twodrive_local_files::native::with_native_capture(path, cloud_id.as_bytes(), |locked| {
+            let modified = locked.modified_time()?;
+            let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
+                .map_err(|e| e.to_string())?;
+            let size = locked.copy_resident_to(temporary.as_file_mut())?;
+            if modified != locked.modified_time()? {
+                return Err("native source timestamp changed during capture".into());
+            }
+            temporary
+                .as_file()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .map_err(|e| e.to_string())?;
+            temporary.as_file().sync_all().map_err(|e| e.to_string())?;
+            // Keep the owned file on any commit error: it contains user edits,
+            // and must not be mistaken for a disposable download cache.
+            let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
+            drop(file);
+            self.journal
+                .stage_native_edit(id, generation, &captured, size)
+                .map_err(|e| e.to_string())
+        })
         .map_err(anyhow::Error::msg)
+    }
+
+    /// A cloud acknowledgement alone cannot mark a subsequently edited native
+    /// file synchronized. Rehash both complete snapshots under retained leases.
+    #[cfg(all(windows, feature = "native-local-fixture"))]
+    pub fn acknowledge_native(&self, path: &Path, id: &str) -> anyhow::Result<bool> {
+        let record = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("unknown native item")?;
+        let cloud_id = record
+            .cloud_remote_id
+            .as_deref()
+            .context("unbound native item")?;
+        let generation = self.status(id)?.generation;
+        enum Verification {
+            Confirmed,
+            CacheChanged,
+            NativeChanged,
+        }
+        let result = self
+            .journal
+            .with_acknowledged_cache(id, generation, |cache, expected| {
+                if digest_file(cache)? != expected {
+                    return Ok(Verification::CacheChanged);
+                }
+                twodrive_local_files::native::with_native_capture(
+                    path,
+                    cloud_id.as_bytes(),
+                    |locked| {
+                        struct HashSink(Sha256);
+                        impl std::io::Write for HashSink {
+                            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                                self.0.update(data);
+                                Ok(data.len())
+                            }
+                            fn flush(&mut self) -> std::io::Result<()> {
+                                Ok(())
+                            }
+                        }
+                        let mut hash = HashSink(Sha256::new());
+                        let size = locked.copy_resident_to(&mut hash)?;
+                        let modified = locked
+                            .modified_time()?
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_err(|e| e.to_string())?
+                            .as_secs() as i64;
+                        if size != record.metadata.size
+                            || modified != record.metadata.modified_unix
+                            || format!("{:x}", hash.0.finalize()) != expected
+                        {
+                            return Ok(Verification::NativeChanged);
+                        }
+                        locked.set_in_sync_after_verification()?;
+                        Ok(Verification::Confirmed)
+                    },
+                )
+                .map_err(anyhow::Error::msg)
+            })?;
+        match result {
+            Some(Verification::Confirmed) => Ok(true),
+            Some(Verification::CacheChanged) => {
+                self.journal.record_external_edit(id, generation)?;
+                Ok(false)
+            }
+            Some(Verification::NativeChanged) => {
+                self.journal.record_native_edit(cloud_id)?;
+                Ok(false)
+            }
+            None => Ok(false),
+        }
     }
 
     /// Download by opaque object identity; recheck provider version after EOF.

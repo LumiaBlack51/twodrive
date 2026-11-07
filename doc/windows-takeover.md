@@ -121,3 +121,11 @@ regressions. Four old-code regressions failed before their fixes. The native
 checkpoint test exercises a real rejected second connection and recovery, and
 nested publication accepts owned cloud directories while refusing ordinary and
 junction parents. See incidents TD-20261108-07 through 09.
+
+Native variable-size capture now passes actual generated Windows saves of short,
+empty and larger content through the shared journal and conditional mock upload.
+Native in-sync acknowledgement compares the current full digest, size and mtime
+under the retained native lease and the acknowledged journal generation; a later
+same-size edit is refused and marked dirty. Pinned acknowledgement does not grant
+eviction. Live Graph variable-size/Office validation and worker integration remain
+required; this does not enable production takeover capabilities.
