@@ -51,6 +51,11 @@ impl Capabilities {
 
 pub trait Provider: CloudBackend {
     fn capabilities(&self) -> Capabilities;
+    /// This provider resolves item metadata through a shallow parent listing.
+    /// The mount can share that listing across display requests.
+    fn browse_parent_metadata(&self) -> bool {
+        false
+    }
     fn storage_usage(
         &self,
         check: &mut dyn FnMut() -> anyhow::Result<()>,
@@ -189,6 +194,12 @@ impl Backend {
         self.check_pause()?;
         valid_path(path)?;
         self.inner.list_directory(path)
+    }
+    pub(crate) fn browse_parent_metadata(&self) -> bool {
+        self.inner.browse_parent_metadata()
+    }
+    pub(crate) fn check_read_access(&self) -> anyhow::Result<()> {
+        self.check_pause()
     }
     pub fn list_directory_checked(
         &self,

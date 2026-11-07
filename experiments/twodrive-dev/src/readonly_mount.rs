@@ -101,6 +101,13 @@ impl DavMetaData for Meta {
             .checked_add(Duration::from_secs(self.0.modified_unix.max(0) as u64))
             .ok_or(FsError::GeneralFailure)
     }
+    fn created(&self) -> FsResult<SystemTime> {
+        self.0
+            .created_unix
+            .filter(|value| *value > 0)
+            .and_then(|value| UNIX_EPOCH.checked_add(Duration::from_secs(value as u64)))
+            .ok_or(FsError::NotImplemented)
+    }
     fn is_dir(&self) -> bool {
         self.0.is_dir
     }
@@ -146,7 +153,7 @@ fn same(a: &MetadataEntry, b: &MetadataEntry) -> bool {
 impl RemoteFs {
     fn check(&self) -> anyhow::Result<()> {
         ensure!(!self.0.stop.load(Ordering::Relaxed), "mount stopped");
-        Ok(())
+        self.0.backend.check_read_access()
     }
     fn quota_snapshot(&self) -> FsResult<(u64, Option<u64>)> {
         self.check().map_err(|_| FsError::GeneralFailure)?;
@@ -234,6 +241,25 @@ impl RemoteFs {
         let parent = path
             .rsplit_once('/')
             .map(|(p, _)| if p.is_empty() { "/" } else { p });
+        if path != "/"
+            && self.0.backend.browse_parent_metadata()
+            && let Some(parent) = parent
+            && let Ok(entries) = self.directory_snapshot(parent)
+        {
+            if let Some(entry) = entries.get(path) {
+                return Ok(entry.clone());
+            }
+            // iCloud also accepts ASCII case aliases. Refuse ambiguous names
+            // and keep the provider's canonical path in the cached entry.
+            let mut matches = entries
+                .values()
+                .filter(|e| e.path.eq_ignore_ascii_case(path));
+            let entry = matches.next();
+            if matches.next().is_some() {
+                return Err(FsError::GeneralFailure);
+            }
+            return entry.cloned().ok_or(FsError::NotFound);
+        }
         if path != "/" {
             let mut directories = self
                 .0

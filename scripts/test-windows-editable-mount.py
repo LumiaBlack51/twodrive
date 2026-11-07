@@ -58,6 +58,25 @@ def run(args):
             wait_for(lambda:(root/'share-a'/'folder'/'renamed.txt').exists())
             (mount/'folder'/'renamed.txt').unlink();(mount/'folder').rmdir()
             wait_for(lambda:not (root/'share-a'/'folder').exists())
+            # Directories need genuine identity metadata, including empty and
+            # nested cases; a file-only MOVE regression cannot cover this.
+            (mount/'empty-dir').mkdir()
+            wait_for(lambda:(root/'share-a'/'empty-dir').is_dir())
+            assert (mount/'empty-dir').stat().st_mtime>1700000000, 'new directory has a placeholder date'
+            (mount/'empty-dir').rename(mount/'empty-renamed')
+            wait_for(lambda:(root/'share-a'/'empty-renamed').is_dir() and not (root/'share-a'/'empty-dir').exists())
+            (mount/'empty-renamed').rmdir()
+            (mount/'tree-dir').mkdir()
+            (mount/'tree-dir'/'child.txt').write_bytes(b'child survives directory rename')
+            wait_for(lambda:(root/'share-a'/'tree-dir'/'child.txt').exists())
+            wait_for(lambda:engine.call('status')['overall']['pending']==0)
+            (mount/'tree-dir').rename(mount/'tree-renamed')
+            wait_for(lambda:(root/'share-a'/'tree-renamed'/'child.txt').exists() and not (root/'share-a'/'tree-dir').exists())
+            assert (mount/'tree-renamed'/'child.txt').read_bytes()==b'child survives directory rename'
+            (mount/'tree-renamed'/'child.txt').unlink();(mount/'tree-renamed').rmdir()
+            wait_for(lambda:not (root/'share-a'/'tree-renamed').exists())
+            report['checks']['native_empty_and_populated_directory_rename_preserves_children']=True
+            report['checks']['native_new_directory_exposes_recent_time']=True
             source=root/'gui-upload.txt';source.write_bytes(b'GUI writes work without a local permission step')
             engine.call('upload',dict(owner('a'),path='/gui.txt',source=str(source)))
             assert (root/'share-a'/'gui.txt').read_bytes()==source.read_bytes()

@@ -31,6 +31,7 @@ fn entry(m: twodrive_core::MetadataEntry) -> MetadataEntry {
         is_dir: m.is_dir,
         size: m.size,
         modified_unix: m.modified_unix,
+        created_unix: m.created_unix,
         etag: m.etag,
     }
 }

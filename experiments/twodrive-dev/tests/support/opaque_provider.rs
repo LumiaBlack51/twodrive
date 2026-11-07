@@ -18,12 +18,14 @@ pub struct OpaqueProvider {
     files: Arc<Mutex<Files>>,
     pub caps: Capabilities,
     pub download_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub parent_browsing: bool,
 }
 impl Default for OpaqueProvider {
     fn default() -> Self {
         Self {
             files: Arc::default(),
             download_gate: None,
+            parent_browsing: false,
             caps: Capabilities {
                 upload: true,
                 mkdir: true,
@@ -35,6 +37,11 @@ impl Default for OpaqueProvider {
     }
 }
 impl OpaqueProvider {
+    #[allow(dead_code)] // This shared fixture also serves cache-independent test binaries.
+    pub fn with_parent_browsing(mut self) -> Self {
+        self.parent_browsing = true;
+        self
+    }
     pub fn with_caps(mut self, caps: Capabilities) -> Self {
         self.caps = caps;
         self
@@ -190,6 +197,9 @@ impl CloudBackend for OpaqueProvider {
     }
 }
 impl Provider for OpaqueProvider {
+    fn browse_parent_metadata(&self) -> bool {
+        self.parent_browsing
+    }
     fn capabilities(&self) -> Capabilities {
         self.caps
     }
