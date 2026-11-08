@@ -8,7 +8,7 @@ $ErrorActionPreference='Stop'
 # Disposable executable/task only. No real account or native registration.
 # Keep the generated evidence directory for explicit Recycle Bin cleanup.
 $fixture=Join-Path $env:TEMP ('twodrive-startup-staging-'+[Guid]::NewGuid().ToString('N'))
-$state=Join-Path $fixture 'state'
+$state=Join-Path $fixture ('state-'+('x'*30))
 $inputDir=Join-Path $fixture 'input'
 New-Item -ItemType Directory -Path $state,$inputDir | Out-Null
 [IO.File]::WriteAllText((Join-Path $state 'native-owner.dat'),'generated-test-marker')

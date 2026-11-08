@@ -20,9 +20,9 @@ $versionDir=Join-Path $runtimeDir $sha
 if (!(Test-Path -LiteralPath $versionDir)) {New-Item -ItemType Directory -Path $versionDir | Out-Null}
 $target=Join-Path $versionDir 'twodrive-native-dev.exe'
 if (!(Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) {
-    $staging=Join-Path $versionDir ('candidate-'+[Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $staging | Out-Null
-    $candidate=Join-Path $staging 'twodrive-native-dev.exe'
+    # Keep the executable path short enough for Windows PowerShell's launcher
+    # when the sealed state lives under a long packaged-user profile path.
+    $candidate=Join-Path $runtimeDir ('candidate-'+[Guid]::NewGuid().ToString('N')+'.exe')
     Copy-Item -LiteralPath $source -Destination $candidate
     if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) {throw 'Staged runtime hash differs; task preserved'}
     & $candidate verify --native-state $state
@@ -31,7 +31,6 @@ if (!(Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $target -Al
         # Retain the invalid uncommitted bytes for inspection; replace atomically.
         [IO.File]::Replace($candidate,$target,(Join-Path $versionDir ('rejected-'+[Guid]::NewGuid().ToString('N')+'.exe')))
     } else { [IO.File]::Move($candidate,$target) }
-    [IO.Directory]::Delete($staging)
 }
 # Candidate verification precedes task changes. The previous executable remains
 # at its original path, so failure cannot replace a working installation.
