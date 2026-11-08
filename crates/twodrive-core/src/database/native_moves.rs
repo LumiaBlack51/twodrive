@@ -161,22 +161,27 @@ impl CacheJournal {
             "native move receipt no longer current"
         );
         let source = &intent.publication.path;
-        let mut stmt=tx.prepare("SELECT local_id,path FROM local_native_projections WHERE root_binding=?1 AND (path=?2 OR substr(path,1,length(?2)+1)=?2||'/')")?;
+        let mut stmt = tx.prepare(
+            "SELECT remote_id,path FROM files WHERE path=?1 OR substr(path,1,length(?1)+1)=?1||'/'",
+        )?;
         let descendants = stmt
-            .query_map(params![intent.publication.root_binding, source], |r| {
+            .query_map([&intent.destination], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
-        for (child, old_path) in descendants {
-            let new_path = format!("{}{}", intent.destination, &old_path[source.len()..]);
-            ensure!(
-                tx.execute(
-                    "UPDATE local_native_projections SET path=?2 WHERE local_id=?1 AND path=?3",
-                    params![child, new_path, old_path]
-                )? == 1,
-                "native move descendant changed"
-            );
+        for (child, new_path) in descendants {
+            let old_path = format!("{}{}", source, &new_path[intent.destination.len()..]);
+            if let Some(p) = projection::get(&tx, &child)? {
+                ensure!(
+                    p.root_binding == intent.publication.root_binding
+                        && (p.path == old_path || p.path == new_path),
+                    "native move descendant publication changed"
+                );
+                ensure!(tx.execute("UPDATE local_native_projections SET path=?2 WHERE local_id=?1 AND root_binding=?3",params![child,new_path,intent.publication.root_binding])?==1,"native move descendant changed");
+            }
+            ensure!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM local_cache_journal WHERE local_id=?1 AND (cloud_path NOT IN (?2,?3) OR upload_generation IS NOT NULL))",params![child,old_path,new_path],|r|r.get::<_,bool>(0))?,"native move descendant cache changed");
+            ensure!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM local_native_creations WHERE local_id=?1 AND path NOT IN (?2,?3))",params![child,old_path,new_path],|r|r.get::<_,bool>(0))?,"native move descendant creation changed");
             tx.execute("UPDATE local_cache_journal SET cloud_path=?2 WHERE local_id=?1 AND cloud_path=?3 AND upload_generation IS NULL",params![child,new_path,old_path])?;
             tx.execute(
                 "UPDATE local_native_creations SET path=?2 WHERE local_id=?1 AND path=?3",

@@ -935,6 +935,24 @@ fn native_subtree_move_receipt_recovers_between_linux_metadata_and_journal_commi
         .unwrap();
     edit(&journal);
     let generation = journal.snapshot(ID).unwrap().generation;
+    let pending = "local-upload-pending-generated";
+    let pending_path = cache.join("pending-new-file.bin");
+    fs::write(&pending_path, EDITED).unwrap();
+    let creation_receipt =
+        serde_json::json!({"identity":b"generated-root","volume_serial":7,"file_id":8}).to_string();
+    journal
+        .begin_native_creation(
+            pending,
+            "/folder/new.txt",
+            &creation_receipt,
+            "00000007:000000000000000b",
+        )
+        .unwrap();
+    journal
+        .stage_local_creation(pending, "/folder/new.txt", &pending_path)
+        .unwrap();
+    assert!(journal.native_projection_for_id(pending).unwrap().is_none());
+    let pending_generation = journal.snapshot(pending).unwrap().generation;
     let intent = twodrive_core::NativeMoveIntent {
         publication: journal
             .native_projection_for_id("directory")
@@ -978,6 +996,38 @@ fn native_subtree_move_receipt_recovers_between_linux_metadata_and_journal_commi
     assert_eq!(
         journal.native_projection_for_id(ID).unwrap().unwrap().path,
         "/renamed/generated.txt"
+    );
+    let pending_state = journal.snapshot(pending).unwrap();
+    assert_eq!(pending_state.generation, pending_generation);
+    assert!(
+        !pending_state.pending_operations,
+        "unpublished child journal must follow its parent"
+    );
+    assert_eq!(
+        journal
+            .native_creations()
+            .unwrap()
+            .iter()
+            .find(|c| c.local_id == pending)
+            .unwrap()
+            .path,
+        "/renamed/new.txt"
+    );
+    assert_eq!(fs::read(&pending_path).unwrap(), EDITED);
+    let pending_upload = journal.begin_upload(pending, digest).unwrap();
+    assert!(
+        pending_upload
+            .acknowledge(
+                &MetadataEntry::new_file(
+                    "created-cloud-object",
+                    "/renamed/new.txt",
+                    EDITED.len() as u64,
+                    2,
+                    "created-v1"
+                ),
+                &hash(EDITED)
+            )
+            .unwrap()
     );
     let upload = journal.begin_upload(ID, digest).unwrap();
     upload
