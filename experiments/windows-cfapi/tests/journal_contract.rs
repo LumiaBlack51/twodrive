@@ -107,6 +107,98 @@ fn zero_call_rejection_preserves_newer_native_dirty_intent() {
 }
 
 #[test]
+fn native_namespace_intent_vetoes_in_sync_but_keeps_an_immutable_upload_receipt() {
+    let (_temp, j, _) = fixture();
+    edit(&j);
+    let upload = j.begin_upload(ID, digest).unwrap();
+    let sequence = j
+        .database()
+        .append_native_event("generated-root", r#"{"kind":"rename"}"#)
+        .unwrap();
+    assert!(upload.acknowledge(&receipt(), &hash(EDITED)).unwrap());
+    let pending = j.snapshot(ID).unwrap();
+    assert!(pending.native_namespace_pending && !pending.uncertain_upload);
+    assert!(!pending.sync_confirmed() && !pending.engine_release_ready());
+    assert!(
+        j.with_acknowledged_cache(ID, pending.generation, |_, _| Ok(()))
+            .unwrap()
+            .is_none()
+    );
+    j.database()
+        .acknowledge_native_events("generated-root", sequence)
+        .unwrap();
+    assert!(j.snapshot(ID).unwrap().sync_confirmed());
+}
+
+#[test]
+fn cold_projected_capture_commits_its_new_file_binding_only_after_verified_ack() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, path) = paths(temp.path());
+    db.init().unwrap();
+    let metadata =
+        MetadataEntry::new_file(ID, "/projected.txt", ORIGINAL.len() as u64, 1, "version-1");
+    db.upsert_metadata(&metadata).unwrap();
+    let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-projected-provider")).unwrap();
+    let tag = b"generated-private-projection-nonce";
+    j.prepare_native_projection(ID, "root-a", tag).unwrap();
+    j.complete_native_projection(ID, "root-a", tag, 42, 123)
+        .unwrap();
+    let p = j.native_projection_for_id(ID).unwrap().unwrap();
+    let original = db.get_by_remote_id(ID).unwrap().unwrap();
+    j.record_native_edit(ID).unwrap();
+    std::fs::write(&path, EDITED).unwrap();
+    let generation = j
+        .stage_first_projected_native_edit(
+            &original,
+            &path,
+            EDITED.len() as u64,
+            &p,
+            twodrive_core::NativeFileIdentity {
+                volume_serial: 42,
+                file_id: 456,
+            },
+        )
+        .unwrap();
+    assert_eq!(generation, 1);
+    assert_eq!(std::fs::read(&path).unwrap(), EDITED);
+    assert_eq!(
+        j.native_capture_binding(ID)
+            .unwrap()
+            .unwrap()
+            .physical
+            .file_id,
+        456
+    );
+    let upload = j.begin_upload(ID, digest).unwrap();
+    let remote = MetadataEntry::new_file(ID, "/projected.txt", EDITED.len() as u64, 2, "version-2");
+    assert!(upload.acknowledge(&remote, &hash(EDITED)).unwrap());
+    assert_eq!(
+        j.with_native_projection_ack(ID, generation, &p, |_, _| Ok(false))
+            .unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        j.native_projection_for_id(ID)
+            .unwrap()
+            .unwrap()
+            .native_file_id
+            .as_deref(),
+        Some("000000000000007b")
+    );
+    assert_eq!(
+        j.with_native_projection_ack(ID, generation, &p, |file, expected| Ok(
+            digest(file)? == expected
+        ))
+        .unwrap(),
+        Some(true)
+    );
+    let current = j.native_projection_for_id(ID).unwrap().unwrap();
+    assert_eq!(current.native_file_id.as_deref(), Some("00000000000001c8"));
+    assert_eq!(current.etag, "version-2");
+    assert!(j.native_capture_binding(ID).unwrap().is_none());
+}
+
+#[test]
 fn native_publication_claims_survive_restart_and_require_the_same_root_version_and_file() {
     let temp = tempfile::tempdir().unwrap();
     let (db, cache, _) = paths(temp.path());

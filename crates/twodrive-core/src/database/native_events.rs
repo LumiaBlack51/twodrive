@@ -8,6 +8,7 @@ pub struct NativeWatchState {
     pub epoch: i64,
     pub generation: i64,
     pub rescan_required: bool,
+    pub through_sequence: i64,
 }
 
 impl Database {
@@ -186,13 +187,14 @@ impl Database {
 
 fn watch_state(conn: &rusqlite::Connection, binding: &str) -> anyhow::Result<NativeWatchState> {
     Ok(conn.query_row(
-        "SELECT epoch,generation,rescan_required FROM native_watch_state WHERE binding=?1",
+        "SELECT epoch,generation,rescan_required,COALESCE((SELECT MAX(sequence) FROM native_observation_log WHERE binding=?1),0) FROM native_watch_state WHERE binding=?1",
         [binding],
         |row| {
             Ok(NativeWatchState {
                 epoch: row.get(0)?,
                 generation: row.get(1)?,
                 rescan_required: row.get(2)?,
+                through_sequence:row.get(3)?,
             })
         },
     )?)
@@ -201,6 +203,28 @@ fn watch_state(conn: &rusqlite::Connection, binding: &str) -> anyhow::Result<Nat
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scan_watermark_cannot_acknowledge_a_newer_epoch_observation() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::new(root.path().join("watch.sqlite3"));
+        db.init().unwrap();
+        let first = db.begin_native_watch("root-a").unwrap();
+        let observed = db
+            .append_native_observations("root-a", first.epoch, &["{}".into()], false)
+            .unwrap();
+        assert!(observed.through_sequence > 0);
+        let next = db.begin_native_watch("root-a").unwrap();
+        let latest = db
+            .append_native_observations("root-a", next.epoch, &[r#"{"action":3}"#.into()], false)
+            .unwrap();
+        assert!(latest.through_sequence > observed.through_sequence);
+        db.acknowledge_native_observations("root-a", observed.through_sequence)
+            .unwrap();
+        let retained = db.pending_native_observations("root-a", 100).unwrap();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].0, latest.through_sequence);
+        assert!(!db.complete_native_watch_scan("root-a", observed).unwrap());
+    }
     #[test]
     fn watch_restart_overflow_and_concurrent_batches_require_reconciliation() {
         let root = tempfile::tempdir().unwrap();

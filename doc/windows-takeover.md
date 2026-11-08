@@ -346,3 +346,38 @@ bridge contracts and has a dedicated hosted CI step. A generated writable-map
 probe also confirmed that the current capture refused entry after the original
 file handle closed but a writable view remained; the registration was retired.
 These remain prerequisites for, not completion of, the writable coordinator.
+
+
+The initial coordinator now materializes a whole parent-first native tree with
+persistent tags, directory observation, a verified full initial inventory and
+sequence-bounded acknowledgement. Provider-owned initial publications precede
+arming the watcher, then its mandatory rescan reconciles the gap without filling
+the bounded queue with setup traffic. A newer watcher epoch cannot be acknowledged
+by an older scan watermark. NativeSession seals account/drive/root configuration
+with per-user DPAPI and uses the retained expected checkpoint for interrupted
+registration; this is still not the installed startup/cutover path.
+
+NativeAccount defers opening credentials until network I/O and verifies the exact
+configured account/drive for each operation. Cached verified bytes remain readable
+without credentials. Read-only authority failure before any data mutation returns
+the upload lease to Dirty; ambiguous data errors remain fenced. A generated native
+restart test used the sealed configuration with missing credentials: dehydrated
+native data rehydrated from its private cache, while an uncached file was refused.
+No normal Office/user profile was modified.
+
+Projected native edits now retain their private tag and record the captured
+physical binding atomically with each immutable snapshot, including cold complete
+replacement before first hydration. Native acknowledgement advances publication
+version/physical ID only while native, private-file, generation and SQLite leases
+remain held. A generated actual coordinator test passed watcher-driven in-place
+edit/upload/acknowledgement and a separate-process atomic replacement preserving
+the cloud object, followed by native readback. The backend for this test was mock.
+Namespace events veto new uploads/native in-sync state, while an immutable upload
+already in flight can retain its data receipt for later namespace reconciliation.
+Generic new-file/directory, rename/delete, remote delta and pin/eviction consumers
+remain incomplete; production takeover is not enabled by these tests.
+
+The coordinator integration exposed a shutdown tail: native disconnect returned
+before a private cache reader's Rust destructor completed. Explicit callback-scope
+counting and a Condvar drain now precede source destruction. The regression checks
+owner-lock reacquisition with no cleanup sleep; see TD-20261108-33.

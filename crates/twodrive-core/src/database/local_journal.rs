@@ -16,7 +16,7 @@ use std::{
 };
 #[path = "native_projection.rs"]
 mod projection;
-pub use projection::NativeProjection;
+pub use projection::{NativeCaptureBinding, NativeFileIdentity, NativeProjection};
 
 #[derive(Clone)]
 pub struct CacheJournal(Arc<Owner>);
@@ -43,6 +43,7 @@ pub struct CacheSnapshot {
     /// Visible native bytes differ from the private cache. No upload/recovery
     /// may treat the private copy as authoritative while this durable veto exists.
     pub native_dirty: bool,
+    pub native_namespace_pending: bool,
     pub generation: i64,
     pub acknowledged_generation: i64,
     pub readers: i64,
@@ -71,6 +72,7 @@ impl CacheSnapshot {
             && !self.uncertain_upload
             && !self.pending_operations
             && !self.native_dirty
+            && !self.native_namespace_pending
     }
     /// Engine eligibility only. A native adapter must additionally hold/recheck
     /// its CFAPI oplock, residency, modified ranges, pin and in-sync evidence.
@@ -87,6 +89,7 @@ impl CacheSnapshot {
             && !self.uncertain_upload
             && !self.pending_operations
             && !self.native_dirty
+            && !self.native_namespace_pending
     }
 }
 
@@ -446,6 +449,25 @@ impl CacheJournal {
         path: &Path,
         size: u64,
     ) -> anyhow::Result<i64> {
+        self.stage_first_native_edit_inner(original, path, size, None)
+    }
+    pub fn stage_first_projected_native_edit(
+        &self,
+        original: &FileRecord,
+        path: &Path,
+        size: u64,
+        projection: &NativeProjection,
+        physical: NativeFileIdentity,
+    ) -> anyhow::Result<i64> {
+        self.stage_first_native_edit_inner(original, path, size, Some((projection, physical)))
+    }
+    fn stage_first_native_edit_inner(
+        &self,
+        original: &FileRecord,
+        path: &Path,
+        size: u64,
+        projection: Option<(&NativeProjection, NativeFileIdentity)>,
+    ) -> anyhow::Result<i64> {
         let _guard = self
             .0
             .gate
@@ -501,6 +523,9 @@ impl CacheJournal {
             "DELETE FROM local_native_dirty WHERE cloud_id=?1",
             [cloud_id],
         )?;
+        if let Some((expected, physical)) = projection {
+            projection::record_capture(&tx, &original.metadata.remote_id, 1, expected, physical)?;
+        }
         tx.commit()?;
         Ok(1)
     }
@@ -582,6 +607,33 @@ impl CacheJournal {
         path: &Path,
         size: u64,
     ) -> anyhow::Result<i64> {
+        self.stage_native_edit_inner(id, expected_generation, path, size, None)
+    }
+    pub fn stage_projected_native_edit(
+        &self,
+        id: &str,
+        expected_generation: i64,
+        path: &Path,
+        size: u64,
+        projection: &NativeProjection,
+        physical: NativeFileIdentity,
+    ) -> anyhow::Result<i64> {
+        self.stage_native_edit_inner(
+            id,
+            expected_generation,
+            path,
+            size,
+            Some((projection, physical)),
+        )
+    }
+    fn stage_native_edit_inner(
+        &self,
+        id: &str,
+        expected_generation: i64,
+        path: &Path,
+        size: u64,
+        projection: Option<(&NativeProjection, NativeFileIdentity)>,
+    ) -> anyhow::Result<i64> {
         let _guard = self
             .0
             .gate
@@ -637,6 +689,9 @@ impl CacheJournal {
                 record.metadata.remote_id
             ],
         )?;
+        if let Some((expected, physical)) = projection {
+            projection::record_capture(&tx, id, generation, expected, physical)?;
+        }
         tx.commit()?;
         Ok(generation)
     }
@@ -827,6 +882,7 @@ impl CacheJournal {
                 && !state.recovery_required
                 && !state.uncertain_upload
                 && !state.native_dirty
+                && !state.native_namespace_pending
                 && state.base_etag == record.metadata.etag,
             "upload snapshot is blocked"
         );
@@ -1096,8 +1152,9 @@ impl UploadLease {
     pub fn file(&mut self) -> &mut File {
         &mut self.file
     }
-    /// The caller must prove it never invoked the provider. This must not be
-    /// used for timeouts, cancellation after dispatch, or any ambiguous reply.
+    /// The caller must prove no data mutation was dispatched. Read-only
+    /// authority checks may have run. Never use for a dispatched request timeout,
+    /// cancellation after dispatch, or an ambiguous mutation reply.
     pub fn reject_unstarted(
         mut self,
         digest: impl FnOnce(&mut File) -> anyhow::Result<String>,
@@ -1253,7 +1310,8 @@ fn snapshot(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<CacheSnapsh
         j.upload_generation,j.recovery_required,j.uncertain_upload,j.dirty_intent,f.state,
         f.pin_explicit=1 OR f.pin_origin_remote_id IS NOT NULL,f.cache_path IS NOT NULL,
         j.base_etag,j.acknowledged_digest,j.upload_digest,
-        EXISTS(SELECT 1 FROM local_native_dirty n WHERE n.cloud_id=j.cloud_id OR n.cloud_id=j.local_id)
+        EXISTS(SELECT 1 FROM local_native_dirty n WHERE n.cloud_id=j.cloud_id OR n.cloud_id=j.local_id),
+        EXISTS(SELECT 1 FROM native_event_log)
         FROM local_cache_journal j JOIN files f ON f.remote_id=j.local_id WHERE j.local_id=?1";
     let result = conn.query_row(row_sql, [id], |row| {
         let value: String = row.get(8)?;
@@ -1266,6 +1324,7 @@ fn snapshot(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<CacheSnapsh
         })?;
         Ok(CacheSnapshot {
             native_dirty: row.get(14)?,
+            native_namespace_pending: row.get(15)?,
             generation: row.get(0)?,
             acknowledged_generation: row.get(1)?,
             readers: row.get(2)?,

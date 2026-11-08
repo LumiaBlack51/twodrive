@@ -42,7 +42,7 @@ fn valid_identity(identity: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn root_identity(handle: HANDLE) -> Result<(u64, Vec<u8>)> {
+pub(super) fn root_identity(handle: HANDLE) -> Result<(u64, Vec<u8>)> {
     let mut buffer = [0u64; 1024];
     let mut returned = 0;
     hr(
@@ -188,7 +188,7 @@ impl PersistentSession {
         checkpoint: &Path,
         engine: Arc<dyn HydrationSource>,
     ) -> Result<Self> {
-        Self::resume_checkpoint(root, checkpoint, engine, None)
+        Self::resume_checkpoint(root, checkpoint, engine, None, None)
     }
 
     pub fn resume_from_checkpoint_recording(
@@ -197,7 +197,22 @@ impl PersistentSession {
         engine: Arc<dyn HydrationSource>,
         sink: Arc<dyn NativeEventSink>,
     ) -> Result<Self> {
-        Self::resume_checkpoint(root, checkpoint, engine, Some(sink))
+        Self::resume_checkpoint(root, checkpoint, engine, Some(sink), None)
+    }
+    pub fn resume_expected_checkpoint_recording(
+        root: &Path,
+        checkpoint: &Path,
+        expected_identity: &[u8],
+        engine: Arc<dyn HydrationSource>,
+        sink: Arc<dyn NativeEventSink>,
+    ) -> Result<Self> {
+        Self::resume_checkpoint(
+            root,
+            checkpoint,
+            engine,
+            Some(sink),
+            Some(expected_identity),
+        )
     }
 
     fn resume_checkpoint(
@@ -205,6 +220,7 @@ impl PersistentSession {
         checkpoint: &Path,
         engine: Arc<dyn HydrationSource>,
         sink: Option<Arc<dyn NativeEventSink>>,
+        expected_identity: Option<&[u8]>,
     ) -> Result<Self> {
         use std::io::Read;
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -231,7 +247,10 @@ impl PersistentSession {
         if bytes.len() > 65536 {
             return Err("oversized root checkpoint".into());
         }
-        let receipt = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let receipt: RootReceipt = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if expected_identity.is_some_and(|identity| identity != receipt.identity) {
+            return Err("checkpoint registration identity differs from owner configuration".into());
+        }
         Self::resume_owned(root, &receipt, engine, true, sink)
     }
 
@@ -241,6 +260,14 @@ impl PersistentSession {
         engine: Arc<dyn HydrationSource>,
     ) -> Result<Self> {
         Self::resume_owned(root, receipt, engine, false, None)
+    }
+    pub fn resume_recording(
+        root: &Path,
+        receipt: &RootReceipt,
+        engine: Arc<dyn HydrationSource>,
+        sink: Arc<dyn NativeEventSink>,
+    ) -> Result<Self> {
+        Self::resume_owned(root, receipt, engine, false, Some(sink))
     }
 
     fn resume_owned(
@@ -667,6 +694,9 @@ impl PersistentSession {
                 "disconnect persistent root",
             )?;
             self.connection = None;
+        }
+        if let Some(source) = &self.source {
+            source.wait_callbacks()?;
         }
         Ok(())
     }

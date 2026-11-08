@@ -5,6 +5,9 @@ pub mod discovery;
 pub mod google;
 pub mod local_files;
 pub mod model;
+mod native_account;
+#[cfg(all(windows, feature = "native-sync"))]
+pub mod native_coordinator;
 #[cfg(all(windows, feature = "native-local-fixture"))]
 pub mod native_local_fixture;
 #[cfg(all(windows, feature = "native-sync"))]

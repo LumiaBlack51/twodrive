@@ -23,6 +23,66 @@ enum InventoryStage {
 }
 
 impl PersistentSession {
+    pub fn with_local_directory<T>(
+        &self,
+        relative: &Path,
+        identity: &[u8],
+        before_convert: impl FnOnce(u32, u64) -> Result<()>,
+        action: impl FnOnce(u32, u64, &dyn Fn() -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
+        let (_, parents) = self.guard_relative_parent(relative)?;
+        let parent = parents
+            .last()
+            .map(|handle| handle.0)
+            .or_else(|| self.guard._handles.last().map(|handle| handle.0))
+            .ok_or("directory parent lease missing")?;
+        let handle = directory_lease_access(
+            parent,
+            relative.file_name().ok_or("directory leaf missing")?,
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | WRITE_DAC,
+        )?;
+        let (handle, tag) = self.namespace_checked_handle(handle)?;
+        let (volume, id, _) = file_binding(handle.0)?;
+        before_convert(volume, id)?;
+        if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+            hr(
+                unsafe {
+                    CfConvertToPlaceholder(
+                        handle.0,
+                        identity.as_ptr().cast(),
+                        identity.len() as u32,
+                        CF_CONVERT_FLAG_NONE,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    )
+                },
+                "retain local directory",
+            )?;
+        }
+        directory_observation(handle.0, identity)?;
+        let acknowledge = || {
+            hr(
+                unsafe {
+                    CfSetInSyncState(
+                        handle.0,
+                        CF_IN_SYNC_STATE_IN_SYNC,
+                        CF_SET_IN_SYNC_FLAG_NONE,
+                        ptr::null_mut(),
+                    )
+                },
+                "acknowledge local directory",
+            )
+        };
+        action(volume, id, &acknowledge)
+    }
+    pub fn entry_exists(&self, relative: &Path) -> Result<bool> {
+        let (_, _parents) = self.guard_relative_parent(relative)?;
+        match std::fs::symlink_metadata(self.root().join(relative)) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
+    }
     /// Bind a newly published entry while its namespace lease remains held.
     /// This observes metadata only; it is not authority for a content snapshot.
     pub fn with_publication_binding<T>(

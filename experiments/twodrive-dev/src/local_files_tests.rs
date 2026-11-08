@@ -22,14 +22,14 @@ struct Remote {
     version: u64,
 }
 #[derive(Clone)]
-struct MockProvider {
+pub(crate) struct MockProvider {
     remote: Arc<Mutex<Remote>>,
     mode: Arc<AtomicU8>,
     conditional: bool,
     upload_calls: Arc<AtomicUsize>,
 }
 impl MockProvider {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             remote: Arc::new(Mutex::new(Remote {
                 present: true,
@@ -41,7 +41,7 @@ impl MockProvider {
             upload_calls: Arc::new(AtomicUsize::new(0)),
         }
     }
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         let value = Self::new();
         value.remote.lock().unwrap().present = false;
         value

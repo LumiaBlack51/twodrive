@@ -9,7 +9,7 @@ use std::{
     path::{Component, Path, PathBuf, Prefix},
     ptr,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
@@ -139,7 +139,43 @@ struct Source {
     requested_bytes: AtomicU64,
     transferred_bytes: AtomicU64,
     recent_requests: Mutex<VecDeque<serde_json::Value>>,
+    callbacks: Mutex<usize>,
+    callbacks_done: Condvar,
     dataset: Dataset,
+}
+struct CallbackLease<'a>(&'a Source);
+impl Drop for CallbackLease<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut count) = self.0.callbacks.lock() {
+            *count -= 1;
+            if *count == 0 {
+                self.0.callbacks_done.notify_all();
+            }
+        }
+    }
+}
+impl Source {
+    fn enter_callback(&self) -> CallbackLease<'_> {
+        let mut count = self
+            .callbacks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *count += 1;
+        CallbackLease(self)
+    }
+    fn wait_callbacks(&self) -> Result<()> {
+        let mut count = self
+            .callbacks
+            .lock()
+            .map_err(|_| "callback counter poisoned")?;
+        while *count != 0 {
+            count = self
+                .callbacks_done
+                .wait(count)
+                .map_err(|_| "callback drain poisoned")?;
+        }
+        Ok(())
+    }
 }
 
 // The OS owns callback pointers until CfDisconnectSyncRoot returns. Source is
@@ -159,6 +195,7 @@ unsafe fn fetch_with_transfer(
     // SAFETY: CldApi supplies valid pointers for the duration of this callback.
     let (info, params) = unsafe { (&*info, &*params) };
     let source = unsafe { &*(info.CallbackContext as *const Source) };
+    let _callback = source.enter_callback();
     source.calls.fetch_add(1, Ordering::SeqCst);
     let requested = unsafe { params.Anonymous.FetchData };
     let mut status = FAILED;
@@ -305,6 +342,7 @@ unsafe fn fetch_with_transfer(
 unsafe extern "system" fn cancel(info: *const CF_CALLBACK_INFO, _: *const CF_CALLBACK_PARAMETERS) {
     let info = unsafe { &*info };
     let source = unsafe { &*(info.CallbackContext as *const Source) };
+    let _callback = source.enter_callback();
     if let Ok(active) = source.active.lock() {
         // A partial cancellation conservatively cancels this entire request.
         if let Some(flag) = active.get(&(info.TransferKey, info.RequestKey)) {
@@ -754,6 +792,7 @@ impl Session {
             )?;
             self.connection = None;
         }
+        self.source.wait_callbacks()?;
         Ok(())
     }
     pub fn finish(&mut self) -> Result<()> {
@@ -1772,6 +1811,18 @@ fn directory_handle(path: &Path) -> Result<Handle> {
 /// the fixture teardown's independent exclusive directory handles.
 #[cfg(feature = "native-sync")]
 fn directory_lease(parent: HANDLE, component: &std::ffi::OsStr) -> Result<Handle> {
+    directory_lease_access(
+        parent,
+        component,
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+    )
+}
+#[cfg(feature = "native-sync")]
+fn directory_lease_access(
+    parent: HANDLE,
+    component: &std::ffi::OsStr,
+    access: u32,
+) -> Result<Handle> {
     use windows_sys::Wdk::Storage::FileSystem::FILE_OPEN;
     let mut name = wide(Path::new(component));
     let length = ((name.len() - 1) * 2)
@@ -1794,7 +1845,7 @@ fn directory_lease(parent: HANDLE, component: &std::ffi::OsStr) -> Result<Handle
     let status = unsafe {
         NtCreateFile(
             &mut raw,
-            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | SYNCHRONIZE,
+            access | SYNCHRONIZE,
             &attributes,
             &mut io,
             ptr::null(),
@@ -1933,6 +1984,23 @@ pub fn with_exclusive_placeholder<T>(
 /// edits. Busy files are deferred instead of reading a writer's partial save.
 pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
 impl NativeCapture<'_> {
+    #[cfg(feature = "native-sync")]
+    pub fn physical_identity(&self) -> Result<(u32, u64)> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(self.0.handle.0, &mut info) } == 0
+            || info.nNumberOfLinks != 1
+        {
+            return Err("native capture physical identity unavailable".into());
+        }
+        Ok((
+            info.dwVolumeSerialNumber,
+            ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+        ))
+    }
+    #[cfg(feature = "native-sync")]
+    pub fn root_registration(&self) -> Result<(u64, Vec<u8>)> {
+        persistent::root_identity(self.0.handle.0)
+    }
     /// Call only while the engine's acknowledged generation is held and its
     /// full digest matches this retained native file. The share-none lease
     /// prevents a write/rename between verification and CfSetInSyncState.
@@ -2061,6 +2129,35 @@ pub fn release(path: &Path, engine_state: FileState) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn callback_drain_waits_until_the_owned_scope_finishes() {
+        use std::{sync::mpsc, time::Duration};
+        let source = Arc::new(Source::default());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker_source = source.clone();
+        let worker = std::thread::spawn(move || {
+            let _lease = worker_source.enter_callback();
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let waiting_source = source.clone();
+        let waiter = std::thread::spawn(move || {
+            waiting_tx.send(()).unwrap();
+            waiting_source.wait_callbacks().unwrap();
+            done_tx.send(()).unwrap();
+        });
+        waiting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        release_tx.send(()).unwrap();
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.join().unwrap();
+        waiter.join().unwrap();
+        assert_eq!(*source.callbacks.lock().unwrap(), 0);
+    }
     #[test]
     #[ignore = "explicit NEW generated CFAPI root; writable mapped view after file handle close"]
     #[cfg(all(feature = "native-sync", feature = "native-test-hooks"))]

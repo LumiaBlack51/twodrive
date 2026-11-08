@@ -153,6 +153,7 @@ fn record(
     request: bool,
 ) -> bool {
     let source = unsafe { &*info.CallbackContext.cast::<Source>() };
+    let _callback = source.enter_callback();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
         if request && source.stopping.load(Ordering::SeqCst) {
             return Err("native owner is stopping".into());

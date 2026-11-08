@@ -12,8 +12,9 @@ use std::{
 
 pub type Progress = Arc<dyn Fn(u64, u64) -> anyhow::Result<()> + Send + Sync>;
 
-/// Only attached by Backend before invoking the Provider. Provider failures and
-/// progress-callback cancellation are never classified as zero-call rejection.
+/// Attached before a data mutation: Backend's local checks or the pinned native
+/// account's read-only authority check. Data-request and progress failures never
+/// receive this marker.
 #[derive(Debug)]
 pub(crate) struct TransferNotStarted;
 impl std::fmt::Display for TransferNotStarted {
@@ -37,6 +38,24 @@ impl Capabilities {
 }
 
 pub trait Provider: CloudBackend {
+    fn create_directory_bound(
+        &self,
+        _parent: &MetadataEntry,
+        _path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        anyhow::bail!("conditional namespace creation unavailable")
+    }
+    fn move_bound(
+        &self,
+        _entry: &MetadataEntry,
+        _parent: &MetadataEntry,
+        _path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        anyhow::bail!("conditional namespace move unavailable")
+    }
+    fn delete_bound(&self, _entry: &MetadataEntry) -> anyhow::Result<()> {
+        anyhow::bail!("conditional namespace deletion unavailable")
+    }
     /// Optional protocol process control, used by bounded desktop operations.
     fn set_operation_cancel(&self, _cancel: Arc<std::sync::atomic::AtomicBool>) {}
     /// Adapters without a persistent version/cache contract may forbid mounts.
@@ -64,6 +83,38 @@ pub struct Backend {
     paused: Option<PathBuf>,
 }
 impl Backend {
+    pub fn create_directory_bound(
+        &self,
+        parent: &MetadataEntry,
+        path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        self.check_pause()?;
+        valid_path(path)?;
+        ensure!(parent.is_dir, "namespace parent is not a directory");
+        self.inner.create_directory_bound(parent, path)
+    }
+    pub fn move_bound(
+        &self,
+        entry: &MetadataEntry,
+        parent: &MetadataEntry,
+        path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        self.check_pause()?;
+        valid_path(path)?;
+        ensure!(
+            !entry.etag.is_empty() && parent.is_dir && entry.path != "/",
+            "conditional namespace move lacks a version"
+        );
+        self.inner.move_bound(entry, parent, path)
+    }
+    pub fn delete_bound(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
+        self.check_pause()?;
+        ensure!(
+            !entry.etag.is_empty() && entry.path != "/",
+            "conditional namespace delete lacks a version"
+        );
+        self.inner.delete_bound(entry)
+    }
     pub fn new(provider: impl Provider) -> Self {
         Self {
             inner: Arc::new(provider),

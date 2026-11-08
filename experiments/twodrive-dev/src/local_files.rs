@@ -123,10 +123,60 @@ impl LocalFileBridge {
             .journal
             .snapshot_if_owned(id)?
             .map(|state| state.generation);
-        twodrive_local_files::native::with_native_capture(path, id.as_bytes(), |locked| {
+        #[cfg(feature = "native-sync")]
+        let projection = self.journal.native_projection_for_id(id)?;
+        #[cfg(feature = "native-sync")]
+        let identity = projection
+            .as_ref()
+            .map(|p| p.tag.clone())
+            .unwrap_or_else(|| id.as_bytes().to_vec());
+        #[cfg(not(feature = "native-sync"))]
+        let identity = id.as_bytes().to_vec();
+        twodrive_local_files::native::with_native_capture(path, &identity, |locked| {
+            #[cfg(feature = "native-sync")]
+            if let Some(projection) = projection.as_ref() {
+                self.check_native_projection(locked, projection, false)?;
+            }
             self.capture_locked_native(locked, &record, generation)
         })
         .map_err(anyhow::Error::msg)
+    }
+
+    #[cfg(all(windows, feature = "native-sync"))]
+    fn check_native_projection(
+        &self,
+        locked: &twodrive_local_files::native::NativeCapture<'_>,
+        projection: &twodrive_core::NativeProjection,
+        acknowledgement: bool,
+    ) -> Result<(), String> {
+        let (volume, file_id) = locked.physical_identity()?;
+        let (root_id, identity) = locked.root_registration()?;
+        let captured = self
+            .journal
+            .native_capture_binding(&projection.local_id)
+            .map_err(|e| e.to_string())?;
+        let published_matches = projection.volume_serial == Some(volume)
+            && projection.native_file_id.as_deref() == Some(format!("{file_id:016x}").as_str());
+        let captured_matches = captured.is_some_and(|binding| {
+            binding.physical
+                == twodrive_core::NativeFileIdentity {
+                    volume_serial: volume,
+                    file_id,
+                }
+        });
+        let physical_matches = if acknowledgement && captured.is_some() {
+            captured_matches
+        } else {
+            published_matches || captured_matches
+        };
+        if projection.state != "published"
+            || !physical_matches
+            || root_id == 0
+            || identity != projection.root_binding.as_bytes()
+        {
+            return Err("native capture differs from its durable publication".into());
+        }
+        Ok(())
     }
 
     #[cfg(all(
@@ -155,6 +205,40 @@ impl LocalFileBridge {
         // and must not be mistaken for a disposable download cache.
         let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
         drop(file);
+        #[cfg(feature = "native-sync")]
+        if let Some(projection) = self
+            .journal
+            .native_projection_for_id(&record.metadata.remote_id)
+            .map_err(|e| e.to_string())?
+        {
+            let (_, root_identity) = locked.root_registration()?;
+            if root_identity != projection.root_binding.as_bytes() {
+                return Err("native capture root changed".into());
+            }
+            let (volume_serial, file_id) = locked.physical_identity()?;
+            let physical = twodrive_core::NativeFileIdentity {
+                volume_serial,
+                file_id,
+            };
+            return match generation {
+                Some(generation) => self.journal.stage_projected_native_edit(
+                    &record.metadata.remote_id,
+                    generation,
+                    &captured,
+                    size,
+                    &projection,
+                    physical,
+                ),
+                None => self.journal.stage_first_projected_native_edit(
+                    record,
+                    &captured,
+                    size,
+                    &projection,
+                    physical,
+                ),
+            }
+            .map_err(|e| e.to_string());
+        }
         match generation {
             Some(generation) => self.journal.stage_native_edit(
                 &record.metadata.remote_id,
@@ -200,8 +284,19 @@ impl LocalFileBridge {
             .journal
             .snapshot_if_owned(id)?
             .map(|state| state.generation);
+        let projection = self.journal.native_projection_for_id(id)?;
+        if let Some(projection) = projection.as_ref() {
+            ensure!(
+                projection.root_binding.as_bytes() == owner.receipt().identity.as_slice(),
+                "replacement root differs from its publication"
+            );
+        }
+        let identity = projection
+            .as_ref()
+            .map(|p| p.tag.clone())
+            .unwrap_or_else(|| id.as_bytes().to_vec());
         owner
-            .with_replacement_capture(relative, id.as_bytes(), |locked| {
+            .with_replacement_capture(relative, &identity, |locked| {
                 self.capture_locked_native(locked, &record, generation)
             })
             .map_err(anyhow::Error::msg)
@@ -274,6 +369,10 @@ impl LocalFileBridge {
             .context("unknown native item")?;
         let cloud_id = record.cloud_remote_id.as_deref().unwrap_or(id);
         let generation = self.status(id)?.generation;
+        #[cfg(feature = "native-sync")]
+        if let Some(projection) = self.journal.native_projection_for_id(id)? {
+            return self.acknowledge_projected_native(path, &record, generation, &projection);
+        }
         enum Verification {
             Confirmed,
             CacheChanged,
@@ -326,6 +425,176 @@ impl LocalFileBridge {
             }
             None => Ok(false),
         }
+    }
+
+    #[cfg(all(windows, feature = "native-sync"))]
+    fn acknowledge_projected_native(
+        &self,
+        path: &Path,
+        record: &twodrive_core::FileRecord,
+        generation: i64,
+        projection: &twodrive_core::NativeProjection,
+    ) -> anyhow::Result<bool> {
+        use std::cell::Cell;
+        let cache_changed = Cell::new(false);
+        let native_changed = Cell::new(false);
+        let id = &record.metadata.remote_id;
+        let confirmed =
+            twodrive_local_files::native::with_native_capture(path, &projection.tag, |locked| {
+                self.check_native_projection(locked, projection, true)?;
+                self.journal
+                    .with_native_projection_ack(id, generation, projection, |cache, expected| {
+                        if digest_file(cache)? != expected {
+                            cache_changed.set(true);
+                            return Ok(false);
+                        }
+                        struct HashSink(Sha256);
+                        impl std::io::Write for HashSink {
+                            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                                self.0.update(bytes);
+                                Ok(bytes.len())
+                            }
+                            fn flush(&mut self) -> std::io::Result<()> {
+                                Ok(())
+                            }
+                        }
+                        let mut hash = HashSink(Sha256::new());
+                        let size = locked
+                            .copy_resident_to(&mut hash)
+                            .map_err(anyhow::Error::msg)?;
+                        let modified = locked
+                            .modified_time()
+                            .map_err(anyhow::Error::msg)?
+                            .duration_since(std::time::UNIX_EPOCH)?
+                            .as_secs() as i64;
+                        if size != record.metadata.size
+                            || modified != record.metadata.modified_unix
+                            || format!("{:x}", hash.0.finalize()) != expected
+                        {
+                            native_changed.set(true);
+                            return Ok(false);
+                        }
+                        locked
+                            .set_in_sync_after_verification()
+                            .map_err(anyhow::Error::msg)?;
+                        Ok(true)
+                    })
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(anyhow::Error::msg)?;
+        if cache_changed.get() {
+            self.journal.record_external_edit(id, generation)?;
+        }
+        if native_changed.get() {
+            self.journal
+                .record_native_edit(record.cloud_remote_id.as_deref().unwrap_or(id))?;
+        }
+        Ok(confirmed == Some(true))
+    }
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub fn acknowledge_native_creation(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        relative: &Path,
+        id: &str,
+    ) -> anyhow::Result<bool> {
+        let record = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("native creation disappeared")?;
+        let relative_cloud = format!(
+            "/{}",
+            relative
+                .components()
+                .map(|part| match part {
+                    std::path::Component::Normal(name) =>
+                        name.to_str().context("invalid creation leaf"),
+                    _ => anyhow::bail!("relative creation path required"),
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join("/")
+        );
+        ensure!(
+            relative_cloud == record.metadata.path,
+            "creation acknowledgement path changed"
+        );
+        if self.journal.native_projection_for_id(id)?.is_some() {
+            return self.acknowledge_native(&owner.root().join(relative), id);
+        }
+        let generation = self.status(id)?.generation;
+        let root = std::str::from_utf8(&owner.receipt().identity)?;
+        let receipt = serde_json::to_string(owner.receipt())?;
+        let cache_changed = std::cell::Cell::new(false);
+        let native_changed = std::cell::Cell::new(false);
+        let confirmed = owner
+            .with_replacement_capture(relative, id.as_bytes(), |locked| {
+                let (volume_serial, file_id) = locked.physical_identity()?;
+                self.journal
+                    .with_created_projection_ack(
+                        id,
+                        generation,
+                        root,
+                        &receipt,
+                        twodrive_core::NativeFileIdentity {
+                            volume_serial,
+                            file_id,
+                        },
+                        |cache, expected| {
+                            if digest_file(cache)? != expected {
+                                cache_changed.set(true);
+                                return Ok(false);
+                            }
+                            if !Self::native_bytes_match(locked, &record, expected)
+                                .map_err(anyhow::Error::msg)?
+                            {
+                                native_changed.set(true);
+                                return Ok(false);
+                            }
+                            locked
+                                .set_in_sync_after_verification()
+                                .map_err(anyhow::Error::msg)?;
+                            Ok(true)
+                        },
+                    )
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(anyhow::Error::msg)?;
+        if cache_changed.get() {
+            self.journal.record_external_edit(id, generation)?;
+        }
+        if native_changed.get() {
+            self.journal
+                .record_native_edit(record.cloud_remote_id.as_deref().unwrap_or(id))?;
+        }
+        Ok(confirmed == Some(true))
+    }
+    #[cfg(all(windows, feature = "native-sync"))]
+    fn native_bytes_match(
+        locked: &twodrive_local_files::native::NativeCapture<'_>,
+        record: &twodrive_core::FileRecord,
+        expected: &str,
+    ) -> Result<bool, String> {
+        struct HashSink(Sha256);
+        impl std::io::Write for HashSink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.update(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut hash = HashSink(Sha256::new());
+        let size = locked.copy_resident_to(&mut hash)?;
+        let modified = locked
+            .modified_time()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs() as i64;
+        Ok(size == record.metadata.size
+            && modified == record.metadata.modified_unix
+            && format!("{:x}", hash.0.finalize()) == expected)
     }
 
     /// Download by opaque object identity; recheck provider version after EOF.
@@ -657,4 +926,4 @@ pub fn no_progress() -> Progress {
 
 #[cfg(test)]
 #[path = "local_files_tests.rs"]
-mod tests;
+pub(crate) mod tests;

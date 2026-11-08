@@ -17,6 +17,16 @@ pub struct NativeProjection {
     pub volume_serial: Option<u32>,
     pub native_file_id: Option<String>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeFileIdentity {
+    pub volume_serial: u32,
+    pub file_id: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeCaptureBinding {
+    pub generation: i64,
+    pub physical: NativeFileIdentity,
+}
 pub(super) fn init(conn: &rusqlite::Connection) -> anyhow::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS local_native_projections(
@@ -26,9 +36,54 @@ pub(super) fn init(conn: &rusqlite::Connection) -> anyhow::Result<()> {
         volume_serial INTEGER,native_file_id TEXT);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_native_projection_file
             ON local_native_projections(root_binding,volume_serial,native_file_id)
-            WHERE native_file_id IS NOT NULL;",
+            WHERE native_file_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS local_native_captures(local_id TEXT PRIMARY KEY,generation INTEGER NOT NULL,volume_serial INTEGER NOT NULL,file_id TEXT NOT NULL);",
     )?;
     Ok(())
+}
+pub(super) fn record_capture(
+    conn: &rusqlite::Connection,
+    id: &str,
+    generation: i64,
+    expected: &NativeProjection,
+    physical: NativeFileIdentity,
+) -> anyhow::Result<()> {
+    ensure!(
+        physical.file_id != 0
+            && expected.volume_serial == Some(physical.volume_serial)
+            && get(conn, id)?.as_ref() == Some(expected)
+            && expected.state == "published",
+        "native capture publication changed"
+    );
+    ensure!(conn.query_row("SELECT EXISTS(SELECT 1 FROM files WHERE remote_id=?1 AND cloud_remote_id=?2 AND path=?3)",params![id,expected.cloud_id,expected.path],|row|row.get::<_,bool>(0))?,"native capture target changed");
+    conn.execute("INSERT INTO local_native_captures(local_id,generation,volume_serial,file_id) VALUES(?1,?2,?3,?4)
+        ON CONFLICT(local_id) DO UPDATE SET generation=excluded.generation,volume_serial=excluded.volume_serial,file_id=excluded.file_id",params![id,generation,physical.volume_serial,format!("{:016x}",physical.file_id)])?;
+    Ok(())
+}
+fn capture(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<Option<NativeCaptureBinding>> {
+    let row = conn
+        .query_row(
+            "SELECT generation,volume_serial,file_id FROM local_native_captures WHERE local_id=?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|(generation, volume_serial, file_id)| {
+        Ok(NativeCaptureBinding {
+            generation,
+            physical: NativeFileIdentity {
+                volume_serial,
+                file_id: u64::from_str_radix(&file_id, 16)?,
+            },
+        })
+    })
+    .transpose()
 }
 fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeProjection> {
     Ok(NativeProjection {
@@ -68,6 +123,135 @@ fn baseline_valid(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<bool>
         AND NOT EXISTS(SELECT 1 FROM native_event_log WHERE binding=p.root_binding))",[id],|row|row.get(0))?)
 }
 impl CacheJournal {
+    /// Publish a newly created native file only after its create receipt and
+    /// retained native/private full-byte verification agree on this generation.
+    pub fn with_created_projection_ack(
+        &self,
+        id: &str,
+        generation: i64,
+        root: &str,
+        creation_receipt: &str,
+        physical: NativeFileIdentity,
+        action: impl FnOnce(&mut File, &str) -> anyhow::Result<bool>,
+    ) -> anyhow::Result<Option<bool>> {
+        ensure!(
+            id.starts_with("local-upload-") && physical.file_id != 0 && !root.is_empty(),
+            "invalid native creation publication"
+        );
+        let receipt: serde_json::Value = serde_json::from_str(creation_receipt)?;
+        let identity = receipt["identity"]
+            .as_array()
+            .context("creation root identity missing")?
+            .iter()
+            .map(|v| {
+                v.as_u64()
+                    .filter(|v| *v <= 255)
+                    .map(|v| v as u8)
+                    .context("invalid creation root byte")
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        ensure!(
+            identity == root.as_bytes()
+                && receipt["volume_serial"].as_u64() == Some(physical.volume_serial as u64),
+            "creation root binding changed"
+        );
+        let _guard = self
+            .0
+            .gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache gate poisoned"))?;
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = snapshot(&tx, id)?;
+        if state.generation != generation || !state.sync_confirmed() || !state.resident {
+            return Ok(None);
+        }
+        let record = self.record(id)?;
+        let cloud = record
+            .cloud_remote_id
+            .as_deref()
+            .context("native creation has no cloud receipt")?;
+        ensure!(get(&tx,id)?.is_none() && tx.query_row("SELECT EXISTS(SELECT 1 FROM local_native_creations WHERE local_id=?1 AND path=?2 AND root_binding=?3 AND cloud_id=?4 AND state='bound')",params![id,record.metadata.path,creation_receipt,cloud],|row|row.get::<_,bool>(0))?,"native creation receipt changed before publication");
+        let mut file = self.file(&record, false)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+        let confirmed = action(&mut file, &state.acknowledged_digest)?;
+        if confirmed {
+            tx.execute("INSERT INTO local_native_projections(local_id,root_binding,tag,cloud_id,path,etag,size,modified_unix,directory,state,volume_serial,native_file_id)
+                VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,'published',?9,?10)",params![id,root,id.as_bytes(),cloud,record.metadata.path,record.metadata.etag,i64::try_from(record.metadata.size)?,record.metadata.modified_unix,physical.volume_serial,format!("{:016x}",physical.file_id)])?;
+            tx.execute(
+                "UPDATE local_native_creations SET native_binding=?2 WHERE local_id=?1",
+                params![
+                    id,
+                    format!("{:08x}:{:016x}", physical.volume_serial, physical.file_id)
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(Some(confirmed))
+    }
+    /// Advance only after the callback verifies the current native bytes and
+    /// acknowledges them while retaining its physical native lease.
+    pub fn with_native_projection_ack(
+        &self,
+        id: &str,
+        generation: i64,
+        expected: &NativeProjection,
+        action: impl FnOnce(&mut File, &str) -> anyhow::Result<bool>,
+    ) -> anyhow::Result<Option<bool>> {
+        let _guard = self
+            .0
+            .gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache gate poisoned"))?;
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = snapshot(&tx, id)?;
+        if state.generation != generation || !state.sync_confirmed() || !state.resident {
+            return Ok(None);
+        }
+        ensure!(
+            get(&tx, id)?.as_ref() == Some(expected)
+                && expected.state == "published"
+                && !expected.directory,
+            "native projection changed before acknowledgement"
+        );
+        let record = self.record(id)?;
+        ensure!(
+            record.cloud_remote_id.as_deref() == Some(expected.cloud_id.as_str())
+                && record.metadata.path == expected.path,
+            "native acknowledgement target changed"
+        );
+        let mut file = self.file(&record, false)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        }
+        let captured = capture(&tx, id)?;
+        ensure!(
+            captured.is_none_or(|binding| binding.generation == generation),
+            "native capture generation changed before acknowledgement"
+        );
+        let confirmed = action(&mut file, &state.acknowledged_digest)?;
+        if confirmed {
+            let volume = captured
+                .map(|c| c.physical.volume_serial)
+                .or(expected.volume_serial)
+                .context("native publication volume missing")?;
+            let file_id = captured
+                .map(|c| format!("{:016x}", c.physical.file_id))
+                .or_else(|| expected.native_file_id.clone())
+                .context("native publication file identity missing")?;
+            ensure!(tx.execute("UPDATE local_native_projections SET etag=?2,size=?3,modified_unix=?4,volume_serial=?5,native_file_id=?6 WHERE local_id=?1 AND state='published'",params![id,record.metadata.etag,i64::try_from(record.metadata.size)?,record.metadata.modified_unix,volume,file_id])?==1,"native projection acknowledgement rejected");
+            tx.execute("DELETE FROM local_native_captures WHERE local_id=?1", [id])?;
+        }
+        tx.commit()?;
+        Ok(Some(confirmed))
+    }
     /// Idempotent only for the same private publication tag and root. Tags must
     /// be unique per publication; do not reuse cloud IDs as registration tags.
     pub fn prepare_native_projection(
@@ -160,5 +344,11 @@ impl CacheJournal {
         tag: &[u8],
     ) -> anyhow::Result<Option<NativeProjection>> {
         Ok(journal_connection(&self.0.db)?.query_row(&format!("SELECT {COLUMNS} FROM local_native_projections WHERE root_binding=?1 AND tag=?2"),params![root,tag],row).optional()?)
+    }
+    pub fn native_projection_for_id(&self, id: &str) -> anyhow::Result<Option<NativeProjection>> {
+        get(&journal_connection(&self.0.db)?, id)
+    }
+    pub fn native_capture_binding(&self, id: &str) -> anyhow::Result<Option<NativeCaptureBinding>> {
+        capture(&journal_connection(&self.0.db)?, id)
     }
 }

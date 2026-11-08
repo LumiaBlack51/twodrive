@@ -38,11 +38,26 @@ pub fn open_local_session(
         !identity.account.is_empty() && !identity.drive.is_empty(),
         "verified account and drive required"
     );
+    open_pinned_session(db, private_cache, account_state, identity, writable)
+}
+/// Resume authority is supplied only by the coordinator's sealed configuration.
+/// Network access remains pinned even when the private cache is opened offline.
+pub(crate) fn open_pinned_session(
+    db: twodrive_core::Database,
+    private_cache: &Path,
+    account_state: &Path,
+    identity: twodrive_core::CloudIdentity,
+    writable: bool,
+) -> anyhow::Result<crate::local_files::LocalFileBridge> {
     let binding = format!("onedrive:{}:{}", identity.account, identity.drive);
     crate::local_files::LocalFileBridge::open_bound(
         db,
         private_cache,
-        crate::provider::Backend::new(provider),
+        crate::provider::Backend::new(crate::native_account::NativeAccount::new(
+            account_state.to_path_buf(),
+            identity,
+            writable,
+        )?),
         &binding,
     )
 }

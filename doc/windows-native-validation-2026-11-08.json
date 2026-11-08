@@ -410,5 +410,30 @@
     "capture_body_not_entered": true,
     "scope_retired": true,
     "all_mapping_models_certified": false
+  },
+  "native_initial_coordinator": {
+    "generated_nested_tree_materialization": true,
+    "parent_first_directory_and_file_binding": true,
+    "watcher_rescan_and_sequence_bounded_ack": true,
+    "sealed_dpapi_configuration": true,
+    "resume_cached_native_read_without_credentials": true,
+    "uncached_missing_authority_refused": true,
+    "normal_profile_modified": false,
+    "production_takeover_enabled": false
+  },
+  "native_projected_data_sync": {
+    "watcher_driven_in_place_edit": true,
+    "separate_process_atomic_replacement": true,
+    "mock_conditional_backend": true,
+    "same_cloud_identity_retained": true,
+    "capture_binding_atomic_with_snapshot": true,
+    "native_and_private_digests_before_publication_advance": true,
+    "real_cloud_coordinator_tested": false
+  },
+  "native_callback_shutdown": {
+    "old_owner_lock_regression_failed": true,
+    "callback_scopes_drained_before_source_drop": true,
+    "owner_lock_reacquired_without_cleanup_sleep": true,
+    "unit_gate_test_passed": true
   }
 }
