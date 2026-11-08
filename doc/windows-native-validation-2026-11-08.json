@@ -660,5 +660,13 @@
     "full_account_staging_roundtrip_and_both_inventories": true,
     "original_microsoft_folder_moved": false,
     "microsoft_client_stopped": false
+  },
+  "native_startup_staged": {
+    "installer_parser_passed": true,
+    "installed_per_user_limited": true,
+    "enabled": false,
+    "runtime_copied_outside_build_cache": true,
+    "microsoft_client_changed": false,
+    "school_account_stop_authorization_pending": true
   }
 }

@@ -594,3 +594,11 @@ saved root identity. Generated cached/cold roundtrip and sealed recovery passed.
 The complete-account staged root also moved to a new sibling and back, with full
 physical/metadata verification in both locations. The actual Microsoft root was
 not moved or stopped. See TD-20261108-53 through -56 for precise limits.
+
+
+The native startup installer now copies the exact runtime into protected state,
+verifies the sealed root, and registers a limited per-user logon task. Installation
+is disabled by default; enabling/starting is explicit. The actual task was staged
+disabled, so it does not change the running Microsoft client or original folder.
+A second linked school account was visible in the shell. Final personal cutover
+must preserve that account unless the user authorizes a shared-client stop.
