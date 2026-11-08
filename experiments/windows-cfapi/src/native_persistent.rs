@@ -488,22 +488,7 @@ impl PersistentSession {
         }
         for part in &parts {
             let name = part.as_os_str().to_str().ok_or("invalid native name")?;
-            let stem = name
-                .split('.')
-                .next()
-                .unwrap_or_default()
-                .to_ascii_uppercase();
-            if name.is_empty()
-                || name.ends_with(['.', ' '])
-                || name.encode_utf16().count() > 255
-                || name.chars().any(|c| c < ' ' || "<>:\"/\\|?*".contains(c))
-                || ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
-                || ((stem.starts_with("COM") || stem.starts_with("LPT"))
-                    && stem.len() == 4
-                    && matches!(stem.as_bytes()[3], b'1'..=b'9'))
-            {
-                return Err("unsupported native file name".into());
-            }
+            crate::names::validate_native_name(name)?;
         }
         let mut parent = self.root().to_path_buf();
         let mut guards = Vec::new();
@@ -702,6 +687,87 @@ impl Drop for PersistentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "explicit NEW generated root; native publication and hydration beyond MAX_PATH"]
+    #[cfg(feature = "native-test-hooks")]
+    fn native_long_paths_publish_hydrate_and_resume_without_shortening_names() {
+        struct Bytes;
+        impl HydrationSource for Bytes {
+            fn size(&self, id: &[u8]) -> Result<usize> {
+                if id == b"generated-long-file" {
+                    Ok(4096)
+                } else {
+                    Err("unexpected long-path identity".into())
+                }
+            }
+            fn read_range(
+                &self,
+                id: &[u8],
+                _: usize,
+                count: usize,
+                _: &AtomicBool,
+            ) -> Result<Vec<u8>> {
+                self.size(id)?;
+                Ok(vec![0x51; count])
+            }
+        }
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_LONG_PATH_ROOT")
+                .expect("explicit new generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+            Arc::new(Bytes),
+        )
+        .unwrap();
+        let mut relative = PathBuf::new();
+        let mut directories = Vec::new();
+        for index in 0..6 {
+            relative.push(format!("generated-{index}-{}", "x".repeat(35)));
+            owner
+                .publish_placeholder(
+                    &relative,
+                    format!("generated-directory-{index}").as_bytes(),
+                    0,
+                    true,
+                    1,
+                )
+                .unwrap();
+            directories.push(owner.root().join(&relative));
+        }
+        relative.push("generated-long-file.bin");
+        let file = owner
+            .publish_placeholder(&relative, b"generated-long-file", 4096, false, 1)
+            .unwrap();
+        assert!(file.as_os_str().encode_wide().count() > 295);
+        assert_eq!(std::fs::read(&file).unwrap(), vec![0x51; 4096]);
+        assert_eq!(owner.inventory().unwrap().len(), 7);
+        let receipt = owner.receipt.clone();
+        owner.disconnect().unwrap();
+        drop(owner);
+        let mut owner = PersistentSession::resume(&root, &receipt, Arc::new(Bytes)).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), vec![0x51; 4096]);
+        std::fs::remove_file(&file).unwrap();
+        for directory in directories.into_iter().rev() {
+            std::fs::remove_dir(directory).unwrap();
+        }
+        owner.retire_empty_office_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+    }
     struct NoCloud;
     impl HydrationSource for NoCloud {
         fn size(&self, _: &[u8]) -> Result<usize> {

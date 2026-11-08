@@ -2,6 +2,7 @@
 use twodrive_core::FileState;
 pub mod fixtures;
 pub mod migration;
+pub mod names;
 
 // The production desktop dependency cannot compile registration/dehydration.
 #[cfg(all(windows, feature = "fixture-probe"))]

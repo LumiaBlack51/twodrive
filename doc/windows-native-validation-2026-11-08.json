@@ -311,5 +311,32 @@
     "retained_local_scope_recycled": true,
     "native_consumer_enabled": false,
     "concurrent_folder_delete_child_insert_tested": false
+  },
+  "readonly_native_name_preflight": {
+    "entries_excluding_root": 20158,
+    "max_depth": 19,
+    "max_path_utf16": 295,
+    "paths_at_least_260_utf16": 11,
+    "ordinal_ignorecase_sibling_collisions": 0,
+    "content_read": false,
+    "cloud_mutations": false,
+    "catalogue_snapshot_only": true,
+    "invalid_names": 0,
+    "reserved_device_aliases": 0,
+    "ooxml_files": 284,
+    "ooxml_max_path_utf16": 157,
+    "ooxml_paths_at_least_260_utf16": 0
+  },
+  "native_long_path": {
+    "actual_windows_generated_cfapi_root": true,
+    "path_longer_than_295_utf16": true,
+    "nested_publication_hydration_inventory_resume": true,
+    "generated_root_retired": true,
+    "office_long_paths_tested": false
+  },
+  "native_name_validator": {
+    "old_superscript_device_alias_test_failed": true,
+    "fixed_windows_linux_unit_test": true,
+    "shared_by_native_publication": true
   }
 }
