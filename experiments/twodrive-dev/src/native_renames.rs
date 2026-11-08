@@ -1,42 +1,17 @@
+#[cfg(all(test, feature = "native-test-hooks"))]
+thread_local! {pub(crate) static INTERRUPT_BACKUP_AFTER_COMPLETE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
 use super::*;
 use crate::model::CloudBackend;
 use twodrive_core::NativeMoveIntent;
 use twodrive_local_files::native::persistent::{NativeEvent, NativeEventKind};
 
 impl NativeCoordinator {
-    fn acknowledge_backup_transition(
-        &self,
-        source: &NativeProjection,
-        physical: twodrive_core::NativeFileIdentity,
-    ) -> anyhow::Result<()> {
-        let mut decisions = Vec::new();
-        for (sequence, payload) in self
-            .bridge
-            .journal()
-            .database()
-            .pending_native_events(&source.root_binding, 1000)?
-        {
-            let event: NativeEvent = serde_json::from_str(&payload)?;
-            if event.identity == source.tag
-                && event.volume_serial == physical.volume_serial
-                && event.file_id == physical.file_id
-            {
-                ensure!(
-                    event.root_file_id == self.receipt().file_id && event.schema_version == 1,
-                    "backup transition event root changed"
-                );
-                decisions.push((sequence, payload));
-            }
-        }
-        self.bridge
-            .journal()
-            .database()
-            .acknowledge_native_event_decisions(&source.root_binding, &decisions)
-    }
-
     pub(super) fn synchronize_renames(&mut self) -> anyhow::Result<usize> {
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
+        self.bridge
+            .journal()
+            .recover_legacy_backup_history(&binding, self.receipt().file_id)?;
         let mut moved = 0;
         for _ in 0..1000 {
             let projections = self.bridge.journal().native_projections(&binding)?;
@@ -66,13 +41,19 @@ impl NativeCoordinator {
             if !pending_backups.is_empty() {
                 let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
                 for copy in pending_backups {
-                    let backup = entries
-                        .iter()
-                        .find(|e| {
-                            e.volume_serial == copy.physical.volume_serial
-                                && e.file_id == copy.physical.file_id
-                        })
-                        .context("prepared native backup is missing")?;
+                    let backup = entries.iter().find(|e| {
+                        e.volume_serial == copy.physical.volume_serial
+                            && e.file_id == copy.physical.file_id
+                    });
+                    let Some(backup) = backup else {
+                        // This retires a local copy decision, never a cloud
+                        // object. Both complete snapshots already have owners.
+                        self.bridge.journal().complete_native_backup_copy(
+                            copy.sequence,
+                            crate::local_files::digest_file,
+                        )?;
+                        continue;
+                    };
                     let target = entries
                         .iter()
                         .find(|e| {
@@ -88,7 +69,6 @@ impl NativeCoordinator {
                         &copy.source,
                         copy.physical,
                     )?;
-                    self.acknowledge_backup_transition(&copy.source, copy.physical)?;
                 }
                 continue;
             }
@@ -142,13 +122,10 @@ impl NativeCoordinator {
                             file_id: entry.file_id,
                         },
                     )?;
-                    self.acknowledge_backup_transition(
-                        p,
-                        twodrive_core::NativeFileIdentity {
-                            volume_serial: entry.volume_serial,
-                            file_id: entry.file_id,
-                        },
-                    )?;
+                    #[cfg(all(test, feature = "native-test-hooks"))]
+                    if INTERRUPT_BACKUP_AFTER_COMPLETE.with(|f| f.replace(false)) {
+                        anyhow::bail!("generated interruption after backup completion transaction");
+                    }
                     split = true;
                     break;
                 }

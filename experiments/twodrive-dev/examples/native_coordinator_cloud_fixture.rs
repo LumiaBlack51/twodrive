@@ -125,6 +125,130 @@ fn run() -> anyhow::Result<()> {
                 && fs::read(&path)? == bytes,
             "generated full-byte readback mismatch"
         );
+        // A second client modifies only newly generated objects. The native
+        // consumer then imports, invalidates, moves and removes those versions.
+        let parent = provider
+            .get_metadata_by_path(&format!("/{scope}"))?
+            .context("generated scope missing")?;
+        let remote_dir_path = format!("/{scope}/remote-child");
+        let remote_dir = provider.graph.create_directory_bound(
+            &identity,
+            &parent.remote_id,
+            &remote_dir_path,
+            &mut || Ok(()),
+        )?;
+        let remote_path = format!("{remote_dir_path}/remote.txt");
+        let remote_source = private.join("remote-source.bin");
+        fs::write(&remote_source, b"generated first remote version")?;
+        let remote_file = provider.upload_file_with_version(
+            &remote_path,
+            &remote_source,
+            None,
+            None,
+            &mut |_, _| Ok(()),
+        )?;
+        let imported =
+            coordinator.apply_remote_metadata(&[remote_dir.clone(), remote_file.clone()])?;
+        ensure!(
+            imported.created == 2 && imported.deferred == 0,
+            "remote creation deferred: {imported:?}"
+        );
+        let remote_native = coordinator
+            .root()
+            .join(&scope)
+            .join("remote-child/remote.txt");
+        ensure!(
+            fs::read(&remote_native)? == b"generated first remote version",
+            "remote creation bytes mismatch"
+        );
+        fs::write(
+            &remote_source,
+            b"generated complete changed remote version, longer",
+        )?;
+        let remote_new = provider.upload_file_with_version(
+            &remote_path,
+            &remote_source,
+            Some(&remote_file.remote_id),
+            Some(&remote_file.etag),
+            &mut |_, _| Ok(()),
+        )?;
+        let changed = coordinator.apply_remote_metadata(std::slice::from_ref(&remote_new))?;
+        ensure!(
+            changed.updated == 1 && changed.deferred == 0,
+            "remote update deferred: {changed:?}"
+        );
+        ensure!(
+            fs::read(&remote_native)? == fs::read(&remote_source)?,
+            "remote updated bytes mismatch"
+        );
+        let current_dir = provider
+            .get_metadata(&remote_dir.remote_id)?
+            .context("remote directory missing")?;
+        let moved_dir_path = format!("/{scope}/remote-child-renamed");
+        let moved_dir = provider.graph.move_item_bound(
+            &identity,
+            &remote_dir.remote_id,
+            &current_dir.etag,
+            &parent.remote_id,
+            &moved_dir_path,
+            &mut || Ok(()),
+        )?;
+        let moved_file = provider
+            .get_metadata(&remote_file.remote_id)?
+            .context("remote moved child missing")?;
+        let moved = coordinator.apply_remote_metadata(&[moved_dir, moved_file.clone()])?;
+        ensure!(
+            moved.moved == 1 && moved.deferred == 0,
+            "remote directory move deferred: {moved:?}"
+        );
+        let moved_native = coordinator
+            .root()
+            .join(&scope)
+            .join("remote-child-renamed/remote.txt");
+        ensure!(
+            !remote_native.exists() && fs::read(&moved_native)? == fs::read(&remote_source)?,
+            "remote subtree bytes/path mismatch"
+        );
+        provider.graph.delete_item_bound(
+            &identity,
+            &moved_file.remote_id,
+            &moved_file.etag,
+            &mut || Ok(()),
+        )?;
+        let empty = provider
+            .graph
+            .empty_directory_version_bound(
+                &identity,
+                &remote_dir.remote_id,
+                &parent.remote_id,
+                &moved_dir_path,
+                &mut || Ok(()),
+            )?
+            .context("generated remote directory not empty")?;
+        provider
+            .graph
+            .delete_item_bound(&identity, &empty.remote_id, &empty.etag, &mut || Ok(()))?;
+        let remaining = Database::new(private.join("native.sqlite3"))
+            .all_records()?
+            .into_iter()
+            .filter_map(|r| r.cloud_remote_id)
+            .filter(|id| id != &remote_file.remote_id && id != &remote_dir.remote_id)
+            .collect();
+        let removed = coordinator.apply_remote_removals(&remaining)?;
+        ensure!(
+            removed.removed == 2 && removed.deferred == 0,
+            "remote removal deferred: {removed:?}"
+        );
+        ensure!(
+            !moved_native.exists() && !moved_native.parent().unwrap().exists(),
+            "remote deleted paths remain"
+        );
+        let settled = coordinator.synchronize_once()?;
+        ensure!(
+            settled.deferred == 0 && !settled.needs_namespace,
+            "remote own-event settling deferred: {settled:?}"
+        );
+
         let original_id = file.remote_id;
         let old_bytes = bytes;
         let temporary = path.with_file_name("generated-update.tmp");
@@ -366,7 +490,7 @@ if(![GeneratedReplaceFile]::ReplaceFileW('__TARGET__','__TEMP__','__BACKUP__',0,
         fs::remove_dir(&root)?;
         println!(
             "{}",
-            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"native_file_delete_conditional_recycle":true,"native_directory_delete_object_version_recycle":true,"retained_backup_keeps_original_target_id_and_backup_bytes":true,"observed_nonempty_directory_is_not_recycled":true,"generated_scopes_retired":true,"production_takeover":false})
+            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"remote_create_update_subtree_move_delete_full_native_readback":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"native_file_delete_conditional_recycle":true,"native_directory_delete_object_version_recycle":true,"retained_backup_keeps_original_target_id_and_backup_bytes":true,"observed_nonempty_directory_is_not_recycled":true,"generated_scopes_retired":true,"production_takeover":false})
         );
         Ok(())
     })();

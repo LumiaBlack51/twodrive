@@ -93,6 +93,27 @@ fn consume_history(conn: &rusqlite::Connection, intent: &NativeDeleteIntent) -> 
     }
     Ok(())
 }
+/// Canonicalize accepted older representations in the same schema-upgrade
+/// transaction, before any recovery CAS uses their serialized form.
+pub(super) fn upgrade_intents(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+    let mut statement = conn.prepare("SELECT local_id,intent FROM local_native_deletes")?;
+    let rows = statement
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (id, raw) in rows {
+        let intent: NativeDeleteIntent = serde_json::from_str(&raw)?;
+        ensure!(
+            intent.publication.local_id == id,
+            "legacy delete identity changed"
+        );
+        conn.execute(
+            "UPDATE local_native_deletes SET intent=?2 WHERE local_id=?1 AND intent=?3",
+            params![id, serde_json::to_string(&intent)?, raw],
+        )?;
+    }
+    Ok(())
+}
 impl CacheJournal {
     pub fn native_delete_for_tag(
         &self,
@@ -391,5 +412,72 @@ impl CacheJournal {
             [],
             |r| r.get(0),
         )?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn schema_four_delete_json_recovers_prepared_dispatched_and_received() {
+        for phase in ["prepared", "dispatched", "received"] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            let cache = root.join("cache");
+            fs::create_dir(&cache).unwrap();
+            let db = Database::new(root.join("db.sqlite3"));
+            db.init().unwrap();
+            let version = MetadataEntry::new_file("generated-id", "/generated.txt", 0, 1, "v1");
+            db.upsert_metadata(&version).unwrap();
+            let j = CacheJournal::open(db.clone(), &cache, &"a".repeat(64)).unwrap();
+            let tag = b"generated-legacy-delete-tag";
+            j.prepare_native_projection("generated-id", "generated-root", tag)
+                .unwrap();
+            j.complete_native_projection("generated-id", "generated-root", tag, 7, 9)
+                .unwrap();
+            let event = |kind: &str| {
+                serde_json::json!({"schema_version":1,"kind":kind,"identity":tag,"volume_serial":7,"root_file_id":8,"file_id":9,"connection_key":1,"request_key":2}).to_string()
+            };
+            let request = event("delete_requested");
+            let completed = event("delete_completed");
+            let first = db.append_native_event("generated-root", &request).unwrap();
+            let last = db
+                .append_native_event("generated-root", &completed)
+                .unwrap();
+            let intent=NativeDeleteIntent {directory_parent_id:None,publication:j.native_projection_for_id("generated-id").unwrap().unwrap(),version:version.clone(),root_receipt:serde_json::json!({"schema_version":1,"identity":b"generated-root","volume_serial":7,"file_id":8}).to_string(),physical:NativeFileIdentity{volume_serial:7,file_id:9},request_sequence:first,request_payload:request,completion_sequence:last,completion_payload:completed,not_before_unix:0};
+            // Seed the actual legacy representation, not a newly serialized struct.
+            let mut legacy = serde_json::to_value(&intent).unwrap();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("directory_parent_id");
+            let raw = legacy.to_string();
+            assert!(!raw.contains("directory_parent_id"));
+            let conn = journal_connection(&db).unwrap();
+            conn.execute("INSERT INTO local_native_deletes(local_id,root_binding,intent,state) VALUES('generated-id','generated-root',?1,?2)",params![raw,phase]).unwrap();
+            db.set_state_value("local_cache_schema", "4").unwrap();
+            drop(conn);
+            drop(j);
+            let j = CacheJournal::open(db.clone(), &cache, &"a".repeat(64)).unwrap();
+            let (restored, state) = j.native_delete("generated-id").unwrap().unwrap();
+            assert_eq!(restored, intent);
+            assert_eq!(state, phase);
+            j.acknowledge_native_delete_history(&restored).unwrap();
+            assert!(
+                db.pending_native_events("generated-root", 100)
+                    .unwrap()
+                    .is_empty()
+            );
+            if phase == "dispatched" {
+                j.retry_native_delete_unchanged("generated-id", &version)
+                    .unwrap();
+            }
+            if phase != "received" {
+                assert!(j.dispatch_native_delete("generated-id").unwrap());
+                j.receive_native_delete("generated-id").unwrap();
+            }
+            j.apply_native_delete("generated-id").unwrap();
+            assert!(db.get_by_remote_id("generated-id").unwrap().is_none());
+        }
     }
 }

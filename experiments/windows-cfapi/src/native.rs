@@ -1226,7 +1226,7 @@ impl RetainedPlaceholder {
         let raw = unsafe {
             CreateFileW(
                 wide(path).as_ptr(),
-                FILE_READ_DATA | FILE_READ_ATTRIBUTES | WRITE_DAC,
+                FILE_READ_DATA | FILE_READ_ATTRIBUTES | WRITE_DAC | DELETE,
                 0,
                 ptr::null(),
                 OPEN_EXISTING,
@@ -1984,6 +1984,116 @@ pub fn with_exclusive_placeholder<T>(
 /// edits. Busy files are deferred instead of reading a writer's partial save.
 pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
 impl NativeCapture<'_> {
+    #[cfg(feature = "native-sync")]
+    pub fn remove_remote_deleted(&self) -> Result<()> {
+        let observed = self.0.inspect()?;
+        if !observed.os_in_sync || observed.modified_bytes != 0 {
+            return Err("remote removal vetoed by native edits".into());
+        }
+        let mut info = FILE_DISPOSITION_INFO { DeleteFile: true };
+        if unsafe {
+            SetFileInformationByHandle(
+                self.0.handle.0,
+                FileDispositionInfo,
+                (&mut info as *mut FILE_DISPOSITION_INFO).cast(),
+                size_of_val(&info) as u32,
+            )
+        } == 0
+        {
+            return Err(format!("owned remote removal: {}", unsafe {
+                GetLastError()
+            }));
+        }
+        Ok(())
+    }
+    #[cfg(feature = "native-sync")]
+    pub fn inspect_metadata(&self) -> Result<NativeObservation> {
+        self.0.inspect()
+    }
+    /// Remote metadata may discard only platform-confirmed clean data while
+    /// this same no-write/no-delete native lease remains held.
+    #[cfg(feature = "native-sync")]
+    pub fn update_remote_version(
+        &self,
+        size: u64,
+        modified_unix: i64,
+        owned_rename: bool,
+    ) -> Result<()> {
+        let before = self.0.inspect()?;
+        if (!before.os_in_sync && !owned_rename) || before.modified_bytes != 0 {
+            return Err("remote update vetoed by native edits".into());
+        }
+        let mut metadata = CF_FS_METADATA::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                self.0.handle.0,
+                FileBasicInfo,
+                (&mut metadata.BasicInfo as *mut FILE_BASIC_INFO).cast(),
+                size_of::<FILE_BASIC_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err("native update basic metadata unavailable".into());
+        }
+        metadata.FileSize = i64::try_from(size).map_err(|_| "remote size overflow")?;
+        metadata.BasicInfo.LastWriteTime = modified_unix
+            .checked_add(11_644_473_600)
+            .and_then(|v| v.checked_mul(10_000_000))
+            .filter(|v| *v > 0)
+            .ok_or("remote timestamp overflow")?;
+        metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
+            | FILE_ATTRIBUTE_HIDDEN
+            | FILE_ATTRIBUTE_SYSTEM
+            | FILE_ATTRIBUTE_ARCHIVE
+            | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+        if metadata.BasicInfo.FileAttributes == 0 {
+            metadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+        }
+        let range = CF_FILE_RANGE {
+            StartingOffset: 0,
+            Length: -1,
+        };
+        hr(
+            unsafe {
+                CfUpdatePlaceholder(
+                    self.0.handle.0,
+                    &metadata,
+                    ptr::null(),
+                    0,
+                    if self.0.directory {
+                        ptr::null()
+                    } else {
+                        &range
+                    },
+                    if self.0.directory { 0 } else { 1 },
+                    CF_UPDATE_FLAG_MARK_IN_SYNC
+                        | if owned_rename {
+                            0
+                        } else {
+                            CF_UPDATE_FLAG_VERIFY_IN_SYNC
+                        }
+                        | if self.0.directory {
+                            CF_UPDATE_FLAG_DISABLE_ON_DEMAND_POPULATION
+                        } else {
+                            CF_UPDATE_FLAG_DEHYDRATE
+                        },
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            },
+            "update verified remote native version",
+        )?;
+        let after = node_observation(
+            self.0.handle.0,
+            &self.0.identity,
+            usize::try_from(size).map_err(|_| "remote size overflow")?,
+            self.0.directory,
+        )?;
+        if after.logical_size != size || !after.os_in_sync || after.modified_bytes != 0 {
+            return Err("remote native metadata update not observed".into());
+        }
+        Ok(())
+    }
     /// Only after a complete fsynced backup has an independent engine owner.
     /// The same no-write/no-delete lease retains all native bytes throughout.
     #[cfg(feature = "native-sync")]

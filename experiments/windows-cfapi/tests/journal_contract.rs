@@ -338,7 +338,7 @@ fn native_creation_claim_survives_restart_and_new_edits_veto_the_first_receipt()
     let j = CacheJournal::open(db.clone(), &root, &binding).unwrap();
     assert_eq!(
         db.get_state_value("local_cache_schema").unwrap().as_deref(),
-        Some("5")
+        Some("6")
     );
     assert_eq!(j.native_creations().unwrap()[0].state, "preparing");
     fs::write(&path, EDITED).unwrap();
@@ -1181,6 +1181,8 @@ fn retained_backup_split_requires_target_snapshot_and_retains_both_revisions() {
     fs::write(&backup, ORIGINAL).unwrap();
     let copy = twodrive_core::NativeBackupCopy {
         sequence: 0,
+        root_file_id: 8,
+        history_through: 0,
         source: source.clone(),
         path: "/generated.wbk".into(),
         physical: twodrive_core::NativeFileIdentity {
@@ -1220,7 +1222,15 @@ fn retained_backup_split_requires_target_snapshot_and_retains_both_revisions() {
         journal.prepare_native_backup_copy(wrong, digest).is_err(),
         "digest must be verified under the final private lease"
     );
+    let event = |id: u64| {
+        serde_json::json!({"schema_version":1,"kind":"rename_completed","identity":tag,"volume_serial":7,"root_file_id":8,"file_id":id}).to_string()
+    };
+    let covered = db.append_native_event("generated-root", &event(9)).unwrap();
+    let unrelated = db
+        .append_native_event("generated-root", &event(11))
+        .unwrap();
     let prepared = journal.prepare_native_backup_copy(copy, digest).unwrap();
+    let future = db.append_native_event("generated-root", &event(9)).unwrap();
     assert!(
         journal.begin_upload(ID, digest).is_err(),
         "prepared identity conversion fences new uploads"
@@ -1245,7 +1255,7 @@ fn retained_backup_split_requires_target_snapshot_and_retains_both_revisions() {
         Some("0000000000000009")
     );
     journal
-        .complete_native_backup_copy(prepared.sequence)
+        .complete_native_backup_copy(prepared.sequence, digest)
         .unwrap();
     assert!(
         journal
@@ -1265,6 +1275,15 @@ fn retained_backup_split_requires_target_snapshot_and_retains_both_revisions() {
             .file_id,
         10
     );
+    let remaining = db.pending_native_events("generated-root", 100).unwrap();
+    assert!(!remaining.iter().any(|(seq, _)| *seq == covered));
+    assert!(remaining.iter().any(|(seq, _)| *seq == unrelated));
+    assert!(
+        remaining.iter().any(|(seq, _)| *seq == future),
+        "future same-object events must survive"
+    );
+    db.acknowledge_native_event_decisions("generated-root", &remaining)
+        .unwrap();
     let lease = journal.begin_upload(ID, digest).unwrap();
     assert!(
         lease
@@ -1279,5 +1298,121 @@ fn retained_backup_split_requires_target_snapshot_and_retains_both_revisions() {
     assert!(
         !db.remove_unreferenced_cache(&backup).unwrap(),
         "backup remains independent recovery material"
+    );
+}
+
+fn remote_fixture(tag: &[u8]) -> (tempfile::TempDir, CacheJournal, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, path) = paths(temp.path());
+    db.init().unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(
+        ID,
+        "/generated.txt",
+        ORIGINAL.len() as u64,
+        1,
+        "version-1",
+    ))
+    .unwrap();
+    let j = CacheJournal::open(db, &cache, &hash(b"generated-provider-binding")).unwrap();
+    j.prepare_native_projection(ID, "generated-root", tag)
+        .unwrap();
+    j.complete_native_projection(ID, "generated-root", tag, 7, 9)
+        .unwrap();
+    fs::write(&path, ORIGINAL).unwrap();
+    j.publish_download(ID, 0, &path, &hash(ORIGINAL), "version-1")
+        .unwrap();
+    (temp, j, path)
+}
+
+#[test]
+fn remote_update_restarts_with_old_bytes_owned_and_new_hydration_fenced() {
+    let (_temp, j, path) = remote_fixture(b"remote-version-tag");
+    let p = j.native_projection_for_id(ID).unwrap().unwrap();
+    let next = MetadataEntry::new_file(ID, "/generated.txt", 123, 2, "version-2");
+    assert!(
+        j.prepare_native_remote_update(&p, &next, |_, _| anyhow::bail!("changed digest"))
+            .is_err()
+    );
+    let update = j
+        .prepare_native_remote_update(&p, &next, |f, expected| {
+            anyhow::ensure!(digest(f)? == expected, "digest changed");
+            Ok(())
+        })
+        .unwrap();
+    assert!(j.snapshot(ID).unwrap().native_namespace_pending);
+    assert!(j.begin_upload(ID, digest).is_err());
+    assert_eq!(
+        j.native_projection_for_id(ID).unwrap().unwrap().state,
+        "updating"
+    );
+    let db = j.database().clone();
+    let cache = path.parent().unwrap().to_path_buf();
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    let recovered = j.native_remote_updates("generated-root").unwrap();
+    assert_eq!(recovered, vec![update.clone()]);
+    let physical = twodrive_core::NativeFileIdentity {
+        volume_serial: 7,
+        file_id: 9,
+    };
+    j.complete_native_remote_update(&update, physical).unwrap();
+    let record = db.get_by_remote_id(ID).unwrap().unwrap();
+    assert_eq!(record.metadata.etag, "version-2");
+    assert_eq!(record.metadata.size, 123);
+    assert!(record.cache_path.is_none());
+    assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+    assert!(!db.remove_unreferenced_cache(&path).unwrap());
+    assert_eq!(
+        j.native_projection_for_id(ID).unwrap().unwrap().state,
+        "published"
+    );
+    assert!(
+        j.native_remote_updates("generated-root")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn remote_removal_cannot_retire_dirty_bytes_or_lose_the_retained_revision() {
+    let (_temp, j, path) = remote_fixture(b"remote-removal-tag");
+    let p = j.native_projection_for_id(ID).unwrap().unwrap();
+    let reader = j.open_read(ID).unwrap();
+    assert!(j.prepare_native_remote_removal(&p, |_, _| Ok(())).is_err());
+    drop(reader);
+    let removal = j
+        .prepare_native_remote_removal(&p, |f, expected| {
+            anyhow::ensure!(digest(f)? == expected, "digest changed");
+            Ok(())
+        })
+        .unwrap();
+    assert!(j.snapshot(ID).unwrap().native_namespace_pending);
+    assert!(j.begin_upload(ID, digest).is_err());
+    j.complete_native_remote_removal(&removal).unwrap();
+    assert!(j.database().get_by_remote_id(ID).unwrap().is_none());
+    assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+    assert!(!j.database().remove_unreferenced_cache(&path).unwrap());
+    assert!(
+        j.native_remote_removals("generated-root")
+            .unwrap()
+            .is_empty()
+    );
+
+    let (_temp2, dirty, _) = remote_fixture(b"dirty-remote-tag");
+    let p = dirty.native_projection_for_id(ID).unwrap().unwrap();
+    edit(&dirty);
+    assert!(
+        dirty
+            .prepare_native_remote_removal(&p, |_, _| Ok(()))
+            .is_err()
+    );
+    assert!(
+        dirty
+            .prepare_native_remote_update(
+                &p,
+                &MetadataEntry::new_file(ID, "/generated.txt", 10, 2, "version-2"),
+                |_, _| Ok(())
+            )
+            .is_err()
     );
 }

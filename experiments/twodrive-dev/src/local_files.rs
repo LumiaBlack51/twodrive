@@ -21,7 +21,187 @@ pub struct LocalFileBridge {
 }
 #[cfg(all(test, windows, feature = "native-test-hooks"))]
 thread_local! {pub(crate) static INTERRUPT_BACKUP_AFTER_REVERT:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(all(test, windows, feature = "native-test-hooks"))]
+thread_local! {pub(crate) static INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(all(test, windows, feature = "native-test-hooks"))]
+thread_local! {pub(crate) static INTERRUPT_REMOTE_AFTER_RENAME:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(all(test, windows, feature = "native-test-hooks"))]
+thread_local! {pub(crate) static INTERRUPT_REMOTE_AFTER_REMOVAL:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
 impl LocalFileBridge {
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub(crate) fn apply_native_remote_removal(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        expected: &twodrive_core::NativeProjection,
+        pending: Option<twodrive_core::NativeRemoteRemoval>,
+    ) -> anyhow::Result<()> {
+        let relative: std::path::PathBuf = expected
+            .path
+            .strip_prefix('/')
+            .context("remote removal path unrooted")?
+            .split('/')
+            .collect();
+        if let Some(removal) = pending.as_ref()
+            && !owner.entry_exists(&relative).map_err(anyhow::Error::msg)?
+        {
+            return self.journal.complete_native_remote_removal(removal);
+        }
+        let physical = twodrive_core::NativeFileIdentity {
+            volume_serial: expected
+                .volume_serial
+                .context("remote removal volume missing")?,
+            file_id: u64::from_str_radix(
+                expected
+                    .native_file_id
+                    .as_deref()
+                    .context("remote removal identity missing")?,
+                16,
+            )?,
+        };
+        owner
+            .with_remote_change(
+                &relative,
+                &relative,
+                &expected.tag,
+                physical,
+                expected.directory,
+                |capture, _| {
+                    let observed = capture.inspect_metadata()?;
+                    if !observed.os_in_sync
+                        || observed.modified_bytes != 0
+                        || observed.logical_size != expected.size
+                    {
+                        return Err("remote deletion preserves local native changes".into());
+                    }
+                    let removal = if let Some(removal) = pending {
+                        removal
+                    } else {
+                        self.journal
+                            .prepare_native_remote_removal(expected, |file, hash| {
+                                ensure!(
+                                    digest_file(file)? == hash,
+                                    "private bytes changed before remote removal"
+                                );
+                                Ok(())
+                            })
+                            .map_err(|e| e.to_string())?
+                    };
+                    capture.remove_remote_deleted()?;
+                    #[cfg(all(test, feature = "native-test-hooks"))]
+                    if INTERRUPT_REMOTE_AFTER_REMOVAL.with(|flag| flag.replace(false)) {
+                        return Err("generated interruption after native remote deletion".into());
+                    }
+                    self.journal
+                        .complete_native_remote_removal(&removal)
+                        .map_err(|e| e.to_string())
+                },
+            )
+            .map_err(anyhow::Error::msg)
+    }
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub(crate) fn apply_native_remote_version(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        expected: &twodrive_core::NativeProjection,
+        next: &MetadataEntry,
+        pending: Option<twodrive_core::NativeRemoteUpdate>,
+    ) -> anyhow::Result<()> {
+        let relative: std::path::PathBuf = expected
+            .path
+            .strip_prefix('/')
+            .context("remote path must be rooted")?
+            .split('/')
+            .collect();
+        let physical = twodrive_core::NativeFileIdentity {
+            volume_serial: expected
+                .volume_serial
+                .context("remote native volume missing")?,
+            file_id: u64::from_str_radix(
+                expected
+                    .native_file_id
+                    .as_deref()
+                    .context("remote native physical identity missing")?,
+                16,
+            )?,
+        };
+        let target: std::path::PathBuf = next
+            .path
+            .strip_prefix('/')
+            .context("remote destination must be rooted")?
+            .split('/')
+            .collect();
+        let actual = if pending.is_some() && expected.path != next.path {
+            let located = owner
+                .locate_file_id(physical.volume_serial, physical.file_id)
+                .map_err(anyhow::Error::msg)?
+                .context("remote rename recovery identity missing")?;
+            located
+                .strip_prefix(owner.root())
+                .context("remote rename recovery left root")?
+                .to_path_buf()
+        } else {
+            relative
+        };
+        owner
+            .with_remote_change(
+                &actual,
+                &target,
+                &expected.tag,
+                physical,
+                expected.directory,
+                |capture, rename| {
+                    let observed = capture.inspect_metadata()?;
+                    let stamp = capture
+                        .modified_time()?
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|e| e.to_string())?
+                        .as_secs() as i64;
+                    let resumed_rename = pending.is_some()
+                        && expected.path != next.path
+                        && actual == target
+                        && (stamp == expected.modified_unix || stamp == next.modified_unix)
+                        && (observed.logical_size == expected.size
+                            || observed.logical_size == next.size);
+                    if (!observed.os_in_sync && !resumed_rename) || observed.modified_bytes != 0 {
+                        return Err("remote update preserves native edits".into());
+                    }
+                    if pending.is_none() && observed.logical_size != expected.size {
+                        return Err("remote update native size changed".into());
+                    }
+                    let update = if let Some(update) = pending {
+                        update
+                    } else {
+                        self.journal
+                            .prepare_native_remote_update(expected, next, |file, digest| {
+                                ensure!(
+                                    digest_file(file)? == digest,
+                                    "old private version changed before remote update"
+                                );
+                                Ok(())
+                            })
+                            .map_err(|e| e.to_string())?
+                    };
+                    rename()?;
+                    #[cfg(all(test, feature = "native-test-hooks"))]
+                    if INTERRUPT_REMOTE_AFTER_RENAME.with(|flag| flag.replace(false)) {
+                        return Err("generated interruption after remote owned rename".into());
+                    }
+                    capture.update_remote_version(
+                        next.size,
+                        next.modified_unix,
+                        actual != target || resumed_rename,
+                    )?;
+                    #[cfg(all(test, feature = "native-test-hooks"))]
+                    if INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|flag| flag.replace(false)) {
+                        return Err("generated interruption after native remote update".into());
+                    }
+                    self.journal
+                        .complete_native_remote_update(&update, physical)
+                        .map_err(|e| e.to_string())
+                },
+            )
+            .map_err(anyhow::Error::msg)
+    }
     #[cfg(all(windows, feature = "native-local-fixture"))]
     #[cfg(test)]
     pub(crate) fn generated_fixture(
@@ -139,6 +319,7 @@ impl LocalFileBridge {
                                 .as_ref()
                                 .ok_or("ordinary backup has no prepared owner")?
                                 .sequence,
+                            digest_file,
                         )
                         .map_err(|e| e.to_string());
                 };
@@ -177,6 +358,8 @@ impl LocalFileBridge {
                             .prepare_native_backup_copy(
                                 twodrive_core::NativeBackupCopy {
                                     sequence: 0,
+                                    root_file_id: owner.receipt().file_id,
+                                    history_through: 0,
                                     source: source.clone(),
                                     path: backup_path,
                                     physical,
@@ -201,7 +384,7 @@ impl LocalFileBridge {
                         return Err("generated interruption after backup revert".into());
                     }
                     self.journal
-                        .complete_native_backup_copy(prepared.sequence)
+                        .complete_native_backup_copy(prepared.sequence, digest_file)
                         .map_err(|e| e.to_string())
                 })
             })

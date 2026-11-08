@@ -25,6 +25,9 @@ pub use native_deletes::NativeDeleteIntent;
 #[path = "native_backups.rs"]
 mod native_backups;
 pub use native_backups::NativeBackupCopy;
+#[path = "native_remote.rs"]
+mod native_remote;
+pub use native_remote::{NativeRemoteRemoval, NativeRemoteUpdate};
 #[path = "native_projection.rs"]
 mod projection;
 pub use projection::{NativeCaptureBinding, NativeFileIdentity, NativeProjection};
@@ -144,8 +147,8 @@ impl CacheJournal {
         ensure!(
             schema
                 .as_deref()
-                .is_none_or(|value| matches!(value, "2" | "3" | "4" | "5"))
-                && (!existing || matches!(schema.as_deref(), Some("2" | "3" | "4" | "5"))),
+                .is_none_or(|value| matches!(value, "2" | "3" | "4" | "5" | "6"))
+                && (!existing || matches!(schema.as_deref(), Some("2" | "3" | "4" | "5" | "6"))),
             "unsupported private-cache journal schema"
         );
         for (key, expected) in [
@@ -181,7 +184,10 @@ impl CacheJournal {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS local_native_creations(local_id TEXT PRIMARY KEY,path TEXT NOT NULL,root_binding TEXT NOT NULL,native_binding TEXT NOT NULL,state TEXT NOT NULL,cloud_id TEXT);")?;
         tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_native_creation_path ON local_native_creations(root_binding,path);")?;
         projection::init(&tx)?;
-        tx.execute("INSERT INTO app_state(key,value) VALUES('local_cache_schema','5') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[])?;
+        if schema.as_deref() != Some("6") {
+            native_deletes::upgrade_intents(&tx)?;
+        }
+        tx.execute("INSERT INTO app_state(key,value) VALUES('local_cache_schema','6') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[])?;
         let old: Option<String> = tx
             .query_row(
                 "SELECT value FROM app_state WHERE key='local_cache_epoch'",
@@ -1351,7 +1357,7 @@ fn snapshot(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<CacheSnapsh
         f.pin_explicit=1 OR f.pin_origin_remote_id IS NOT NULL,f.cache_path IS NOT NULL,
         j.base_etag,j.acknowledged_digest,j.upload_digest,
         EXISTS(SELECT 1 FROM local_native_dirty n WHERE n.cloud_id=j.cloud_id OR n.cloud_id=j.local_id),
-        (EXISTS(SELECT 1 FROM native_event_log) OR EXISTS(SELECT 1 FROM local_native_backup_copies b WHERE b.state='prepared' AND json_extract(b.payload,'$.source.local_id')=j.local_id))
+        (EXISTS(SELECT 1 FROM native_event_log) OR EXISTS(SELECT 1 FROM local_native_backup_copies b WHERE b.state='prepared' AND json_extract(b.payload,'$.source.local_id')=j.local_id) OR EXISTS(SELECT 1 FROM local_native_remote_updates u WHERE u.state='prepared' AND u.local_id=j.local_id) OR EXISTS(SELECT 1 FROM local_native_remote_removals d WHERE d.state='prepared' AND d.local_id=j.local_id))
         FROM local_cache_journal j JOIN files f ON f.remote_id=j.local_id WHERE j.local_id=?1";
     let result = conn.query_row(row_sql, [id], |row| {
         let value: String = row.get(8)?;

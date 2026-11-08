@@ -47,13 +47,11 @@
     "production_native_mount_enabled": false,
     "complete": false,
     "remaining": [
-      "persistent account-backed desktop/worker composition",
-      "Office atomic replacement and size-change upload",
-      "native creation, rename, delete and parent/child ordering",
-      "remote delta application and conflict recovery",
-      "cache eviction and native in-sync status acknowledgement",
-      "installed COM/ribbon and real Office cloud end-to-end validation",
-      "original-folder preservation, rollback and actual cutover"
+      "installed continuous native runtime",
+      "native pin/free-space and cache handling",
+      "conflict recovery interface",
+      "registered COM/ribbon acceptance",
+      "source-resident data preservation and tested rollback/cutover"
     ],
     "personal_vault_scope": "user confirmed unused; excluded"
   },
@@ -84,7 +82,23 @@
     },
     "pinned_cache_mismatch_records_dirty_recovery": true,
     "known_folder_ci_timing_test_fixed": "Condvar requires two actual upload entrants; local daemon seven tests and strict Clippy passed",
-    "ancestor_recovery_ci_test_fixed": "fixed queued timestamps reproduce the old one-pass assumption; bounded passes retain exact completion, content, restart and parent-first assertions"
+    "ancestor_recovery_ci_test_fixed": "fixed queued timestamps reproduce the old one-pass assumption; bounded passes retain exact completion, content, restart and parent-first assertions",
+    "delete_and_backup_recovery_followup": {
+      "schema_4_actual_legacy_json": [
+        "prepared",
+        "dispatched",
+        "received"
+      ],
+      "native_restart": [
+        "completion_commit",
+        "reverted_backup_deleted",
+        "reverted_backup_moved_out"
+      ],
+      "unrelated_work_progresses": true,
+      "backup_event_future_and_unrelated_rows_preserved": true,
+      "cloud_backend_for_recovery_regressions": "mock",
+      "cache_schema": 6
+    }
   },
   "cleanup": {
     "office_fixture_processes_and_roots_cleaned": true,
@@ -539,5 +553,23 @@
     "retained_intent_ack_replay": true,
     "same_object_prior_rename_consumed": true,
     "native_rename_delete_prepare_restart_passed": true
+  },
+  "remote_native_changes": {
+    "actual_cfapi_generated_mock_restart": [
+      "native_update_before_sql",
+      "rename_before_sql",
+      "native_delete_before_sql"
+    ],
+    "local_edits_preserved": true,
+    "actual_personal_generated_scope": [
+      "create",
+      "changed_length_content",
+      "directory_subtree_move",
+      "file_and_directory_remote_delete"
+    ],
+    "native_full_byte_readback": true,
+    "generated_scopes_retired": true,
+    "user_documents_used": false,
+    "automatic_conflict_copy": false
   }
 }

@@ -18,6 +18,9 @@ use twodrive_local_files::{
 };
 #[path = "native_deletions.rs"]
 mod deletions;
+#[path = "native_remote.rs"]
+mod remote;
+pub use remote::RemoteProgress;
 #[path = "native_renames.rs"]
 mod renames;
 
@@ -1295,6 +1298,304 @@ mod tests {
     use twodrive_core::{Database, IndexedItem};
     use twodrive_local_files::fixtures::{Dataset, DownloadCounters};
     #[test]
+    #[ignore = "explicit NEW generated root; remote version update, native-before-SQL interruption and local edit preservation"]
+    fn remote_file_version_restarts_without_overwriting_local_edits() {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
+                .expect("explicit generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let state = tempfile::tempdir().unwrap();
+        let private = state.path().canonicalize().unwrap();
+        let cache = private.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let provider = crate::local_files::tests::MockProvider::new();
+        let initial = provider.list_all().unwrap().remove(0);
+        let plan = NamespacePlan::build(
+            &[
+                IndexedItem {
+                    id: "root".into(),
+                    parent: None,
+                    name: "root".into(),
+                    kind: "folder".into(),
+                    size: 0,
+                    etag: "v1".into(),
+                    modified: None,
+                    deleted: false,
+                },
+                IndexedItem {
+                    id: initial.remote_id.clone(),
+                    parent: Some("root".into()),
+                    name: initial.name.clone(),
+                    kind: "file".into(),
+                    size: initial.size,
+                    etag: initial.etag.clone(),
+                    modified: Some("1970-01-01T00:00:01Z".into()),
+                    deleted: false,
+                },
+            ],
+            "root",
+            100,
+            twodrive_local_files::names::ordinal_ignorecase_cmp,
+        )
+        .unwrap();
+        let db = Database::new(private.join("native.sqlite3"));
+        let open = || {
+            LocalFileBridge::open_bound(
+                db.clone(),
+                &cache,
+                Backend::new(provider.clone()),
+                "generated-remote-update",
+            )
+            .unwrap()
+        };
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = NativeCoordinator::create_new(
+            open(),
+            &plan,
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+        )
+        .unwrap();
+        let file = owner.root().join(&initial.name);
+        let before = std::fs::read(&file).unwrap();
+        let old_cache = db
+            .get_by_remote_id(&initial.remote_id)
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .unwrap();
+        provider.change(b"generated newer remote complete content");
+        let remote = provider.list_all().unwrap();
+        crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|flag| flag.set(true));
+        let interrupted = owner.apply_remote_metadata(&remote).unwrap();
+        let pending = owner
+            .bridge
+            .journal()
+            .native_remote_updates(owner.binding().unwrap())
+            .unwrap()
+            .len();
+        let receipt = owner.receipt().clone();
+        owner.disconnect().unwrap();
+        drop(owner);
+        owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        let resumed = owner.apply_remote_metadata(&remote).unwrap();
+        let after = std::fs::read(&file).unwrap();
+        use crate::provider::Provider;
+        let current = provider.get_metadata(&initial.remote_id).unwrap().unwrap();
+        provider
+            .move_bound(
+                &current,
+                &MetadataEntry::new_dir("root", "/", 0, ""),
+                "/remote-renamed.txt",
+            )
+            .unwrap();
+        crate::local_files::INTERRUPT_REMOTE_AFTER_RENAME.with(|flag| flag.set(true));
+        let rename_interrupted = owner
+            .apply_remote_metadata(&provider.list_all().unwrap())
+            .unwrap();
+        let receipt = owner.receipt().clone();
+        owner.disconnect().unwrap();
+        drop(owner);
+        owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        let moved = owner
+            .apply_remote_metadata(&provider.list_all().unwrap())
+            .unwrap();
+        let directory = provider
+            .create_directory_bound(
+                &MetadataEntry::new_dir("root", "/", 0, ""),
+                "/remote-folder",
+            )
+            .unwrap();
+        let directory_created = owner
+            .apply_remote_metadata(&[
+                directory.clone(),
+                provider.get_metadata(&initial.remote_id).unwrap().unwrap(),
+            ])
+            .unwrap();
+        let current = provider.get_metadata(&initial.remote_id).unwrap().unwrap();
+        let child = provider
+            .move_bound(&current, &directory, "/remote-folder/remote-renamed.txt")
+            .unwrap();
+        let child_moved = owner
+            .apply_remote_metadata(&[directory.clone(), child])
+            .unwrap();
+        let directory_new = provider
+            .move_bound(
+                &directory,
+                &MetadataEntry::new_dir("root", "/", 0, ""),
+                "/remote-folder-renamed",
+            )
+            .unwrap();
+        let directory_moved = owner
+            .apply_remote_metadata(&[
+                directory_new,
+                provider.get_metadata(&initial.remote_id).unwrap().unwrap(),
+            ])
+            .unwrap();
+        let renamed_file = owner
+            .root()
+            .join("remote-folder-renamed/remote-renamed.txt");
+        let renamed_bytes = std::fs::read(&renamed_file);
+        let old_preserved = std::fs::read(&old_cache).unwrap() == before
+            && !db.remove_unreferenced_cache(&old_cache).unwrap();
+        std::fs::write(&renamed_file, b"generated local user edit must survive").unwrap();
+        provider.change(b"generated concurrent remote change");
+        let concurrent = owner
+            .apply_remote_metadata(&provider.list_all().unwrap())
+            .unwrap();
+        let local = std::fs::read(&renamed_file).unwrap();
+        let cloud = provider.download(&initial.remote_id).unwrap();
+        let entries = owner.owner.inventory().unwrap();
+        for entry in entries.iter().filter(|e| !e.directory) {
+            assert!(entry.size < 1024);
+            std::fs::remove_file(owner.root().join(&entry.relative_path)).unwrap();
+        }
+        let mut dirs = entries.iter().filter(|e| e.directory).collect::<Vec<_>>();
+        dirs.sort_by_key(|e| std::cmp::Reverse(e.relative_path.components().count()));
+        for entry in dirs {
+            std::fs::remove_dir(owner.root().join(&entry.relative_path)).unwrap();
+        }
+        owner.retire_empty_generated_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        state.close().unwrap();
+        assert_eq!(interrupted.deferred, 1, "{interrupted:?}");
+        assert_eq!(pending, 1);
+        assert_eq!(resumed.deferred, 0, "{resumed:?}");
+        assert_eq!(after, b"generated newer remote complete content");
+        assert!(old_preserved);
+        assert_eq!(moved.deferred, 0, "{moved:?}");
+        assert_eq!(directory_created.deferred, 0, "{directory_created:?}");
+        assert_eq!(child_moved.deferred, 0, "{child_moved:?}");
+        assert_eq!(directory_moved.deferred, 0, "{directory_moved:?}");
+        assert_eq!(rename_interrupted.deferred, 1, "{rename_interrupted:?}");
+        assert!(moved.updated + moved.moved >= 1, "{moved:?}");
+        assert_eq!(
+            renamed_bytes.unwrap(),
+            b"generated newer remote complete content"
+        );
+        assert!(concurrent.deferred > 0);
+        assert_eq!(local, b"generated local user edit must survive");
+        assert_eq!(cloud, b"generated concurrent remote change");
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; confirmed remote deletion retains cached revision"]
+    fn remote_deleted_file_is_retired_with_recoverable_private_bytes() {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
+                .expect("explicit generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let state = tempfile::tempdir().unwrap();
+        let private = state.path().canonicalize().unwrap();
+        let cache = private.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let provider = crate::local_files::tests::MockProvider::new();
+        let item = provider.list_all().unwrap().remove(0);
+        let plan = NamespacePlan::build(
+            &[
+                IndexedItem {
+                    id: "root".into(),
+                    parent: None,
+                    name: "root".into(),
+                    kind: "folder".into(),
+                    size: 0,
+                    etag: "v1".into(),
+                    modified: None,
+                    deleted: false,
+                },
+                IndexedItem {
+                    id: item.remote_id.clone(),
+                    parent: Some("root".into()),
+                    name: item.name.clone(),
+                    kind: "file".into(),
+                    size: item.size,
+                    etag: item.etag.clone(),
+                    modified: Some("1970-01-01T00:00:01Z".into()),
+                    deleted: false,
+                },
+            ],
+            "root",
+            100,
+            twodrive_local_files::names::ordinal_ignorecase_cmp,
+        )
+        .unwrap();
+        let db = Database::new(private.join("native.sqlite3"));
+        let open = || {
+            LocalFileBridge::open_bound(
+                db.clone(),
+                &cache,
+                Backend::new(provider.clone()),
+                "generated-remote-removal",
+            )
+            .unwrap()
+        };
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = NativeCoordinator::create_new(
+            open(),
+            &plan,
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+        )
+        .unwrap();
+        let path = owner.root().join(&item.name);
+        let bytes = std::fs::read(&path).unwrap();
+        let archived = db
+            .get_by_remote_id(&item.remote_id)
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .unwrap();
+        let premature = owner.apply_remote_removals(&HashSet::new()).unwrap();
+        use crate::provider::Provider;
+        provider.delete_bound(&item).unwrap();
+        crate::local_files::INTERRUPT_REMOTE_AFTER_REMOVAL.with(|f| f.set(true));
+        let interrupted = owner.apply_remote_removals(&HashSet::new()).unwrap();
+        let receipt = owner.receipt().clone();
+        owner.disconnect().unwrap();
+        drop(owner);
+        owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        let progress = owner.apply_remote_removals(&HashSet::new()).unwrap();
+        let missing = !path.exists();
+        let retained = std::fs::read(&archived).unwrap();
+        let guarded = !db.remove_unreferenced_cache(&archived).unwrap();
+        if path.exists() {
+            std::fs::remove_file(path).unwrap();
+        }
+        owner.retire_empty_generated_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        state.close().unwrap();
+        assert_eq!(premature.removed, 0);
+        assert!(premature.deferred > 0);
+        assert_eq!(interrupted.deferred, 1, "{interrupted:?}");
+        assert_eq!(progress.removed, 1, "{progress:?}");
+        assert_eq!(progress.deferred, 0, "{progress:?}");
+        assert!(missing && guarded);
+        assert_eq!(retained, bytes);
+    }
+    #[test]
     #[ignore = "explicit NEW generated root; resume a legacy-owned TMP creation after a definite paused upload"]
     fn owned_artifact_creation_resumes_after_restart() {
         artifact_creation_recovery(true);
@@ -1835,7 +2136,10 @@ mod tests {
             b"generated atomic replacement with a new physical identity",
         )
         .unwrap();
-        if std::env::var_os("TWODRIVE_ATOMIC_CHILD_REPLACEFILE").is_some() {
+        if std::env::var("TWODRIVE_ATOMIC_CHILD_RENAME_BACKUP").as_deref() == Ok("1") {
+            std::fs::rename(root.join(&leaf), root.join("generated-backup.wbk")).unwrap();
+            std::fs::rename(temporary, root.join(&leaf)).unwrap();
+        } else if std::env::var_os("TWODRIVE_ATOMIC_CHILD_REPLACEFILE").is_some() {
             use std::os::windows::ffi::OsStrExt;
             #[link(name = "kernel32")]
             unsafe extern "system" {
@@ -1879,14 +2183,29 @@ mod tests {
     #[test]
     #[ignore = "explicit NEW generated root; inspect actual ReplaceFileW target/backup identities"]
     fn replacefile_backup_identity_probe() {
-        replacefile_backup_case(false);
+        replacefile_backup_case(0);
     }
     #[test]
     #[ignore = "explicit NEW generated root; restart after backup revert before durable completion"]
     fn replacefile_backup_restarts_after_native_revert() {
-        replacefile_backup_case(true);
+        replacefile_backup_case(1);
     }
-    fn replacefile_backup_case(interrupt: bool) {
+    #[test]
+    #[ignore = "explicit NEW generated root; external rename backup, completion/ACK transaction and restart"]
+    fn backup_completion_restart_consumes_only_retained_history() {
+        replacefile_backup_case(2);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; reverted backup removed before restart"]
+    fn reverted_backup_removed_before_restart_keeps_target_progress() {
+        replacefile_backup_case(3);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; reverted backup moved outside before restart"]
+    fn reverted_backup_moved_out_before_restart_keeps_target_progress() {
+        replacefile_backup_case(4);
+    }
+    fn replacefile_backup_case(interrupt: u8) {
         let root = PathBuf::from(
             std::env::var_os("TWODRIVE_APPROVED_REPLACEFILE_ROOT")
                 .expect("explicit generated root"),
@@ -1969,6 +2288,10 @@ mod tests {
             .env("TWODRIVE_ATOMIC_CHILD_ROOT", coordinator.root())
             .env("TWODRIVE_ATOMIC_CHILD_LEAF", &metadata.name)
             .env("TWODRIVE_ATOMIC_CHILD_REPLACEFILE", "1")
+            .env(
+                "TWODRIVE_ATOMIC_CHILD_RENAME_BACKUP",
+                if interrupt == 2 { "1" } else { "" },
+            )
             .creation_flags(0x08000000)
             .output()
             .unwrap();
@@ -1990,12 +2313,28 @@ mod tests {
                 entry.identity.is_none()
             );
         }
-        if interrupt {
+        if interrupt == 2 {
+            renames::INTERRUPT_BACKUP_AFTER_COMPLETE.with(|flag| flag.set(true));
+        } else if interrupt > 0 {
             crate::local_files::INTERRUPT_BACKUP_AFTER_REVERT.with(|flag| flag.set(true));
         }
         let mut coordination = coordinator.synchronize_once();
-        if interrupt {
+        let archived_backup = coordinator
+            .bridge
+            .journal()
+            .native_backup_copies(coordinator.binding().unwrap())
+            .unwrap()
+            .first()
+            .map(|c| c.cache_path.clone());
+        if interrupt > 0 {
             assert!(coordination.is_err());
+            let backup_path = coordinator.root().join("generated-backup.wbk");
+            if interrupt == 3 {
+                std::fs::remove_file(&backup_path).unwrap();
+            }
+            if interrupt == 4 {
+                std::fs::rename(&backup_path, private.join("moved-backup.wbk")).unwrap();
+            }
             let receipt = coordinator.receipt().clone();
             coordinator.disconnect().unwrap();
             drop(coordinator);
@@ -2007,6 +2346,13 @@ mod tests {
             )
             .unwrap();
             coordinator = NativeCoordinator::resume(bridge, &root, &receipt).unwrap();
+            if interrupt >= 3 {
+                std::fs::write(
+                    coordinator.root().join("unrelated.txt"),
+                    b"generated unrelated progress",
+                )
+                .unwrap();
+            }
             coordination = coordinator.synchronize_once();
         }
         let current_bytes = provider.download(&metadata.remote_id).unwrap();
@@ -2019,7 +2365,33 @@ mod tests {
         let cloud = provider.get_metadata(&metadata.remote_id).unwrap().unwrap();
         let target = std::fs::read(&path);
         let backup = std::fs::read(coordinator.root().join("generated-backup.wbk"));
-        for entry in entries {
+        let retained_backup = coordinator
+            .bridge
+            .journal()
+            .database()
+            .get_by_remote_id(&metadata.remote_id)
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .clone()
+            .map(|p| std::fs::read(p).unwrap());
+        let old_backup_retained = archived_backup.map(|p| std::fs::read(p).unwrap());
+        let unrelated = provider
+            .get_metadata_by_path("/unrelated.txt")
+            .unwrap()
+            .map(|m| provider.download(&m.remote_id).unwrap());
+        let copies = coordinator
+            .bridge
+            .journal()
+            .native_backup_copies(coordinator.binding().unwrap())
+            .unwrap();
+        let namespace = coordinator
+            .bridge
+            .journal()
+            .database()
+            .pending_native_events(coordinator.binding().unwrap(), 1000)
+            .unwrap();
+        for entry in coordinator.owner.inventory().unwrap() {
             std::fs::remove_file(coordinator.root().join(entry.relative_path)).unwrap();
         }
         coordinator.retire_empty_generated_fixture().unwrap();
@@ -2031,9 +2403,23 @@ mod tests {
             target.unwrap(),
             b"generated atomic replacement with a new physical identity"
         );
-        assert_eq!(backup.unwrap(), original);
-        assert_ne!(backup_remote.unwrap().remote_id, metadata.remote_id);
-        assert_eq!(backup_cloud_bytes.unwrap(), original);
+        if interrupt < 3 {
+            assert_eq!(backup.unwrap(), original);
+            assert_ne!(backup_remote.unwrap().remote_id, metadata.remote_id);
+            assert_eq!(backup_cloud_bytes.unwrap(), original);
+        } else {
+            assert!(backup.is_err() && backup_remote.is_none());
+            assert_eq!(old_backup_retained.unwrap(), original);
+            assert_eq!(unrelated.unwrap(), b"generated unrelated progress");
+            assert_eq!(
+                retained_backup.unwrap(),
+                b"generated atomic replacement with a new physical identity"
+            );
+        }
+        assert!(
+            copies.is_empty() && namespace.is_empty(),
+            "{coordination:?}"
+        );
         assert_eq!(
             current_bytes, b"generated atomic replacement with a new physical identity",
             "{coordination:?}"

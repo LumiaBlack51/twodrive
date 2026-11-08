@@ -629,6 +629,81 @@ impl PersistentSession {
         lease.inspect()?;
         action(Some(&NativeCapture(&lease)))
     }
+    pub fn with_remote_change<T>(
+        &self,
+        from: &Path,
+        to: &Path,
+        identity: &[u8],
+        physical: twodrive_core::NativeFileIdentity,
+        directory: bool,
+        action: impl FnOnce(&NativeCapture<'_>, &dyn Fn() -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
+        let (old_parent, _old_guards) = self.guard_relative_parent(from)?;
+        let (_, new_guards) = self.guard_relative_parent(to)?;
+        let _target_parent = new_guards
+            .last()
+            .map(|h| h.0)
+            .or_else(|| self.guard._handles.last().map(|h| h.0))
+            .ok_or("remote destination parent missing")?;
+        let mut lease = RetainedPlaceholder::open_node(
+            &old_parent.join(from.file_name().ok_or("remote source leaf missing")?),
+            identity,
+            0,
+            directory,
+        )?;
+        let (volume, id, kind) = file_binding(lease.handle.0)?;
+        let (root_id, root_identity) = root_identity(lease.handle.0)?;
+        if volume != physical.volume_serial
+            || id != physical.file_id
+            || kind != directory
+            || root_id != self.receipt.file_id
+            || root_identity != self.receipt.identity
+        {
+            return Err("remote rename source identity changed".into());
+        }
+        if !directory {
+            let mut size = 0;
+            if unsafe { GetFileSizeEx(lease.handle.0, &mut size) } == 0 || size < 0 {
+                return Err("remote source length unavailable".into());
+            }
+            lease.size = usize::try_from(size).map_err(|_| "remote size overflow")?;
+        }
+        lease.inspect()?;
+        let rename = || {
+            if from == to {
+                return Ok(());
+            }
+            let leaf = self
+                .root()
+                .join(to)
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>();
+            let offset = offset_of!(FILE_RENAME_INFO, FileName);
+            let mut buffer = vec![0u64; (offset + (leaf.len() + 1) * 2).div_ceil(8)];
+            let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+            unsafe {
+                (*info).RootDirectory = ptr::null_mut();
+                (*info).FileNameLength = (leaf.len() * 2) as u32;
+                ptr::copy_nonoverlapping(leaf.as_ptr(), (*info).FileName.as_mut_ptr(), leaf.len());
+            }
+            if unsafe {
+                SetFileInformationByHandle(
+                    lease.handle.0,
+                    FileRenameInfo,
+                    info.cast(),
+                    (offset + (leaf.len() + 1) * 2) as u32,
+                )
+            } == 0
+            {
+                return Err(format!("remote owned rename: {}", unsafe {
+                    GetLastError()
+                }));
+            }
+            Ok(())
+        };
+        action(&NativeCapture(&lease), &rename)
+    }
 
     pub fn with_replacement_capture_staged<T>(
         &self,

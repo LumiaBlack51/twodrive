@@ -403,7 +403,7 @@ This personal account omits directory cTag even with explicit selection: eTag
 fallback protects the directory object and does not claim an atomic subtree
 snapshot. Already observed nonempty directories are retained. Generated actual
 Windows and personal-cloud two-level directory recycling passed.
-Remote delta and pin/eviction consumers remain incomplete;
+Remote delta application is now tested below; pin/eviction consumers remain incomplete;
 production takeover is not enabled by these tests.
 
 The coordinator integration exposed a shutdown tail: native disconnect returned
@@ -465,8 +465,45 @@ reverting the old backup's cloud tag, and the obsolete physical binding is clear
 until final target acknowledgement. An interruption after native revert is
 recoverable; independent backup bytes remain protected from pruning. Actual
 personal-cloud generated validation preserves target ID/path and backup bytes.
-Private cache schema 5 prevents older owners from bypassing these decisions.
+Private cache schema 6 prevents older owners from bypassing these decisions.
 Deletion preparation consumes its covered same-object history in the same FULL
 transaction; retained decisions can replay legacy ACK boundaries. A rename/delete
 batch with a prepare interruption passed actual native restart validation. See
 TD-20261108-40 through -42 for evidence and service limits.
+
+
+## Remote changes and recovery, current candidate
+
+A pinned-account delta refresh stages and commits cloud metadata before applying
+it to the native tree. Existing unchanged entries are skipped from an in-memory
+projection map. New entries are published parent-first with retained preparation
+claims. Version changes fence hydration before native update/dehydration; complete
+old private versions retain independent journal references. Owned-handle renames
+update native and shared Linux subtree metadata with restart recovery by physical
+identity. Remote removals require an additional fresh bound-object lookup proving
+absence, settle bottom-up, and retain cached versions for recovery. Native dirty
+bytes, active readers/writers and unresolved local namespace work veto replacement.
+Conflicts currently defer while keeping both sides; automatic conflict-copy
+publication and a recovery interface remain unfinished.
+
+Actual Windows generated tests passed native-update-before-SQL, rename-before-SQL
+and deletion-before-SQL interruptions followed by owner restart. Directory moves
+retain child paths and bytes; concurrent native edits are preserved. A separate
+actual personal OneDrive generated scope passed remote creation, changed-length
+content, directory/subtree move, and file/directory removal, with native full-byte
+readback. It also reran local creation, retained-backup replacement, moves and
+conditional recycling, then retired its generated scope. These are not tests of
+remote changes against existing personal documents.
+
+Cache schema 6 upgrades accepted older delete JSON in the same transaction before
+recovery CAS; prepared/dispatched/received schema-4 records all resume. Backup
+completion atomically consumes only its recorded same-root/object historical
+boundary. Actual restart regressions pass after completion, after deleting the
+reverted ordinary backup, and after moving it outside the root. Both private
+revisions remain owned and unrelated new work progresses; no cloud deletion is
+inferred from a missing backup. See TD-20261108-43 through -46.
+
+Still required before original-folder cutover: installed continuous runtime,
+native pin/free-space and cache handling, conflict recovery interface, registered
+Office acceptance, source-resident data preservation and a tested rollback/cutover.
+The Microsoft client and original folder are retained.

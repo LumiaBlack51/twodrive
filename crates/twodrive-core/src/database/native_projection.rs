@@ -47,6 +47,10 @@ pub(super) fn init(conn: &rusqlite::Connection) -> anyhow::Result<()> {
     )?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS local_native_backup_copies(sequence INTEGER PRIMARY KEY AUTOINCREMENT,root_binding TEXT NOT NULL,volume_serial INTEGER NOT NULL,file_id TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_native_pending_backup ON local_native_backup_copies(root_binding,volume_serial,file_id) WHERE state='prepared';")?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS local_native_remote_updates(sequence INTEGER PRIMARY KEY AUTOINCREMENT,local_id TEXT NOT NULL,root_binding TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_native_remote_pending ON local_native_remote_updates(local_id) WHERE state='prepared';")?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS local_native_remote_removals(sequence INTEGER PRIMARY KEY AUTOINCREMENT,local_id TEXT NOT NULL,root_binding TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_native_remote_remove_pending ON local_native_remote_removals(local_id) WHERE state='prepared';")?;
     Ok(())
 }
 pub(super) fn record_capture(
@@ -152,6 +156,8 @@ impl CacheJournal {
         }
         Ok(journal_connection(&self.0.db)?.query_row("SELECT EXISTS(SELECT 1 FROM local_native_moves WHERE state<>'applied')
             OR EXISTS(SELECT 1 FROM local_native_backup_copies WHERE state='prepared')
+            OR EXISTS(SELECT 1 FROM local_native_remote_updates WHERE state='prepared')
+            OR EXISTS(SELECT 1 FROM local_native_remote_removals WHERE state='prepared')
             OR EXISTS(SELECT 1 FROM local_native_deletes WHERE state NOT IN ('applied','cancelled'))
             OR EXISTS(SELECT 1 FROM pending_metadata_operations) OR EXISTS(SELECT 1 FROM pending_deletes)
             OR EXISTS(SELECT 1 FROM local_native_projections WHERE state<>'published')
