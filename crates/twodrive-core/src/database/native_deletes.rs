@@ -144,6 +144,80 @@ impl CacheJournal {
         Ok(())
     }
 
+    /// The adapter has freshly observed no surviving/replacement native object.
+    /// Retain late kernel hints as inactive audit evidence after the exact
+    /// cloud retirement, without authorizing another cloud operation.
+    pub fn archive_retired_native_events(
+        &self,
+        intent: &NativeDeleteIntent,
+        decisions: &[(i64, String)],
+    ) -> anyhow::Result<()> {
+        proof(intent)?;
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = &intent.publication.local_id;
+        ensure!(tx.query_row("SELECT EXISTS(SELECT 1 FROM local_native_deletes WHERE local_id=?1 AND state='applied' AND intent=?2)",params![id,serde_json::to_string(intent)?],|r|r.get::<_,bool>(0))?,"retired native decision changed");
+        if let Some(live) = projection::get(&tx, id)? {
+            ensure!(
+                live.state == "published"
+                    && live.root_binding == intent.publication.root_binding
+                    && live.tag != intent.publication.tag
+                    && live.volume_serial.is_some()
+                    && live.native_file_id.is_some()
+                    && (live.volume_serial != Some(intent.physical.volume_serial)
+                        || live.native_file_id.as_deref()
+                            != Some(format!("{:016x}", intent.physical.file_id).as_str())),
+                "retired identity has a live owner"
+            );
+        } else {
+            // Re-imported clean cloud metadata may precede a new publication;
+            // it must not be starved by an old physical identity's hints.
+            ensure!(!has_journal_record(&tx,id)? && !tx.query_row("SELECT EXISTS(SELECT 1 FROM files WHERE remote_id=?1 AND state IN ('dirty','writing','uploading','conflict')) OR EXISTS(SELECT 1 FROM local_native_creations WHERE local_id=?1) OR EXISTS(SELECT 1 FROM local_native_captures WHERE local_id=?1)",[id],|r|r.get::<_,bool>(0))?,"retired identity has an unpublished local owner");
+        }
+        let archive = format!("native-deleted-archive-{}", intent.completion_sequence);
+        let raw:String=tx.query_row("SELECT record_json FROM local_native_deleted_archives WHERE archive_id=?1 AND local_id=?2",params![archive,id],|r|r.get(0))?;
+        let mut record: serde_json::Value = serde_json::from_str(&raw)?;
+        let root: serde_json::Value = serde_json::from_str(&intent.root_receipt)?;
+        let audit = record
+            .as_object_mut()
+            .context("invalid retired archive")?
+            .entry("post_retirement_events")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .context("invalid retired event audit")?;
+        for (sequence, payload) in decisions {
+            let e: serde_json::Value = serde_json::from_str(payload)?;
+            ensure!(
+                *sequence > intent.completion_sequence
+                    && e["schema_version"] == 1
+                    && e["root_file_id"] == root["file_id"]
+                    && e["volume_serial"] == root["volume_serial"]
+                    && e["file_id"].as_u64() == Some(intent.physical.file_id)
+                    && e["identity"] == serde_json::to_value(&intent.publication.tag)?
+                    && matches!(
+                        e["kind"].as_str(),
+                        Some(
+                            "rename_requested"
+                                | "rename_completed"
+                                | "delete_requested"
+                                | "delete_completed"
+                        )
+                    ),
+                "late event belongs to another native identity"
+            );
+            ensure!(
+                tx.execute(
+                    "DELETE FROM native_event_log WHERE binding=?1 AND sequence=?2 AND payload=?3",
+                    params![intent.publication.root_binding, sequence, payload]
+                )? == 1,
+                "late native event changed"
+            );
+            audit.push(serde_json::json!({"sequence":sequence,"event":e}));
+        }
+        tx.execute("UPDATE local_native_deleted_archives SET record_json=?2 WHERE archive_id=?1 AND record_json=?3",params![archive,record.to_string(),raw])?;
+        tx.commit()?;
+        Ok(())
+    }
     pub fn native_delete(&self, id: &str) -> anyhow::Result<Option<(NativeDeleteIntent, String)>> {
         let raw = journal_connection(&self.0.db)?
             .query_row(

@@ -1146,6 +1146,72 @@ fn native_delete_requires_kernel_proof_and_keeps_private_revisions_owned() {
     assert!(!journal.native_work_pending().unwrap());
     journal.apply_native_delete(ID).unwrap();
     assert_eq!(journal.native_deleted_archive_count().unwrap(), 1);
+    let (retired, state) = journal.native_delete(ID).unwrap().unwrap();
+    assert_eq!(state, "applied");
+    let mut late: serde_json::Value = serde_json::from_str(&retired.completion_payload).unwrap();
+    late["kind"] = "rename_requested".into();
+    late["request_key"] = 3.into();
+    let late = late.to_string();
+    let seq = db.append_native_event("generated-root", &late).unwrap();
+    let mut wrong = retired.clone();
+    wrong.physical.file_id += 1;
+    assert!(
+        journal
+            .archive_retired_native_events(&wrong, &[(seq, late.clone())])
+            .is_err()
+    );
+    journal
+        .archive_retired_native_events(&retired, &[(seq, late)])
+        .unwrap();
+    assert!(
+        db.pending_native_events("generated-root", 100)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fs::read(&path).unwrap(), EDITED);
+    assert!(!db.remove_unreferenced_cache(&path).unwrap());
+    let late = event("delete_requested");
+    let seq = db.append_native_event("generated-root", &late).unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(
+        ID,
+        "/new-live.txt",
+        0,
+        1,
+        "new-version",
+    ))
+    .unwrap();
+    db.mark_state(ID, FileState::Dirty).unwrap();
+    assert!(
+        journal
+            .archive_retired_native_events(&retired, &[(seq, late.clone())])
+            .is_err(),
+        "a re-created logical owner must veto retired ACK"
+    );
+    db.mark_online_only(ID).unwrap();
+    journal
+        .archive_retired_native_events(&retired, &[(seq, late)])
+        .unwrap();
+    let tag = b"new-live-restored-private-tag";
+    journal
+        .prepare_native_projection(ID, "generated-root", tag)
+        .unwrap();
+    journal
+        .complete_native_projection(ID, "generated-root", tag, 7, 99)
+        .unwrap();
+    let late = event("rename_requested");
+    let seq = db.append_native_event("generated-root", &late).unwrap();
+    journal
+        .archive_retired_native_events(&retired, &[(seq, late)])
+        .unwrap();
+    assert_eq!(
+        journal
+            .native_projection_for_id(ID)
+            .unwrap()
+            .unwrap()
+            .native_file_id
+            .as_deref(),
+        Some("0000000000000063")
+    );
 }
 
 #[test]

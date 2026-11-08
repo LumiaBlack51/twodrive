@@ -638,3 +638,32 @@ replicas now total 2,071 files / 759,185,275 bytes, with no source mutation or c
 content upload during import. The user requires school sync to remain running.
 The original folder and both Microsoft clients are still unchanged; normal
 startup remains disabled, installed Office acceptance and cutover remain pending.
+
+
+## Actual personal cutover, 2026-11-09
+
+After final source preservation and clean verification, only the displayed
+personal Microsoft account was unlinked. School-account registry metadata and
+the existing school process remained unchanged. The original directory was
+retained in a short sibling rollback directory; its exact path is private local
+evidence. This provider's sealed root moved to the original personal pathname
+and passed its complete inventory. Per-user logon runtime is enabled and running.
+
+An independent generated 8 KiB file under the actual migrated root uploaded and
+received its conditional acknowledgement. Windows online-only intent released
+both native data (observed OnDiskDataSize=0) and private cache; reading through
+the same actual root fetched all cloud bytes with identical SHA-256 and in-sync
+state. The generated file and empty directory were recycled conditionally. Shell
+recycling exposed request-only notifications arriving after retirement; the fix
+retains exact retired-object hints in inactive audit history without authorizing
+further cloud changes. The actual three hints were archived, active events
+cleared, and runtime returned idle. See TD-20261109-01.
+
+The MS Office companion is installed against the actual native root. Three owned
+hidden, document-free host instances connected the registered add-in; no user
+document was opened or saved for deployment acceptance. The prior generated
+Word/Excel/PowerPoint timer/cloud checks remain separate evidence. Local timer
+saving is supported; strict cloud capture still defers while an editor retains
+incompatible handles. Conflict revisions remain retained/deferred rather than
+automatically publishing conflict copies. Rollback, auth and source replicas
+remain protected local state. Final updated-head CI and review are required.

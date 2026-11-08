@@ -51,7 +51,7 @@ impl NativeCoordinator {
                     .acknowledge_native_delete_history(&intent)?;
             }
         }
-        let events = db
+        let mut events = db
             .pending_native_events(&binding, 1000)?
             .into_iter()
             .map(|(sequence, payload)| {
@@ -65,6 +65,52 @@ impl NativeCoordinator {
                 Ok((sequence, payload, event))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        // Shell recycling can emit request-only callbacks after the matching
+        // conditional cloud deletion has already committed. They are not work
+        // for a live publication, but retain them in its private archive.
+        let mut retired = Vec::new();
+        let mut seen = HashSet::new();
+        for (_, _, event) in &events {
+            if seen.insert(event.identity.clone())
+                && let Some((intent, state)) = self
+                    .bridge
+                    .journal()
+                    .native_delete_for_tag(&binding, &event.identity)?
+                && state == "applied"
+            {
+                retired.push(intent);
+            }
+        }
+        if !retired.is_empty() {
+            let entries = self.observed_entries()?;
+            let mut archived = HashSet::new();
+            for intent in retired {
+                // A different new file at the old path is independent work.
+                // Only a surviving old physical/tagged entity vetoes archival.
+                if entries.iter().any(|e| {
+                    (e.volume_serial == intent.physical.volume_serial
+                        && e.file_id == intent.physical.file_id)
+                        || e.identity.as_deref() == Some(intent.publication.tag.as_slice())
+                }) {
+                    continue;
+                }
+                let decisions = events
+                    .iter()
+                    .filter(|(seq, _, e)| {
+                        *seq > intent.completion_sequence
+                            && e.identity == intent.publication.tag
+                            && e.file_id == intent.physical.file_id
+                            && e.volume_serial == intent.physical.volume_serial
+                    })
+                    .map(|(seq, payload, _)| (*seq, payload.clone()))
+                    .collect::<Vec<_>>();
+                self.bridge
+                    .journal()
+                    .archive_retired_native_events(&intent, &decisions)?;
+                archived.extend(decisions.iter().map(|(seq, _)| *seq));
+            }
+            events.retain(|(seq, _, _)| !archived.contains(seq));
+        }
         let existing = self.bridge.journal().native_pending_deletes()?;
         if !existing
             .iter()

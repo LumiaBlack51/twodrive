@@ -2103,6 +2103,11 @@ mod tests {
     fn rename_delete_source_timestamp_recovers_earlier_expired_lookup() {
         source_import_recovery_case(19);
     }
+    #[test]
+    #[ignore = "explicit NEW generated root; post-retirement kernel hints cannot starve later ordinary work"]
+    fn retired_delete_late_requests_are_archived_without_new_cloud_mutation() {
+        source_import_recovery_case(20);
+    }
     fn source_import_recovery_case(mode: u8) {
         use sha2::Digest;
         let root = PathBuf::from(
@@ -2341,7 +2346,7 @@ mod tests {
         } else {
             owner.resume_source_imports().unwrap()
         };
-        if matches!(mode, 5..=8 | 10 | 12 | 13 | 15 | 16 | 18 | 19) {
+        if matches!(mode, 5..=8 | 10 | 12 | 13 | 15 | 16 | 18 | 19 | 20) {
             if mode == 16 {
                 twodrive_local_files::native::test_release_intent(&path).unwrap();
             }
@@ -2519,7 +2524,7 @@ mod tests {
                 "lookup injection was not reached"
             );
         }
-        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13 | 15 | 16 | 18 | 19) {
+        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13 | 15 | 16 | 18 | 19 | 20) {
             let mut progress = owner.synchronize_once().unwrap();
             for _ in 0..20 {
                 if (matches!(mode, 5 | 10 | 12 | 13 | 15 | 16) && progress.renamed == 1)
@@ -2529,6 +2534,46 @@ mod tests {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 progress = owner.synchronize_once().unwrap();
+            }
+            if mode == 20 {
+                let (intent, state) = owner
+                    .bridge
+                    .journal()
+                    .native_delete(&item.remote_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(state, "applied");
+                for (kind, flags) in [("rename_requested", 2), ("delete_requested", 2)] {
+                    let mut e: serde_json::Value =
+                        serde_json::from_str(&intent.completion_payload).unwrap();
+                    e["kind"] = kind.into();
+                    e["flags"] = flags.into();
+                    e["request_key"] = 3.into();
+                    owner
+                        .bridge
+                        .journal()
+                        .database()
+                        .append_native_event(owner.binding().unwrap(), &e.to_string())
+                        .unwrap();
+                }
+                std::fs::write(root.join(&item.name), b"new work after retired hints").unwrap();
+                let next = owner.synchronize_once().unwrap();
+                assert_eq!(next.created, 1, "{next:?}");
+                assert!(
+                    owner
+                        .bridge
+                        .journal()
+                        .database()
+                        .pending_native_events(owner.binding().unwrap(), 1000)
+                        .unwrap()
+                        .is_empty()
+                );
+                let extra = provider.get_metadata_by_path(&item.path).unwrap().unwrap();
+                assert_eq!(
+                    provider.download(&extra.remote_id).unwrap(),
+                    b"new work after retired hints"
+                );
+                std::fs::remove_file(root.join(&item.name)).unwrap();
             }
             if matches!(mode, 10 | 12) {
                 owner.resume_source_imports().unwrap();
@@ -2633,7 +2678,9 @@ mod tests {
                 }
                 std::fs::remove_file(root.join("target-renamed.txt")).unwrap();
             } else {
-                assert!(provider.get_metadata_by_path(&item.path).unwrap().is_none());
+                if mode != 20 {
+                    assert!(provider.get_metadata_by_path(&item.path).unwrap().is_none());
+                }
                 assert!(db.get_by_remote_id(&item.remote_id).unwrap().is_none());
             }
             if matches!(mode, 18 | 19) {
