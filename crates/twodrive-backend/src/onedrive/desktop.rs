@@ -107,6 +107,25 @@ pub(crate) mod tests {
         (Sandbox(root), graph)
     }
     #[test]
+    fn metadata_root_uses_the_root_resource_without_an_empty_path_suffix() {
+        use crate::CloudBackend;
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (_sandbox, graph) = backend(&server);
+        let worker = std::thread::spawn(move || {
+            let request = server.recv().unwrap();
+            let path = request.url().to_string();
+            request
+                .respond(Response::from_string(
+                    r#"{"id":"actual-root","name":"root","folder":{},"eTag":"root-v1"}"#,
+                ))
+                .unwrap();
+            path
+        });
+        let metadata = graph.get_metadata_by_path("/").unwrap().unwrap();
+        assert_eq!(worker.join().unwrap(), "/v1.0/me/drive/root");
+        assert!(metadata.is_dir && metadata.path == "/" && metadata.remote_id == "actual-root");
+    }
+    #[test]
     fn shallow_directory_preserves_ids_versions_and_bounded_pagination() {
         let server = Server::http("127.0.0.1:0").unwrap();
         let (_sandbox, graph) = backend(&server);

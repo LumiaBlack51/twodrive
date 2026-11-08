@@ -26,6 +26,27 @@ pub fn validate_native_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(all(windows, feature = "fixture-probe"))]
+pub fn ordinal_ignorecase_cmp(a: &str, b: &str) -> Result<std::cmp::Ordering, String> {
+    let a = a.encode_utf16().collect::<Vec<_>>();
+    let b = b.encode_utf16().collect::<Vec<_>>();
+    let result = unsafe {
+        windows_sys::Win32::Globalization::CompareStringOrdinal(
+            a.as_ptr(),
+            i32::try_from(a.len()).map_err(|_| "native comparison length overflow")?,
+            b.as_ptr(),
+            i32::try_from(b.len()).map_err(|_| "native comparison length overflow")?,
+            1,
+        )
+    };
+    match result {
+        1 => Ok(std::cmp::Ordering::Less),
+        2 => Ok(std::cmp::Ordering::Equal),
+        3 => Ok(std::cmp::Ordering::Greater),
+        _ => Err("native name comparison unavailable".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

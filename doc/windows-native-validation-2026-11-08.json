@@ -338,5 +338,22 @@
     "old_superscript_device_alias_test_failed": true,
     "fixed_windows_linux_unit_test": true,
     "shared_by_native_publication": true
+  },
+  "native_namespace_plan": {
+    "verified_drive_root_id": true,
+    "account_verified_metadata_audit": true,
+    "planned_entries": 20158,
+    "parent_first": true,
+    "cycles_orphans_duplicates_bad_names_and_host_comparison_errors_refused": true,
+    "windows_ordinal_comparison": true,
+    "content_read": false,
+    "cloud_mutations": false,
+    "root_registered": false,
+    "catalogue_snapshot_only": true
+  },
+  "graph_root_metadata": {
+    "live_http_400_reproduced": true,
+    "old_http_url_regression_failed": true,
+    "fixed_live_metadata_plan_passed": true
   }
 }
