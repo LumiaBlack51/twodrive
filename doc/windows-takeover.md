@@ -298,3 +298,28 @@ accepted all 20,158 non-root entries with depth 19 and maximum complete length 2
 This is a plan for that snapshot, not fresh-delta reconciliation or publication.
 It also found and fixed the shared root metadata URL's empty root:/ suffix; see
 TD-20261108-26.
+
+
+Native publication now has durable Preparing/Published records containing a
+private opaque tag, account-owned root binding, cloud version and physical
+volume/file ID. Schema 4 upgrades 2/3; older owners refuse it. Changed baselines,
+pending native events and duplicate physical/tag claims cannot complete a
+publication. Windows/Linux journal regressions verify restart and these vetoes.
+
+BoundPublishedSource checks the kernel callback's registration bytes, root ID,
+volume, physical file ID and size against that durable publication before opening
+a reader. Context-free reads are refused. A generated actual CFAPI test hydrated
+the published file, rejected a second physical placeholder bearing its tag,
+authorized OS dehydration under the clean private-cache lease, and rehydrated
+after recreating both engine and native connection. Private cache remained
+retained; this does not establish automatic eviction or real-cloud transfer for
+this new bound source. Both generated registrations were retired.
+
+The source bridge's cloud-version comparison also now permits a preserved local
+mtime to differ from the server's timestamp when identity/ETag/path/size match.
+Its local metadata CAS still includes mtime. Old-code failure and generated
+regression are recorded in TD-20261108-27. The lightweight cache-contract suite
+now compiles the actual shared bridge on Linux as well as Windows.
+
+The writable bound-source coordinator, projection advancement after local edits,
+namespace consumer and final takeover remain unfinished.

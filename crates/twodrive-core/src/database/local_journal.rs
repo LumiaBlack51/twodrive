@@ -14,6 +14,9 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
+#[path = "native_projection.rs"]
+mod projection;
+pub use projection::NativeProjection;
 
 #[derive(Clone)]
 pub struct CacheJournal(Arc<Owner>);
@@ -127,8 +130,8 @@ impl CacheJournal {
         ensure!(
             schema
                 .as_deref()
-                .is_none_or(|value| value == "2" || value == "3")
-                && (!existing || matches!(schema.as_deref(), Some("2" | "3"))),
+                .is_none_or(|value| matches!(value, "2" | "3" | "4"))
+                && (!existing || matches!(schema.as_deref(), Some("2" | "3" | "4"))),
             "unsupported private-cache journal schema"
         );
         for (key, expected) in [
@@ -162,7 +165,8 @@ impl CacheJournal {
             "CREATE TABLE IF NOT EXISTS local_native_dirty (cloud_id TEXT PRIMARY KEY);",
         )?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS local_native_creations(local_id TEXT PRIMARY KEY,path TEXT NOT NULL,root_binding TEXT NOT NULL,native_binding TEXT NOT NULL,state TEXT NOT NULL,cloud_id TEXT);")?;
-        tx.execute("INSERT INTO app_state(key,value) VALUES('local_cache_schema','3') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[])?;
+        projection::init(&tx)?;
+        tx.execute("INSERT INTO app_state(key,value) VALUES('local_cache_schema','4') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[])?;
         let old: Option<String> = tx
             .query_row(
                 "SELECT value FROM app_state WHERE key='local_cache_epoch'",

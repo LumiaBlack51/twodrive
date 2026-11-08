@@ -1204,6 +1204,30 @@ fn published_reader_preserves_corruption_for_recovery_instead_of_hydrating_it() 
 }
 
 #[test]
+fn published_download_preserves_native_mtime_when_the_cloud_version_is_unchanged() {
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    let mut native = provider.get_metadata(OBJECT).unwrap().unwrap();
+    native.modified_unix = 424242;
+    f.db.upsert_metadata(&native).unwrap();
+    let published = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut reader = f.bridge.open_published_read(&published, &cancel).unwrap();
+    assert_eq!(
+        reader.read_range(0, INITIAL.len(), &cancel).unwrap(),
+        INITIAL
+    );
+    assert_eq!(
+        f.db.get_by_remote_id(OBJECT)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .modified_unix,
+        424242
+    );
+}
+
+#[test]
 fn paused_first_upload_never_calls_provider_and_remains_retryable_after_restart() {
     let provider = MockProvider::empty();
     let f = fixture(&provider);

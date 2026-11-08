@@ -263,7 +263,8 @@
     "schema": 3,
     "schema_2_upgrade": true,
     "generated_scopes_retired": true,
-    "production_worker_enabled": false
+    "production_worker_enabled": false,
+    "current_journal_schema": 4
   },
   "ordinary_directory_watch": {
     "actual_windows_create_write_rename_delete": true,
@@ -355,5 +356,25 @@
     "live_http_400_reproduced": true,
     "old_http_url_regression_failed": true,
     "fixed_live_metadata_plan_passed": true
+  },
+  "bound_native_publication": {
+    "schema": 4,
+    "upgrade_from_2_and_3": true,
+    "durable_preparing_and_published": true,
+    "physical_binding_and_unique_tag_required": true,
+    "changed_version_pending_event_and_duplicate_file_vetoes": true,
+    "windows_linux_journal_contracts": 24,
+    "actual_generated_cfapi_physical_duplicate_refused": true,
+    "os_dehydration_with_private_clean_lease_and_restart_rehydration": true,
+    "private_cache_retained": true,
+    "generated_scope_retired": true,
+    "real_cloud_for_bound_source": false,
+    "writable_coordinator_enabled": false
+  },
+  "native_preserved_mtime_download": {
+    "old_code_regression_failed": true,
+    "same_cloud_version_different_server_timestamp_allowed": true,
+    "native_timestamp_cas_retained": true,
+    "mock_data_only": true
   }
 }

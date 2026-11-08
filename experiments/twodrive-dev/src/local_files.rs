@@ -351,7 +351,7 @@ impl LocalFileBridge {
         let (id, generation) = if let Some(expected) = expected {
             ensure!(
                 expected.cloud_remote_id.as_deref() == Some(remote.remote_id.as_str())
-                    && same_version(&expected.metadata, &remote),
+                    && same_cloud_version(&expected.metadata, &remote),
                 "remote differs from published native version"
             );
             (
@@ -599,11 +599,10 @@ impl PublishedRead {
 }
 
 fn same_version(a: &MetadataEntry, b: &MetadataEntry) -> bool {
-    a.path == b.path
-        && a.etag == b.etag
-        && a.size == b.size
-        && a.modified_unix == b.modified_unix
-        && a.is_dir == b.is_dir
+    same_cloud_version(a, b) && a.modified_unix == b.modified_unix
+}
+fn same_cloud_version(a: &MetadataEntry, b: &MetadataEntry) -> bool {
+    a.path == b.path && a.etag == b.etag && a.size == b.size && a.is_dir == b.is_dir
 }
 
 pub(crate) fn digest_reader(reader: &mut impl Read) -> anyhow::Result<String> {

@@ -107,6 +107,121 @@ fn zero_call_rejection_preserves_newer_native_dirty_intent() {
 }
 
 #[test]
+fn native_publication_claims_survive_restart_and_require_the_same_root_version_and_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, _) = paths(temp.path());
+    db.init().unwrap();
+    let baseline = MetadataEntry::new_file(ID, "/published.txt", 8, 1, "v1");
+    db.upsert_metadata(&baseline).unwrap();
+    let binding = hash(b"generated-publication-provider");
+    let journal = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    let tag = b"generated-private-publication-nonce";
+    let prepared = journal
+        .prepare_native_projection(ID, "root-a", tag)
+        .unwrap();
+    assert_eq!(prepared.state, "preparing");
+    assert!(prepared.native_file_id.is_none());
+    assert!(
+        journal
+            .prepare_native_projection(ID, "root-b", tag)
+            .is_err()
+    );
+    assert!(
+        journal
+            .prepare_native_projection(ID, "root-a", b"different-private-publication-nonce")
+            .is_err()
+    );
+    drop(journal);
+    let journal = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    assert_eq!(
+        journal.native_projections("root-a").unwrap(),
+        vec![prepared.clone()]
+    );
+    assert!(journal.native_projections("root-b").unwrap().is_empty());
+    let mut changed = baseline.clone();
+    changed.etag = "v2".into();
+    db.upsert_metadata(&changed).unwrap();
+    assert!(
+        journal
+            .complete_native_projection(ID, "root-a", tag, 42, 123)
+            .is_err()
+    );
+    assert_eq!(
+        journal.native_projections("root-a").unwrap()[0].state,
+        "preparing"
+    );
+    db.upsert_metadata(&baseline).unwrap();
+    let sequence = db
+        .append_native_event("root-a", r#"{"kind":"rename"}"#)
+        .unwrap();
+    assert!(
+        journal
+            .complete_native_projection(ID, "root-a", tag, 42, 123)
+            .is_err()
+    );
+    db.acknowledge_native_events("root-a", sequence).unwrap();
+    journal
+        .complete_native_projection(ID, "root-a", tag, 42, 123)
+        .unwrap();
+    journal
+        .complete_native_projection(ID, "root-a", tag, 42, 123)
+        .unwrap();
+    assert!(
+        journal
+            .complete_native_projection(ID, "root-a", tag, 42, 456)
+            .is_err()
+    );
+    assert!(
+        journal
+            .complete_native_projection(ID, "root-b", tag, 42, 123)
+            .is_err()
+    );
+    let other = "other-cloud-object";
+    db.upsert_metadata(&MetadataEntry::new_file(other, "/other.txt", 8, 1, "v1"))
+        .unwrap();
+    assert!(
+        journal
+            .prepare_native_projection(other, "root-a", tag)
+            .is_err()
+    );
+    let other_tag = b"another-private-publication-nonce";
+    journal
+        .prepare_native_projection(other, "root-a", other_tag)
+        .unwrap();
+    assert!(
+        journal
+            .complete_native_projection(other, "root-a", other_tag, 42, 123)
+            .is_err()
+    );
+    assert_eq!(
+        journal
+            .native_projections("root-a")
+            .unwrap()
+            .iter()
+            .find(|p| p.local_id == other)
+            .unwrap()
+            .state,
+        "preparing"
+    );
+    journal.record_native_edit(ID).unwrap();
+    assert!(
+        journal
+            .complete_native_projection(ID, "root-a", tag, 42, 123)
+            .is_err()
+    );
+    assert_eq!(
+        journal
+            .native_projections("root-a")
+            .unwrap()
+            .iter()
+            .find(|p| p.local_id == ID)
+            .unwrap()
+            .tag,
+        tag
+    );
+}
+
+#[test]
 fn native_creation_claim_survives_restart_and_new_edits_veto_the_first_receipt() {
     let temp = tempfile::tempdir().unwrap();
     let (db, root, path) = paths(temp.path());
@@ -126,12 +241,12 @@ fn native_creation_claim_survives_restart_and_new_edits_veto_the_first_receipt()
     );
     drop(j);
     // Upgrade of old bound-only owners preserves their records; old binaries
-    // reject schema 3 instead of interpreting an empty cloud binding as an ID.
+    // reject newer schemas instead of misinterpreting their native bindings.
     db.set_state_value("local_cache_schema", "2").unwrap();
     let j = CacheJournal::open(db.clone(), &root, &binding).unwrap();
     assert_eq!(
         db.get_state_value("local_cache_schema").unwrap().as_deref(),
-        Some("3")
+        Some("4")
     );
     assert_eq!(j.native_creations().unwrap()[0].state, "preparing");
     fs::write(&path, EDITED).unwrap();

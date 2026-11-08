@@ -91,6 +91,14 @@ pub trait HydrationSource: Send + Sync {
     ) -> Result<Option<Box<dyn HydrationRead>>> {
         Ok(None)
     }
+    fn begin_native_read(
+        &self,
+        identity: &[u8],
+        _context: NativeReadContext<'_>,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<Box<dyn HydrationRead>>> {
+        self.begin_read(identity, cancelled)
+    }
     fn read_range(
         &self,
         identity: &[u8],
@@ -98,6 +106,15 @@ pub trait HydrationSource: Send + Sync {
         length: usize,
         cancelled: &AtomicBool,
     ) -> Result<Vec<u8>>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NativeReadContext<'a> {
+    pub root_identity: &'a [u8],
+    pub volume_serial: u32,
+    pub root_file_id: u64,
+    pub file_id: u64,
+    pub file_size: u64,
 }
 
 pub trait HydrationRead {
@@ -201,7 +218,32 @@ unsafe fn fetch_with_transfer(
         }
         // Register cancellation before any blocking provider download.
         let mut reader = match &source.engine {
-            Some(engine) => engine.begin_read(identity, &cancelled)?,
+            Some(engine) => {
+                if info.SyncRootIdentity.is_null()
+                    || info.SyncRootIdentityLength == 0
+                    || info.SyncRootIdentityLength > 4096
+                {
+                    return Err("invalid fetch root identity".into());
+                }
+                let root_identity = unsafe {
+                    std::slice::from_raw_parts(
+                        info.SyncRootIdentity.cast::<u8>(),
+                        info.SyncRootIdentityLength as usize,
+                    )
+                };
+                engine.begin_native_read(
+                    identity,
+                    NativeReadContext {
+                        root_identity,
+                        volume_serial: info.VolumeSerialNumber,
+                        root_file_id: info.SyncRootFileId as u64,
+                        file_id: info.FileId as u64,
+                        file_size: u64::try_from(info.FileSize)
+                            .map_err(|_| "negative native file size")?,
+                    },
+                    &cancelled,
+                )?
+            }
             None => None,
         };
         for start in (start..end).step_by(65536) {
