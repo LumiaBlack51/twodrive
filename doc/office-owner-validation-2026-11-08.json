@@ -211,5 +211,38 @@
     "private_minimal_state_and_verified_0_2_23_rollback_retained": true,
     "release_staging_and_one_off_scripts": "removed during final documentation preparation",
     "documentation_worktree": "remove after this documentation PR merges"
+  },
+  "post_release_ci_download_regression": {
+    "previous_documentation_head": "f0261209c6c65aab6bffcd82bedd5a795a71556d",
+    "failed_run": 42468819656,
+    "failed_job": 128694524994,
+    "failure": "historical package GET returned HTTP 504 after build",
+    "bounded_retry_added_to_ci_only": true,
+    "local_actual_curl_results": [
+      {
+        "case": "two 504 responses then 200",
+        "requests": 3,
+        "exit": 0,
+        "body_verified": true
+      },
+      {
+        "case": "persistent 504",
+        "requests": 4,
+        "exit": 22
+      },
+      {
+        "case": "404",
+        "requests": 1,
+        "exit": 22
+      },
+      {
+        "case": "previous flags on first 504",
+        "requests": 1,
+        "exit": 22
+      }
+    ],
+    "github_504_underlying_cause_confirmed": false,
+    "current_pr_head_checks_required_before_merge": true,
+    "release_assets_and_local_programs_unchanged": true
   }
 }
