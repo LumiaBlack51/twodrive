@@ -30,7 +30,7 @@ impl NativeCoordinator {
                 .pending_native_events(&binding, 1000)?;
             let receipt = serde_json::to_string(self.receipt())?;
             let mut cancelled = false;
-            let mut namespace_failed = false;
+            let mut namespace_failure = None;
             for (sequence, payload) in events {
                 let event: twodrive_local_files::native::persistent::NativeEvent =
                     serde_json::from_str(&payload)?;
@@ -50,15 +50,19 @@ impl NativeCoordinator {
                     }
                     Ok(false) => continue,
                     Err(error) => {
-                        progress.deferred += 1;
-                        progress.error =
-                            Some(twodrive_backend::diagnostics::safe_error(&error).to_string());
-                        namespace_failed = true;
-                        break;
+                        // A later exact completion can resolve this object's
+                        // earlier rename even when its file reference expired.
+                        namespace_failure = Some(error);
                     }
                 }
             }
-            if cancelled || namespace_failed {
+            if cancelled {
+                continue;
+            }
+            if let Some(error) = namespace_failure {
+                progress.deferred += 1;
+                progress.error =
+                    Some(twodrive_backend::diagnostics::safe_error(&error).to_string());
                 continue;
             }
             if let Err(error) = self.bridge.apply_native_remote_version(

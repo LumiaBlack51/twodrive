@@ -2098,6 +2098,11 @@ mod tests {
     fn deleted_source_timestamp_recovers_expired_identity_lookup() {
         source_import_recovery_case(18);
     }
+    #[test]
+    #[ignore = "explicit NEW generated root; earlier failed rename lookup cannot hide later delete completion"]
+    fn rename_delete_source_timestamp_recovers_earlier_expired_lookup() {
+        source_import_recovery_case(19);
+    }
     fn source_import_recovery_case(mode: u8) {
         use sha2::Digest;
         let root = PathBuf::from(
@@ -2336,12 +2341,14 @@ mod tests {
         } else {
             owner.resume_source_imports().unwrap()
         };
-        if matches!(mode, 5..=8 | 10 | 12 | 13 | 15 | 16 | 18) {
+        if matches!(mode, 5..=8 | 10 | 12 | 13 | 15 | 16 | 18 | 19) {
             if mode == 16 {
                 twodrive_local_files::native::test_release_intent(&path).unwrap();
             }
             use std::os::windows::process::CommandExt;
-            let code = if matches!(mode, 5 | 10 | 12 | 13 | 15 | 16) {
+            let code = if mode == 19 {
+                "[IO.File]::Move($env:TD_FROM,$env:TD_TO); [IO.File]::Delete($env:TD_TO)"
+            } else if matches!(mode, 5 | 10 | 12 | 13 | 15 | 16) {
                 "if ($env:TD_MODE -in '10','12','13') {[IO.Directory]::Move($env:TD_FROM,$env:TD_TO)} else {[IO.File]::Move($env:TD_FROM,$env:TD_TO)}"
             } else {
                 "[IO.File]::Delete($env:TD_FROM)"
@@ -2460,7 +2467,41 @@ mod tests {
             drop(owner);
             owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
         }
-        if mode == 18 {
+        if matches!(mode, 18 | 19) {
+            if mode == 19 {
+                use twodrive_local_files::native::persistent::{NativeEvent, NativeEventKind};
+                let tag = owner
+                    .bridge
+                    .journal()
+                    .native_projection_for_id(&item.remote_id)
+                    .unwrap()
+                    .unwrap()
+                    .tag;
+                let completed = owner
+                    .bridge
+                    .journal()
+                    .database()
+                    .pending_native_events(owner.binding().unwrap(), 1000)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(_, payload)| serde_json::from_str::<NativeEvent>(&payload).unwrap())
+                    .filter(|e| {
+                        e.identity == tag
+                            && matches!(
+                                e.kind,
+                                NativeEventKind::RenameCompleted | NativeEventKind::DeleteCompleted
+                            )
+                    })
+                    .map(|e| e.kind)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    completed,
+                    vec![
+                        NativeEventKind::RenameCompleted,
+                        NativeEventKind::DeleteCompleted
+                    ]
+                );
+            }
             source_imports::FAIL_NEXT_NAMESPACE_LOOKUP_87.with(|f| f.set(true));
             std::fs::write(
                 root.join("unrelated-after-delete.txt"),
@@ -2469,13 +2510,16 @@ mod tests {
             .unwrap();
         }
         let mut recovered = owner.resume_source_imports().unwrap();
-        if mode == 18 {
+        if matches!(mode, 18 | 19) {
+            assert_eq!(recovered.deferred, 0, "{recovered:?}");
+        }
+        if matches!(mode, 18 | 19) {
             assert!(
                 !source_imports::FAIL_NEXT_NAMESPACE_LOOKUP_87.with(|f| f.get()),
                 "lookup injection was not reached"
             );
         }
-        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13 | 15 | 16 | 18) {
+        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13 | 15 | 16 | 18 | 19) {
             let mut progress = owner.synchronize_once().unwrap();
             for _ in 0..20 {
                 if (matches!(mode, 5 | 10 | 12 | 13 | 15 | 16) && progress.renamed == 1)
@@ -2592,7 +2636,7 @@ mod tests {
                 assert!(provider.get_metadata_by_path(&item.path).unwrap().is_none());
                 assert!(db.get_by_remote_id(&item.remote_id).unwrap().is_none());
             }
-            if mode == 18 {
+            if matches!(mode, 18 | 19) {
                 let extra = provider
                     .get_metadata_by_path("/unrelated-after-delete.txt")
                     .unwrap()
