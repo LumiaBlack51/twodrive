@@ -243,6 +243,16 @@
     ],
     "github_504_underlying_cause_confirmed": false,
     "current_pr_head_checks_required_before_merge": true,
-    "release_assets_and_local_programs_unchanged": true
+    "release_assets_and_local_programs_unchanged": true,
+    "browser_route_retry_head": "7c350519bf220e5c0f2022635774738b545105ec",
+    "browser_route_retry_failed_job": 128696890580,
+    "browser_route_retry_requests": 4,
+    "browser_route_retry_exit": 22,
+    "api_asset_id": 642336465,
+    "api_asset_bytes": 6642824,
+    "api_asset_pinned_sha256": "a7000c3c7b8ae6913fd8bc145b5257eb0ff78729190b584641d12b9dd9362c5d",
+    "same_api_fixture_and_final_curl_locally_verified": true,
+    "api_fixture_expected_libc6_regression_observed": true,
+    "modified_body_rejected_by_pinned_sha256": true
   }
 }
