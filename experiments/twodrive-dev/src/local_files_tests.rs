@@ -27,6 +27,7 @@ pub(crate) struct MockProvider {
     extras: Arc<Mutex<std::collections::HashMap<String, Remote>>>,
     allow_extras: bool,
     folders: Arc<Mutex<Vec<MetadataEntry>>>,
+    removed_folders: Arc<Mutex<std::collections::HashSet<String>>>,
     remote: Arc<Mutex<Remote>>,
     mode: Arc<AtomicU8>,
     conditional: bool,
@@ -38,6 +39,7 @@ impl MockProvider {
             extras: Arc::default(),
             allow_extras: false,
             folders: Arc::default(),
+            removed_folders: Arc::default(),
             remote: Arc::new(Mutex::new(Remote {
                 path: REMOTE_PATH.into(),
                 present: true,
@@ -114,6 +116,9 @@ impl CloudBackend for MockProvider {
             .find(|folder| folder.remote_id == id)
         {
             return Ok(Some(folder.clone()));
+        }
+        if self.removed_folders.lock().unwrap().contains(id) {
+            return Ok(None);
         }
         ensure!(id == OBJECT, "opaque ID required, never a path");
         let remote = self.remote.lock().unwrap();
@@ -302,6 +307,10 @@ impl Provider for MockProvider {
                     "fixture directory not empty"
                 );
             }
+            self.removed_folders
+                .lock()
+                .unwrap()
+                .insert(entry.remote_id.clone());
             folders.remove(position);
             return Ok(());
         }

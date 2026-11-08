@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use twodrive_core::{CloudIdentity, MetadataEntry};
 
 impl GraphBackend {
-    fn namespace_request(
+    pub(super) fn namespace_request(
         &self,
         method: Method,
         url: &str,
@@ -50,7 +50,7 @@ impl GraphBackend {
 
     /// Bind every mutation to the explicitly verified account and drive. No
     /// path lookup is used to resolve a moving or replaced destination parent.
-    fn namespace_authority(
+    pub(super) fn namespace_authority(
         &self,
         identity: &CloudIdentity,
         check: &mut dyn FnMut() -> anyhow::Result<()>,
@@ -182,7 +182,7 @@ impl GraphBackend {
         )
     }
 
-    fn verify_namespace_drive(
+    pub(super) fn verify_namespace_drive(
         &self,
         value: &Value,
         identity: &CloudIdentity,
@@ -246,7 +246,7 @@ impl GraphBackend {
     }
 }
 
-fn namespace_receipt(
+pub(super) fn namespace_receipt(
     value: Value,
     id: Option<&str>,
     parent: &str,

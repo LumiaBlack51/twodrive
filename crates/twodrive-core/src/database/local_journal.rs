@@ -211,6 +211,9 @@ impl CacheJournal {
             dirty_intent=CASE WHEN writers>0 THEN 1 ELSE dirty_intent END,
             uncertain_upload=CASE WHEN upload_generation IS NOT NULL THEN 1 ELSE uncertain_upload END,
             readers=0,writers=0", [])?;
+        // Repair accepted legacy flag/state commit gaps before observations
+        // can be deduplicated. This does not invent a hydration claim.
+        super::pins::recompute_in(&tx, true)?;
         tx.commit()?;
         Ok(Self(Arc::new(Owner {
             db,

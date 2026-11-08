@@ -70,7 +70,8 @@ impl CacheJournal {
         } else {
             ensure!(
                 record.cache_path.is_none()
-                    && matches!(record.state, FileState::OnlineOnly | FileState::Cached),
+                    && (matches!(record.state, FileState::OnlineOnly | FileState::Cached)
+                        || (expected.directory && record.state == FileState::Pinned)),
                 "remote removal has local state"
             );
         }
@@ -235,7 +236,7 @@ impl CacheJournal {
             verify(&mut file, &state.acknowledged_digest)?;
             held = Some(file);
         } else {
-            ensure!((record.state==FileState::OnlineOnly || (record.state==FileState::Hydrating && record.effective_pinned()) || (expected.directory && record.state==FileState::Cached)) && record.cache_path.is_none()
+            ensure!((record.state==FileState::OnlineOnly || (record.state==FileState::Hydrating && record.effective_pinned()) || (expected.directory && matches!(record.state,FileState::Cached | FileState::Pinned))) && record.cache_path.is_none()
                 && !tx.query_row("SELECT EXISTS(SELECT 1 FROM local_native_dirty WHERE cloud_id=?1 OR cloud_id=?2)",params![expected.local_id,expected.cloud_id],|r|r.get::<_,bool>(0))?,"remote update has uncaptured local work");
         }
         ensure!(

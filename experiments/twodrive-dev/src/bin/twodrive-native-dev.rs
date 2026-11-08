@@ -22,6 +22,18 @@ mod enabled {
     }
     #[derive(Subcommand)]
     enum Command {
+        /// Verify a small sample of complete source data against service checksums.
+        SourceVerify {
+            #[arg(long)]
+            native_state: PathBuf,
+            #[arg(long,default_value_t=20,value_parser=clap::value_parser!(u64).range(1..=20))]
+            sample: u64,
+        },
+        /// Inspect the matched personal client's source metadata, without content reads.
+        SourceAudit {
+            #[arg(long)]
+            native_state: PathBuf,
+        },
         /// Continuously synchronize a previously verified, account-bound root.
         Run {
             #[arg(long)]
@@ -63,6 +75,40 @@ mod enabled {
     }
     pub fn run() -> anyhow::Result<()> {
         match Cli::parse().command {
+            Command::SourceVerify {
+                native_state,
+                sample,
+            } => {
+                let mut session = NativeSession::resume(&native_state)?;
+                let summary = session.verify_personal_source_sample(usize::try_from(sample)?)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"phase":"personal_source_checksum_sample","cloud_content_downloads":false,"source_mutations":false,"summary":summary})
+                );
+                session.coordinator.disconnect()?;
+            }
+            Command::SourceAudit { native_state } => {
+                let mut session = NativeSession::resume(&native_state)?;
+                let summary = match session.audit_personal_source() {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        if let Some(detail) = error
+                            .downcast_ref::<twodrive_dev::native_coordinator::SourceAuditFailure>(
+                        ) {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({"phase":"personal_source_metadata_failed","diagnostic":detail,"content_reads":false,"source_mutations":false})
+                            );
+                        }
+                        return Err(error);
+                    }
+                };
+                println!(
+                    "{}",
+                    serde_json::json!({"phase":"personal_source_metadata","content_reads":false,"source_mutations":false,"summary":summary})
+                );
+                session.coordinator.disconnect()?;
+            }
             Command::Run {
                 native_state,
                 seconds,

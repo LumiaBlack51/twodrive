@@ -24,6 +24,9 @@ pub use remote::RemoteProgress;
 #[path = "native_pins.rs"]
 mod pins;
 pub use pins::ResidencyProgress;
+#[path = "native_migration.rs"]
+mod migration;
+pub use migration::{SourceAuditFailure, SourceChecksumSummary, SourceSummary};
 #[path = "native_renames.rs"]
 mod renames;
 
@@ -1370,6 +1373,14 @@ mod tests {
     #[test]
     #[ignore = "explicit NEW generated root; remote version update, native-before-SQL interruption and local edit preservation"]
     fn remote_file_version_restarts_without_overwriting_local_edits() {
+        remote_file_version_case(false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; a newer explicit release survives pending remote version/rename recovery"]
+    fn remote_recovery_preserves_newer_explicit_release_intent() {
+        remote_file_version_case(true);
+    }
+    fn remote_file_version_case(release_during_recovery: bool) {
         let root = PathBuf::from(
             std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
                 .expect("explicit generated root"),
@@ -1458,6 +1469,9 @@ mod tests {
         let receipt = owner.receipt().clone();
         owner.disconnect().unwrap();
         drop(owner);
+        if release_during_recovery {
+            twodrive_local_files::native::test_release_intent(&file).unwrap();
+        }
         owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
         let resumed = owner.apply_remote_metadata(&remote).unwrap();
         let after = std::fs::read(&file).unwrap();
@@ -1470,6 +1484,9 @@ mod tests {
                 "/remote-renamed.txt",
             )
             .unwrap();
+        if release_during_recovery {
+            twodrive_local_files::native::pin(&file, true).unwrap();
+        }
         crate::local_files::INTERRUPT_REMOTE_AFTER_RENAME.with(|flag| flag.set(true));
         let rename_interrupted = owner
             .apply_remote_metadata(&provider.list_all().unwrap())
@@ -1478,6 +1495,12 @@ mod tests {
         owner.disconnect().unwrap();
         drop(owner);
         owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        if release_during_recovery {
+            twodrive_local_files::native::test_release_intent(
+                &owner.root().join("remote-renamed.txt"),
+            )
+            .unwrap();
+        }
         let moved = owner
             .apply_remote_metadata(&provider.list_all().unwrap())
             .unwrap();
@@ -1556,7 +1579,8 @@ mod tests {
         assert_eq!(pending, 1);
         assert_eq!(resumed.deferred, 0, "{resumed:?}");
         assert_eq!(after, b"generated newer remote complete content");
-        assert!(old_preserved && pin_retained);
+        assert!(old_preserved);
+        assert_eq!(pin_retained, !release_during_recovery);
         assert_eq!(moved.deferred, 0, "{moved:?}");
         assert_eq!(directory_created.deferred, 0, "{directory_created:?}");
         assert_eq!(child_moved.deferred, 0, "{child_moved:?}");
@@ -1574,6 +1598,124 @@ mod tests {
         );
         assert_eq!(local.unwrap(), b"generated local user edit must survive");
         assert_eq!(cloud, b"generated concurrent remote change");
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; explicitly pinned directory remote rename and removal"]
+    fn explicitly_pinned_directory_remote_changes_complete() {
+        pinned_directory_remote_case(false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; inherited directory pin remote rename and removal"]
+    fn inherited_pinned_directory_remote_changes_complete() {
+        pinned_directory_remote_case(true);
+    }
+    fn pinned_directory_remote_case(inherited: bool) {
+        use crate::provider::Provider;
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
+                .expect("generated root required"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let state = tempfile::tempdir().unwrap();
+        let private = state.path().canonicalize().unwrap();
+        let cache = private.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let provider = crate::local_files::tests::MockProvider::empty();
+        let plan = NamespacePlan::build(
+            &[IndexedItem {
+                id: "root".into(),
+                parent: None,
+                name: "root".into(),
+                kind: "folder".into(),
+                size: 0,
+                etag: "v1".into(),
+                modified: None,
+                deleted: false,
+            }],
+            "root",
+            100,
+            twodrive_local_files::names::ordinal_ignorecase_cmp,
+        )
+        .unwrap();
+        let db = Database::new(private.join("db.sqlite3"));
+        let bridge = LocalFileBridge::open_bound(
+            db.clone(),
+            &cache,
+            Backend::new(provider.clone()),
+            "generated-pinned-directories",
+        )
+        .unwrap();
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = NativeCoordinator::create_new(
+            bridge,
+            &plan,
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+        )
+        .unwrap();
+        let parent = provider
+            .create_directory_bound(&MetadataEntry::new_dir("root", "/", 0, ""), "/parent")
+            .unwrap();
+        let child = provider
+            .create_directory_bound(&parent, "/parent/child")
+            .unwrap();
+        let created = owner
+            .apply_remote_metadata(&[parent.clone(), child.clone()])
+            .unwrap();
+        if inherited {
+            twodrive_local_files::native::pin(&owner.root().join("parent"), true).unwrap();
+        } else {
+            twodrive_local_files::native::pin(&owner.root().join("parent/child"), true).unwrap();
+        }
+        let mirrored = owner.synchronize_residency().unwrap();
+        let before = db.get_by_remote_id(&child.remote_id).unwrap().unwrap();
+        let renamed = provider
+            .move_bound(&child, &parent, "/parent/renamed")
+            .unwrap();
+        let moved = owner
+            .apply_remote_metadata(&[parent.clone(), renamed.clone()])
+            .unwrap();
+        db.recompute_pin_inheritance().unwrap();
+        let removal_state = db
+            .get_by_remote_id(&child.remote_id)
+            .unwrap()
+            .unwrap()
+            .state;
+        provider.delete_bound(&renamed).unwrap();
+        let removed = owner
+            .apply_remote_removals(&HashSet::from([parent.remote_id.clone()]))
+            .unwrap();
+        let missing = !owner.root().join("parent/renamed").exists();
+        let mut entries = owner.owner.inventory().unwrap();
+        entries.sort_by_key(|e| std::cmp::Reverse(e.relative_path.components().count()));
+        for entry in entries {
+            assert!(entry.directory);
+            std::fs::remove_dir(owner.root().join(entry.relative_path)).unwrap();
+        }
+        owner.retire_empty_generated_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        state.close().unwrap();
+        assert_eq!(created.created, 2, "{created:?}");
+        assert_eq!(mirrored.deferred, 0, "{mirrored:?}");
+        assert!(before.effective_pinned());
+        assert_eq!(before.pin_explicit, !inherited);
+        assert_eq!(removal_state, twodrive_core::FileState::Pinned);
+        assert_eq!(moved.moved, 1, "{moved:?}");
+        assert_eq!(moved.deferred, 0, "{moved:?}");
+        assert_eq!(removed.removed, 1, "{removed:?}");
+        assert_eq!(removed.deferred, 0, "{removed:?}");
+        assert!(missing);
     }
     #[test]
     #[ignore = "explicit NEW generated root; confirmed remote deletion retains cached revision"]
@@ -1684,6 +1826,14 @@ mod tests {
     #[test]
     #[ignore = "explicit NEW generated root; Shell pin/free-space, private cache removal and dirty veto"]
     fn native_pin_release_rehydrates_and_preserves_dirty_data() {
+        native_pin_release_case(false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; legacy committed unpin flags with stale Pinned state recover after restart"]
+    fn native_pin_release_recovers_legacy_derived_state_commit_gap() {
+        native_pin_release_case(true);
+    }
+    fn native_pin_release_case(legacy_gap: bool) {
         let root = PathBuf::from(
             std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
                 .expect("explicit generated root"),
@@ -1766,6 +1916,22 @@ mod tests {
         let cached = record.cache_path.clone().unwrap();
         let bytes = std::fs::read(&path).unwrap();
         twodrive_local_files::native::test_release_intent(&path).unwrap();
+        if legacy_gap {
+            owner
+                .bridge
+                .journal()
+                .mirror_native_pins(&[(item.remote_id.clone(), false, true)])
+                .unwrap();
+            // Persist the exact flags/state combination left by the previous
+            // separate-commit boundary, without introducing a fake OS event.
+            db.mark_state(&item.remote_id, twodrive_core::FileState::Pinned)
+                .unwrap();
+            let receipt = owner.receipt().clone();
+            owner.disconnect().unwrap();
+            drop(owner);
+            owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        }
+
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let released = loop {
             let result = owner.synchronize_residency().unwrap();

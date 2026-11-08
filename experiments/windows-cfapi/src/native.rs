@@ -1707,7 +1707,7 @@ fn node_observation(
         },
         "inspect placeholder",
     )?;
-    if returned < size_of::<CF_PLACEHOLDER_STANDARD_INFO>() as u32 {
+    if returned < offset_of!(CF_PLACEHOLDER_STANDARD_INFO, FileIdentity) as u32 {
         return Err("short placeholder info".into());
     }
     let info = unsafe { &*buffer.as_ptr().cast::<CF_PLACEHOLDER_STANDARD_INFO>() };

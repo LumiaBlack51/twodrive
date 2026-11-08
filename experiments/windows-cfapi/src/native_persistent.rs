@@ -5,7 +5,10 @@ use super::*;
 use serde::{Deserialize, Serialize};
 #[path = "native_namespace.rs"]
 mod namespace;
+#[path = "native_readonly_source.rs"]
+mod readonly_source;
 pub use namespace::NativeEntry;
+pub use readonly_source::{ReadOnlyRegisteredRoot, personal_source_location};
 #[path = "native_events.rs"]
 pub(crate) mod events;
 pub use events::{DatabaseEventSink, NativeEvent, NativeEventKind, NativeEventSink};
@@ -562,62 +565,12 @@ impl PersistentSession {
     }
 
     fn guard_relative_parent(&self, relative: &Path) -> Result<(PathBuf, Vec<Handle>)> {
-        let parts = relative.components().collect::<Vec<_>>();
-        if parts.is_empty()
-            || parts.len() > 128
-            || parts.iter().any(|p| !matches!(p, Component::Normal(_)))
-        {
-            return Err("bounded relative native path required".into());
-        }
-        for part in &parts {
-            let name = part.as_os_str().to_str().ok_or("invalid native name")?;
-            crate::names::validate_native_name(name)?;
-        }
-        let mut parent = self.root().to_path_buf();
-        let mut guards = Vec::new();
-        let mut parent_handle = self.guard._handles.last().ok_or("root lease missing")?.0;
-        for part in &parts[..parts.len() - 1] {
-            parent.push(part.as_os_str());
-            let handle = directory_lease(parent_handle, part.as_os_str())?;
-            let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
-            if unsafe {
-                GetFileInformationByHandleEx(
-                    handle.0,
-                    FileAttributeTagInfo,
-                    (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
-                    size_of_val(&tag) as u32,
-                )
-            } == 0
-                || tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
-                || tag.ReparseTag & 0x20000000 != 0
-            {
-                return Err("native parent is not an owned directory".into());
-            }
-            let (root_id, owner) = root_identity(handle.0)?;
-            if root_id != self.receipt.file_id || owner != self.receipt.identity {
-                return Err("native parent owner changed".into());
-            }
-            let mut bytes = [0u64; 1024];
-            let mut count = 0;
-            hr(
-                unsafe {
-                    CfGetPlaceholderInfo(
-                        handle.0,
-                        CF_PLACEHOLDER_INFO_STANDARD,
-                        bytes.as_mut_ptr().cast(),
-                        size_of_val(&bytes) as u32,
-                        &mut count,
-                    )
-                },
-                "verify native parent placeholder",
-            )?;
-            if count < size_of::<CF_PLACEHOLDER_STANDARD_INFO>() as u32 {
-                return Err("short parent placeholder information".into());
-            }
-            parent_handle = handle.0;
-            guards.push(handle);
-        }
-        Ok((parent, guards))
+        guard_registered_parent(
+            self.root(),
+            self.guard._handles.last().ok_or("root lease missing")?.0,
+            &self.receipt,
+            relative,
+        )
     }
 
     /// Capture a local atomic replacement within this owned root. Conversion
@@ -897,6 +850,70 @@ impl Drop for PersistentSession {
         }
         // Intentionally no CfUnregisterSyncRoot, file conversion or deletion.
     }
+}
+
+fn guard_registered_parent(
+    root: &Path,
+    root_handle: HANDLE,
+    receipt: &RootReceipt,
+    relative: &Path,
+) -> Result<(PathBuf, Vec<Handle>)> {
+    let parts = relative.components().collect::<Vec<_>>();
+    if parts.is_empty()
+        || parts.len() > 128
+        || parts.iter().any(|p| !matches!(p, Component::Normal(_)))
+    {
+        return Err("bounded relative native path required".into());
+    }
+    for part in &parts {
+        let name = part.as_os_str().to_str().ok_or("invalid native name")?;
+        crate::names::validate_native_name(name)?;
+    }
+    let mut parent = root.to_path_buf();
+    let mut guards = Vec::new();
+    let mut parent_handle = root_handle;
+    for part in &parts[..parts.len() - 1] {
+        parent.push(part.as_os_str());
+        let handle = directory_lease(parent_handle, part.as_os_str())?;
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                handle.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                size_of_val(&tag) as u32,
+            )
+        } == 0
+            || tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+            || tag.ReparseTag & 0x20000000 != 0
+        {
+            return Err("native parent is not an owned directory".into());
+        }
+        let (root_id, owner) = root_identity(handle.0)?;
+        if root_id != receipt.file_id || owner != receipt.identity {
+            return Err("native parent owner changed".into());
+        }
+        let mut bytes = [0u64; 1024];
+        let mut count = 0;
+        hr(
+            unsafe {
+                CfGetPlaceholderInfo(
+                    handle.0,
+                    CF_PLACEHOLDER_INFO_STANDARD,
+                    bytes.as_mut_ptr().cast(),
+                    size_of_val(&bytes) as u32,
+                    &mut count,
+                )
+            },
+            "verify native parent placeholder",
+        )?;
+        if count < offset_of!(CF_PLACEHOLDER_STANDARD_INFO, FileIdentity) as u32 {
+            return Err("short parent placeholder information".into());
+        }
+        parent_handle = handle.0;
+        guards.push(handle);
+    }
+    Ok((parent, guards))
 }
 
 #[cfg(test)]

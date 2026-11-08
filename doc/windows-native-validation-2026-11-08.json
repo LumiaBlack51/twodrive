@@ -101,6 +101,13 @@
     "pending_remote_private_writer_fence": {
       "old_code_failed_two_contracts": true,
       "update_and_removal_prepare_and_restart_fence_passed": true
+    },
+    "pin_followup_8788": {
+      "explicit_and_inherited_directory_move_delete": true,
+      "newer_release_during_remote_recovery": true,
+      "legacy_pin_flag_state_restart": true,
+      "flags_derived_state_transaction_rollback": true,
+      "native_cloud_backend": "mock"
     }
   },
   "cleanup": {
@@ -600,5 +607,30 @@
     "one_shot_validation_tasks_removed": true,
     "normal_logon_startup_installed": false,
     "original_root_cutover": false
+  },
+  "source_preflight_current_candidate": {
+    "registry_personal_owner_matches_sealed_identity": true,
+    "metadata_only_files": 12745,
+    "metadata_only_directories": 7425,
+    "complete_clean_files": 2071,
+    "complete_clean_bytes": 734170010,
+    "incomplete_files": 10672,
+    "unsynchronized_files": 0,
+    "ordinary_files": 2,
+    "pinned_files": 5,
+    "source_context_empty_identity_supported_without_weakening_private_tags": true,
+    "cold_and_stale_residency_no_recall_regression": true,
+    "actual_original_source_sample": {
+      "files": 20,
+      "bytes_read": 440419,
+      "checksum_matches": 20,
+      "checksum_mismatches": 0,
+      "metadata_deferred": 0,
+      "source_deferred": 0,
+      "cloud_content_downloads": false,
+      "source_mutations": false
+    },
+    "full_import_completed": false,
+    "original_root_moved": false
   }
 }

@@ -168,9 +168,13 @@ impl LocalFileBridge {
                     if pending.is_none() && observed.logical_size != expected.size {
                         return Err("remote update native size changed".into());
                     }
-                    if observed.pinned {
+                    if observed.pinned || observed.release_requested {
                         self.journal
-                            .mirror_native_pins(&[(expected.local_id.clone(), true, false)])
+                            .mirror_native_pins(&[(
+                                expected.local_id.clone(),
+                                observed.pinned,
+                                observed.release_requested,
+                            )])
                             .map_err(|e| e.to_string())?;
                     }
                     let preserve_pin = self

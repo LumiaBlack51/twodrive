@@ -542,3 +542,29 @@ clean-inventory reconciliation reduced the initial local cycle from approximatel
 consumers. One-shot validation tasks were removed and private evidence retained.
 Normal logon startup, conflict recovery, installed Office/open-editor acceptance,
 source data preservation and actual rollback/cutover remain required.
+
+
+## Original-source read-only preflight
+
+`source-audit --native-state <state>` reads the current personal client's registry
+location, verifies its owner against sealed authority and the service, and inspects
+its exact registered root without document reads. The actual source contained
+12,745 files and 7,425 directories: 2,071 complete clean files (734,170,010 bytes),
+10,672 incomplete files, two ordinary entries and zero unsynchronized file states.
+This snapshot is not proof that no editor has unsaved in-memory changes.
+
+`source-verify --native-state <state> --sample 20` verifies a bounded sample of
+complete files against bound service metadata/checksums. All twenty actual source
+samples matched (440,419 bytes), without cloud content downloads or source writes.
+The Graph metadata batch accepts only GETs with known drive/parent/item/version
+bindings and checks per-item response IDs/statuses. QuickXor is a service checksum,
+not cryptographic authentication; later local snapshots use their own full digest.
+No full source import or actual handover has been performed.
+
+Source exports have a separate read-only type with no registration, pin, conversion
+or deletion API. Empty Microsoft placeholder identity blobs and their 60-byte
+fixed header are accepted for that source role; own publications still require
+private tags. A stale-residency test failed before the metadata-first lease fix:
+READ_DATA could recall data even with OPEN_NO_RECALL. The corrected test refuses
+cold/stale, busy and dirty sources, then exports complete data without recalls.
+See TD-20261108-50 through -52 for pin-boundary and source verification limits.

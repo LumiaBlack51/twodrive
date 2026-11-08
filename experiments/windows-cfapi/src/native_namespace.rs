@@ -17,7 +17,7 @@ pub struct NativeEntry {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum InventoryStage {
+pub(super) enum InventoryStage {
     BeforeDirectory,
     DirectoryHeld,
 }
@@ -165,6 +165,7 @@ impl PersistentSession {
         action(volume, id, &observation)
     }
 
+    #[cfg(test)]
     fn namespace_handle(&self, path: &Path) -> Result<(Handle, FILE_ATTRIBUTE_TAG_INFO)> {
         self.namespace_checked_handle(metadata_handle(path)?)
     }
@@ -172,34 +173,7 @@ impl PersistentSession {
         &self,
         handle: Handle,
     ) -> Result<(Handle, FILE_ATTRIBUTE_TAG_INFO)> {
-        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
-        if unsafe {
-            GetFileInformationByHandleEx(
-                handle.0,
-                FileAttributeTagInfo,
-                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
-                size_of_val(&tag) as u32,
-            )
-        } == 0
-        {
-            return Err("cannot inspect namespace entry".into());
-        }
-        if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            let state = unsafe {
-                CfGetPlaceholderStateFromAttributeTag(tag.FileAttributes, tag.ReparseTag)
-            };
-            if tag.ReparseTag & 0x20000000 != 0
-                || state == CF_PLACEHOLDER_STATE_INVALID
-                || state & CF_PLACEHOLDER_STATE_PLACEHOLDER == 0
-            {
-                return Err("namespace contains an unsupported reparse point".into());
-            }
-        }
-        let (root_id, owner) = root_identity(handle.0)?;
-        if root_id != self.receipt.file_id || owner != self.receipt.identity {
-            return Err("namespace entry belongs to another root".into());
-        }
-        Ok((handle, tag))
+        checked_namespace_handle(handle, &self.receipt)
     }
 
     /// Inventory ordinary local additions and owned placeholders without reading
@@ -212,125 +186,18 @@ impl PersistentSession {
 
     fn inventory_observed(
         &self,
-        mut observe: impl FnMut(InventoryStage, &Path) -> Result<()>,
+        observe: impl FnMut(InventoryStage, &Path) -> Result<()>,
     ) -> Result<Vec<NativeEntry>> {
         if self.connection.is_none() {
             return Err("native root is disconnected".into());
         }
-        let mut directories = vec![(PathBuf::new(), Vec::<(u32, u64)>::new())];
-        let mut entries = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        while let Some((relative, expected_chain)) = directories.pop() {
-            observe(InventoryStage::BeforeDirectory, &relative)?;
-            let mut directory = self.root().to_path_buf();
-            let mut guards = Vec::new();
-            let mut parent_handle = self.guard._handles.last().ok_or("root lease missing")?.0;
-            for (index, part) in relative.components().enumerate() {
-                if !matches!(part, Component::Normal(_)) {
-                    return Err("invalid namespace path".into());
-                }
-                directory.push(part.as_os_str());
-                let (handle, tag) = self
-                    .namespace_checked_handle(directory_lease(parent_handle, part.as_os_str())?)?;
-                if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
-                    return Err("namespace parent changed kind".into());
-                }
-                let (volume, id, _) = file_binding(handle.0)?;
-                if expected_chain.get(index) != Some(&(volume, id)) {
-                    return Err("queued namespace directory identity changed".into());
-                }
-                parent_handle = handle.0;
-                guards.push(handle);
-            }
-            observe(InventoryStage::DirectoryHeld, &relative)?;
-            for child in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
-                let child = child.map_err(|e| e.to_string())?;
-                let relative_path = relative.join(child.file_name());
-                if relative_path.components().count() > 128 || entries.len() >= 1_000_000 {
-                    return Err("native namespace observation limit reached".into());
-                }
-                let (handle, tag) = self.namespace_handle(&child.path())?;
-                let mut information = BY_HANDLE_FILE_INFORMATION::default();
-                if unsafe { GetFileInformationByHandle(handle.0, &mut information) } == 0 {
-                    return Err("namespace file binding unavailable".into());
-                }
-                let file_id =
-                    ((information.nFileIndexHigh as u64) << 32) | information.nFileIndexLow as u64;
-                let directory = tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
-                if information.dwVolumeSerialNumber != self.receipt.volume_serial
-                    || (!directory && information.nNumberOfLinks != 1)
-                    || !seen.insert(file_id)
-                {
-                    return Err(
-                        "namespace identity is ambiguous or belongs to another volume".into(),
-                    );
-                }
-                let size = if directory {
-                    0
-                } else {
-                    ((information.nFileSizeHigh as u64) << 32) | information.nFileSizeLow as u64
-                };
-                let (identity, cloud) = if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                    let mut buffer = [0u64; 1024];
-                    let mut count = 0;
-                    hr(
-                        unsafe {
-                            CfGetPlaceholderInfo(
-                                handle.0,
-                                CF_PLACEHOLDER_INFO_STANDARD,
-                                buffer.as_mut_ptr().cast(),
-                                size_of_val(&buffer) as u32,
-                                &mut count,
-                            )
-                        },
-                        "inspect namespace placeholder",
-                    )?;
-                    let offset = offset_of!(CF_PLACEHOLDER_STANDARD_INFO, FileIdentity);
-                    if count < offset as u32 {
-                        return Err("short namespace placeholder information".into());
-                    }
-                    let info = unsafe { &*buffer.as_ptr().cast::<CF_PLACEHOLDER_STANDARD_INFO>() };
-                    let length = info.FileIdentityLength as usize;
-                    if length == 0
-                        || length > 4096
-                        || offset + length > count as usize
-                        || info.SyncRootFileId as u64 != self.receipt.file_id
-                    {
-                        return Err("invalid namespace placeholder identity".into());
-                    }
-                    let identity =
-                        unsafe { std::slice::from_raw_parts(info.FileIdentity.as_ptr(), length) }
-                            .to_vec();
-                    let observation = node_observation(
-                        handle.0,
-                        &identity,
-                        usize::try_from(size).map_err(|_| "namespace size overflow")?,
-                        directory,
-                    )?;
-                    (Some(identity), Some(observation))
-                } else {
-                    (None, None)
-                };
-                if directory {
-                    let mut child_chain = expected_chain.clone();
-                    child_chain.push((information.dwVolumeSerialNumber, file_id));
-                    directories.push((relative_path.clone(), child_chain));
-                }
-                entries.push(NativeEntry {
-                    relative_path,
-                    volume_serial: information.dwVolumeSerialNumber,
-                    file_id,
-                    directory,
-                    size,
-                    last_write_time: ((information.ftLastWriteTime.dwHighDateTime as u64) << 32)
-                        | information.ftLastWriteTime.dwLowDateTime as u64,
-                    attributes: tag.FileAttributes,
-                    identity,
-                    cloud,
-                });
-            }
-        }
-        Ok(entries)
+        inventory_under_root(
+            self.root(),
+            self.guard._handles.last().ok_or("root lease missing")?.0,
+            &self.receipt,
+            NamespaceIdentityPolicy::PrivateTag,
+            observe,
+        )
     }
 
     /// Resolve a previously recorded identity even if it was renamed while a
@@ -402,6 +269,170 @@ impl PersistentSession {
             &path[..count as usize],
         ))))
     }
+}
+
+pub(super) fn checked_namespace_handle(
+    handle: Handle,
+    receipt: &RootReceipt,
+) -> Result<(Handle, FILE_ATTRIBUTE_TAG_INFO)> {
+    let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+    if unsafe {
+        GetFileInformationByHandleEx(
+            handle.0,
+            FileAttributeTagInfo,
+            (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            size_of_val(&tag) as u32,
+        )
+    } == 0
+    {
+        return Err("cannot inspect namespace entry".into());
+    }
+    if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        let state =
+            unsafe { CfGetPlaceholderStateFromAttributeTag(tag.FileAttributes, tag.ReparseTag) };
+        if tag.ReparseTag & 0x20000000 != 0
+            || state == CF_PLACEHOLDER_STATE_INVALID
+            || state & CF_PLACEHOLDER_STATE_PLACEHOLDER == 0
+        {
+            return Err("namespace contains an unsupported reparse point".into());
+        }
+    }
+    let (root_id, owner) = root_identity(handle.0)?;
+    if root_id != receipt.file_id || owner != receipt.identity {
+        return Err("namespace entry belongs to another root".into());
+    }
+    Ok((handle, tag))
+}
+#[derive(Clone, Copy)]
+pub(super) enum NamespaceIdentityPolicy {
+    PrivateTag,
+    RegisteredSource,
+}
+pub(super) fn inventory_under_root(
+    root: &Path,
+    root_handle: HANDLE,
+    receipt: &RootReceipt,
+    identity_policy: NamespaceIdentityPolicy,
+    mut observe: impl FnMut(InventoryStage, &Path) -> Result<()>,
+) -> Result<Vec<NativeEntry>> {
+    let mut directories = vec![(PathBuf::new(), Vec::<(u32, u64)>::new())];
+    let mut entries = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    while let Some((relative, expected_chain)) = directories.pop() {
+        observe(InventoryStage::BeforeDirectory, &relative)?;
+        let mut directory = root.to_path_buf();
+        let mut guards = Vec::new();
+        let mut parent_handle = root_handle;
+        for (index, part) in relative.components().enumerate() {
+            if !matches!(part, Component::Normal(_)) {
+                return Err("invalid namespace path".into());
+            }
+            directory.push(part.as_os_str());
+            let (handle, tag) = checked_namespace_handle(
+                directory_lease(parent_handle, part.as_os_str())?,
+                receipt,
+            )?;
+            if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+                return Err("namespace parent changed kind".into());
+            }
+            let (volume, id, _) = file_binding(handle.0)?;
+            if expected_chain.get(index) != Some(&(volume, id)) {
+                return Err("queued namespace directory identity changed".into());
+            }
+            parent_handle = handle.0;
+            guards.push(handle);
+        }
+        observe(InventoryStage::DirectoryHeld, &relative)?;
+        for child in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+            let child = child.map_err(|e| e.to_string())?;
+            let relative_path = relative.join(child.file_name());
+            if relative_path.components().count() > 128 || entries.len() >= 1_000_000 {
+                return Err("native namespace observation limit reached".into());
+            }
+            let (handle, tag) = checked_namespace_handle(metadata_handle(&child.path())?, receipt)?;
+            let mut information = BY_HANDLE_FILE_INFORMATION::default();
+            if unsafe { GetFileInformationByHandle(handle.0, &mut information) } == 0 {
+                return Err("namespace file binding unavailable".into());
+            }
+            let file_id =
+                ((information.nFileIndexHigh as u64) << 32) | information.nFileIndexLow as u64;
+            let directory = tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+            if information.dwVolumeSerialNumber != receipt.volume_serial
+                || (!directory && information.nNumberOfLinks != 1)
+                || !seen.insert(file_id)
+            {
+                return Err("namespace identity is ambiguous or belongs to another volume".into());
+            }
+            let size = if directory {
+                0
+            } else {
+                ((information.nFileSizeHigh as u64) << 32) | information.nFileSizeLow as u64
+            };
+            let (identity, cloud) = if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                let mut buffer = [0u64; 1024];
+                let mut count = 0;
+                hr(
+                    unsafe {
+                        CfGetPlaceholderInfo(
+                            handle.0,
+                            CF_PLACEHOLDER_INFO_STANDARD,
+                            buffer.as_mut_ptr().cast(),
+                            size_of_val(&buffer) as u32,
+                            &mut count,
+                        )
+                    },
+                    "inspect namespace placeholder",
+                )?;
+                let offset = offset_of!(CF_PLACEHOLDER_STANDARD_INFO, FileIdentity);
+                if count < offset as u32 {
+                    return Err("short namespace placeholder information".into());
+                }
+                let info = unsafe { &*buffer.as_ptr().cast::<CF_PLACEHOLDER_STANDARD_INFO>() };
+                let length = info.FileIdentityLength as usize;
+                if (length == 0 && matches!(identity_policy, NamespaceIdentityPolicy::PrivateTag))
+                    || length > 4096
+                    || offset + length > count as usize
+                    || info.SyncRootFileId as u64 != receipt.file_id
+                {
+                    return Err(format!(
+                        "invalid namespace placeholder identity: length={length}, returned={count}, root_matches={}, root_zero={}",
+                        info.SyncRootFileId as u64 == receipt.file_id,
+                        info.SyncRootFileId == 0
+                    ));
+                }
+                let identity =
+                    unsafe { std::slice::from_raw_parts(info.FileIdentity.as_ptr(), length) }
+                        .to_vec();
+                let observation = node_observation(
+                    handle.0,
+                    &identity,
+                    usize::try_from(size).map_err(|_| "namespace size overflow")?,
+                    directory,
+                )?;
+                (Some(identity), Some(observation))
+            } else {
+                (None, None)
+            };
+            if directory {
+                let mut child_chain = expected_chain.clone();
+                child_chain.push((information.dwVolumeSerialNumber, file_id));
+                directories.push((relative_path.clone(), child_chain));
+            }
+            entries.push(NativeEntry {
+                relative_path,
+                volume_serial: information.dwVolumeSerialNumber,
+                file_id,
+                directory,
+                size,
+                last_write_time: ((information.ftLastWriteTime.dwHighDateTime as u64) << 32)
+                    | information.ftLastWriteTime.dwLowDateTime as u64,
+                attributes: tag.FileAttributes,
+                identity,
+                cloud,
+            });
+        }
+    }
+    Ok(entries)
 }
 
 #[cfg(all(test, feature = "native-test-hooks"))]

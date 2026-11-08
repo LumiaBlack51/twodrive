@@ -21,6 +21,8 @@ mod auth;
 pub mod browse;
 mod desktop;
 mod http;
+mod integrity;
+pub use integrity::{FileIntegrity, IntegrityRequest, QuickXorHash};
 mod model;
 mod namespace;
 mod paths;
