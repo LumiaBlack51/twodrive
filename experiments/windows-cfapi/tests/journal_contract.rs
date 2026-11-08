@@ -1195,6 +1195,19 @@ fn native_delete_requires_kernel_proof_and_keeps_private_revisions_owned() {
     journal
         .prepare_native_projection(ID, "generated-root", tag)
         .unwrap();
+    let late = event("rename_requested");
+    let seq = db.append_native_event("generated-root", &late).unwrap();
+    assert!(
+        journal
+            .complete_native_projection(ID, "generated-root", tag, 7, 99)
+            .is_err(),
+        "pending hints must still fence publication"
+    );
+    drop(journal);
+    let journal = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    journal
+        .archive_retired_native_events(&retired, &[(seq, late)])
+        .unwrap();
     journal
         .complete_native_projection(ID, "generated-root", tag, 7, 99)
         .unwrap();

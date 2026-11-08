@@ -4,6 +4,21 @@
 
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
+## TD-20261109-02：旧回执与逻辑 ID 复用的新 preparing 发布互相阻挡
+
+- 日期：2026-11-09（Asia/Shanghai）
+- 状态：中间态重启契约与严格 Clippy 通过
+- 关联：TD-20261109-01；新发布声明已准备但尚无物理绑定的中间状态遗漏。
+
+Dot 对 8865cb2 指出新 tag 的 preparing 声明已提交时后到旧回执会被 live-owner
+守卫拒绝，而新发布的严格 baseline 又禁止活动回执，形成重启后循环等待。
+仅允许同根、与旧 tag 明确不同、尚无物理绑定的 preparing 新实体归档旧身份
+事件；既有 completed publication baseline 不变，仍须活动队列清空才可完成。
+扩展复用 ID 契约：prepare 后加入旧事件、证明 complete 拒绝、重开 journal、
+归档旧事件，再完成新发布。Windows 契约通过，原完成守卫在队列非空时
+确实拒绝，重开后旧事件归档和新实体完成均成功；严格主库全 target Clippy
+通过。该用例为共享 journal 模拟，不冒充真实云端对象恢复。本地恢复：无。
+
 ## TD-20261109-01：真实 Windows 回收后已退役对象的后到请求阻塞命名空间
 
 - 日期：2026-11-09（Asia/Shanghai）

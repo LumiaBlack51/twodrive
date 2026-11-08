@@ -159,14 +159,19 @@ impl CacheJournal {
         ensure!(tx.query_row("SELECT EXISTS(SELECT 1 FROM local_native_deletes WHERE local_id=?1 AND state='applied' AND intent=?2)",params![id,serde_json::to_string(intent)?],|r|r.get::<_,bool>(0))?,"retired native decision changed");
         if let Some(live) = projection::get(&tx, id)? {
             ensure!(
-                live.state == "published"
-                    && live.root_binding == intent.publication.root_binding
+                live.root_binding == intent.publication.root_binding
                     && live.tag != intent.publication.tag
-                    && live.volume_serial.is_some()
-                    && live.native_file_id.is_some()
-                    && (live.volume_serial != Some(intent.physical.volume_serial)
-                        || live.native_file_id.as_deref()
-                            != Some(format!("{:016x}", intent.physical.file_id).as_str())),
+                    && ((live.state == "preparing"
+                        && live.volume_serial.is_none()
+                        && live.native_file_id.is_none())
+                        || (live.state == "published"
+                            && live.volume_serial.is_some()
+                            && live.native_file_id.is_some()
+                            && (live.volume_serial != Some(intent.physical.volume_serial)
+                                || live.native_file_id.as_deref()
+                                    != Some(
+                                        format!("{:016x}", intent.physical.file_id).as_str()
+                                    )))),
                 "retired identity has a live owner"
             );
         } else {
