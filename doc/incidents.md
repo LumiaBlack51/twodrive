@@ -4,6 +4,17 @@
 
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
+## TD-20261108-35：CI 新 Clippy 对原生命名空间分支启用折叠检查
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：b849d8b 的 Linux CI 已复现；已折叠 let/状态条件，等待新 head 检查
+
+本地 Windows 1.98.1 与 WSL 1.97.1 Clippy 通过，但 hosted stable 1.99.0
+将 native_moves 的嵌套 if let/状态判断列为 collapsible_if，-D warnings 因此失败。
+CI 中此前核心、后端与文件系统测试均通过；这是编译检查差异，不是数据丢失。
+按建议合并为同一个 let-chain 条件，不关闭 lint、不改变任务状态转换。
+本地恢复操作：无。
+
 ## TD-20261108-34：原子替换丢失上传回执后先重复捕获，阻断结果协调
 
 - 日期：2026-11-08（Asia/Shanghai）

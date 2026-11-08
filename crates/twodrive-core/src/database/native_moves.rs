@@ -54,14 +54,13 @@ impl CacheJournal {
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .optional()?
+            && state != "applied"
         {
-            if state != "applied" {
-                ensure!(
-                    serde_json::from_str::<NativeMoveIntent>(&old)? == *intent,
-                    "another native move needs recovery"
-                );
-                return Ok(());
-            }
+            ensure!(
+                serde_json::from_str::<NativeMoveIntent>(&old)? == *intent,
+                "another native move needs recovery"
+            );
+            return Ok(());
         }
         ensure!(
             projection::get(&tx, &p.local_id)?.as_ref() == Some(p) && p.state == "published",
