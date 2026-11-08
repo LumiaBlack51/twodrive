@@ -1789,3 +1789,155 @@ fn local_timestamp_namespace_cancellation_requires_retained_identity_and_keeps_s
         );
     }
 }
+
+#[test]
+fn ancestor_move_cancels_local_child_timestamp_in_projection_commit_after_restart() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, path) = paths(temp.path());
+    db.init().unwrap();
+    let parent = MetadataEntry::new_dir("parent-A", "/A", 1, "folder-v1");
+    db.upsert_metadata(&parent).unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(
+        ID,
+        "/A/generated.txt",
+        ORIGINAL.len() as u64,
+        1,
+        "version-1",
+    ))
+    .unwrap();
+    let binding = hash(b"generated-provider-binding");
+    let j = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    for (id, tag, physical) in [
+        ("parent-A", b"generated-parent-private-tag".as_slice(), 8),
+        (ID, b"generated-child-private-tag".as_slice(), 9),
+    ] {
+        j.prepare_native_projection(id, "generated-root", tag)
+            .unwrap();
+        j.complete_native_projection(id, "generated-root", tag, 7, physical)
+            .unwrap();
+    }
+    fs::write(&path, ORIGINAL).unwrap();
+    j.publish_download(ID, 0, &path, &hash(ORIGINAL), "version-1")
+        .unwrap();
+    let expected = j.native_projection_for_id(ID).unwrap().unwrap();
+    let source = j
+        .prepare_native_source_import(
+            twodrive_core::NativeSourceImport {
+                sequence: 0,
+                expected: expected.clone(),
+                source_root_receipt:
+                    serde_json::json!({"schema_version":1,"volume_serial":7,"file_id":88})
+                        .to_string(),
+                source_file: twodrive_core::NativeFileIdentity {
+                    volume_serial: 7,
+                    file_id: 99,
+                },
+                cache_path: path.clone(),
+                digest: hash(ORIGINAL),
+                source_filetime: 116_444_736_000_000_000 + 123_456_789,
+                source_pinned: false,
+                state: "verified".into(),
+            },
+            digest,
+        )
+        .unwrap();
+    j.mark_native_source_data_ready(&source).unwrap();
+    j.prepare_native_migration_time(&expected, source.source_filetime, |f, h| {
+        anyhow::ensure!(digest(f)? == h, "changed");
+        Ok(())
+    })
+    .unwrap();
+    let intent = twodrive_core::NativeMoveIntent {
+        publication: j.native_projection_for_id("parent-A").unwrap().unwrap(),
+        version: parent,
+        destination: "/B".into(),
+        parent_id: "root".into(),
+    };
+    j.prepare_native_move(&intent).unwrap();
+    j.dispatch_native_move("parent-A").unwrap();
+    j.receive_native_move(
+        "parent-A",
+        &MetadataEntry::new_dir("parent-A", "/B", 2, "folder-v2"),
+    )
+    .unwrap();
+    db.move_subtree_and_queue("parent-A", "/B").unwrap();
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    j.apply_native_move("parent-A").unwrap();
+    let child = j.native_projection_for_id(ID).unwrap().unwrap();
+    assert_eq!(child.path, "/B/generated.txt");
+    assert_eq!(child.state, "published");
+    assert!(
+        j.native_remote_updates("generated-root")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        j.native_source_imports("generated-root")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(j.snapshot(ID).unwrap().sync_confirmed());
+    assert!(!j.native_work_pending().unwrap());
+    assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+    assert!(!db.remove_unreferenced_cache(&path).unwrap());
+}
+#[test]
+fn confirmed_remote_retirement_isolates_verified_source_and_matches_recovery_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, path) = paths(temp.path());
+    db.init().unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(
+        ID,
+        "/generated.txt",
+        ORIGINAL.len() as u64,
+        1,
+        "version-1",
+    ))
+    .unwrap();
+    let binding = hash(b"generated-provider-binding");
+    let j = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    j.prepare_native_projection(ID, "generated-root", b"generated-removal-private-tag")
+        .unwrap();
+    j.complete_native_projection(ID, "generated-root", b"generated-removal-private-tag", 7, 9)
+        .unwrap();
+    let expected = j.native_projection_for_id(ID).unwrap().unwrap();
+    fs::write(&path, ORIGINAL).unwrap();
+    j.prepare_native_source_import(
+        twodrive_core::NativeSourceImport {
+            sequence: 0,
+            expected: expected.clone(),
+            source_root_receipt:
+                serde_json::json!({"schema_version":1,"volume_serial":7,"file_id":88}).to_string(),
+            source_file: twodrive_core::NativeFileIdentity {
+                volume_serial: 7,
+                file_id: 99,
+            },
+            cache_path: path.clone(),
+            digest: hash(ORIGINAL),
+            source_filetime: 116_444_736_000_000_000 + 123_456_789,
+            source_pinned: false,
+            state: "verified".into(),
+        },
+        digest,
+    )
+    .unwrap();
+    let removal = j
+        .prepare_native_remote_removal(&expected, |_, _| Ok(()))
+        .unwrap();
+    j.complete_native_remote_removal(&removal).unwrap();
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    assert!(
+        j.native_source_imports("generated-root")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!j.native_work_pending().unwrap());
+    assert!(j.native_remote_removal_applied(&expected).unwrap());
+    let mut foreign = expected;
+    foreign.native_file_id = Some("000000000000000a".into());
+    assert!(!j.native_remote_removal_applied(&foreign).unwrap());
+    assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+    assert!(!db.remove_unreferenced_cache(&path).unwrap());
+}

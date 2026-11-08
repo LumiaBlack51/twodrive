@@ -194,6 +194,38 @@ impl CacheJournal {
                         && (p.path == old_path || p.path == new_path),
                     "native move descendant publication changed"
                 );
+                // The verified ancestor move owns this subtree path transition.
+                // Local-only timestamp payloads still name the old child path;
+                // cancel them atomically, preserving their independent source.
+                if p.state == "updating" {
+                    let mut pending = tx.prepare("SELECT sequence,payload FROM local_native_remote_updates WHERE local_id=?1 AND state='prepared'")?;
+                    let rows = pending
+                        .query_map([&child], |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    drop(pending);
+                    for (sequence, payload) in rows {
+                        let update: super::native_remote::NativeRemoteUpdate =
+                            serde_json::from_str(&payload)?;
+                        if update.local_modified_filetime.is_none() {
+                            continue;
+                        }
+                        let mut baseline = update.expected.clone();
+                        baseline.state = "updating".into();
+                        baseline.path = p.path.clone();
+                        ensure!(
+                            baseline == p
+                                && update.expected.path == old_path
+                                && update.next.path == old_path
+                                && update.next.etag == p.etag,
+                            "moved child timestamp identity changed"
+                        );
+                        tx.execute("UPDATE local_native_remote_updates SET state='cancelled' WHERE sequence=?1 AND state='prepared'",[sequence])?;
+                        tx.execute("UPDATE local_native_source_imports SET state='isolated' WHERE local_id=?1 AND state IN ('verified','data_ready')",[&child])?;
+                        tx.execute("UPDATE local_native_projections SET state='published' WHERE local_id=?1 AND state='updating'",[&child])?;
+                    }
+                }
                 ensure!(tx.execute("UPDATE local_native_projections SET path=?2 WHERE local_id=?1 AND root_binding=?3",params![child,new_path,intent.publication.root_binding])?==1,"native move descendant changed");
             }
             ensure!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM local_cache_journal WHERE local_id=?1 AND (cloud_path NOT IN (?2,?3) OR upload_generation IS NOT NULL))",params![child,old_path,new_path],|r|r.get::<_,bool>(0))?,"native move descendant cache changed");

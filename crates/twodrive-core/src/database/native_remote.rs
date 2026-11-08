@@ -20,6 +20,19 @@ pub struct NativeRemoteRemoval {
     pub state: String,
 }
 impl CacheJournal {
+    pub fn native_remote_removal_applied(
+        &self,
+        expected: &NativeProjection,
+    ) -> anyhow::Result<bool> {
+        let conn = journal_connection(&self.0.db)?;
+        let mut stmt = conn.prepare("SELECT payload FROM local_native_remote_removals WHERE local_id=?1 AND state='applied'")?;
+        for row in stmt.query_map([&expected.local_id], |r| r.get::<_, String>(0))? {
+            if serde_json::from_str::<NativeRemoteRemoval>(&row?)?.expected == *expected {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     pub fn native_remote_removals(&self, root: &str) -> anyhow::Result<Vec<NativeRemoteRemoval>> {
         let conn = journal_connection(&self.0.db)?;
         let mut stmt=conn.prepare("SELECT sequence,payload,state FROM local_native_remote_removals WHERE root_binding=?1 AND state='prepared' ORDER BY sequence")?;
@@ -172,6 +185,7 @@ impl CacheJournal {
                 [&expected.local_id],
             )?;
         }
+        tx.execute("UPDATE local_native_source_imports SET state='isolated' WHERE local_id=?1 AND state IN ('verified','data_ready')", [&expected.local_id])?;
         tx.execute("DELETE FROM files WHERE remote_id=?1", [&expected.local_id])?;
         tx.execute("UPDATE local_native_remote_removals SET state='applied' WHERE sequence=?1 AND state='prepared'",[removal.sequence])?;
         tx.commit()?;

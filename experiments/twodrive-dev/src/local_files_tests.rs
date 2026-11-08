@@ -67,6 +67,15 @@ impl MockProvider {
         self.allow_extras = true;
         self
     }
+    #[cfg(all(windows, feature = "native-test-hooks"))]
+    pub(crate) fn nest_primary_for_test(&self) {
+        let mut remote = self.remote.lock().unwrap();
+        remote.path = format!("/A{}", remote.path);
+        self.folders
+            .lock()
+            .unwrap()
+            .push(MetadataEntry::new_dir("folder-A", "/A", 1, "folder-v1"));
+    }
     fn metadata(remote: &Remote) -> MetadataEntry {
         Self::metadata_id(OBJECT, remote)
     }

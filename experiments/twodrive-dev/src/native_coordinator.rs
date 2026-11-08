@@ -2058,6 +2058,16 @@ mod tests {
     fn source_replica_delete_after_cache_install() {
         source_import_recovery_case(8);
     }
+    #[test]
+    #[ignore = "explicit NEW generated root; parent move resolves prepared child timestamp"]
+    fn source_replica_parent_move_cancels_child_timestamp() {
+        source_import_recovery_case(10);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; bound remote deletion isolates pre-cache source receipt"]
+    fn source_replica_remote_delete_before_cache_install() {
+        source_import_recovery_case(11);
+    }
     fn source_import_recovery_case(mode: u8) {
         use sha2::Digest;
         let root = PathBuf::from(
@@ -2078,30 +2088,46 @@ mod tests {
         let cache = private.join("cache");
         std::fs::create_dir(&cache).unwrap();
         let provider = crate::local_files::tests::MockProvider::new().with_auxiliary_files();
+        if mode == 10 {
+            provider.nest_primary_for_test();
+        }
         let item = provider.list_all().unwrap().remove(0);
+        let mut indexed = vec![
+            IndexedItem {
+                id: "root".into(),
+                parent: None,
+                name: "root".into(),
+                kind: "folder".into(),
+                size: 0,
+                etag: "root-v1".into(),
+                modified: None,
+                deleted: false,
+            },
+            IndexedItem {
+                id: item.remote_id.clone(),
+                parent: Some(if mode == 10 { "folder-A" } else { "root" }.into()),
+                name: item.name.clone(),
+                kind: "file".into(),
+                size: item.size,
+                etag: item.etag.clone(),
+                modified: Some("1970-01-01T00:00:01Z".into()),
+                deleted: false,
+            },
+        ];
+        if mode == 10 {
+            indexed.push(IndexedItem {
+                id: "folder-A".into(),
+                parent: Some("root".into()),
+                name: "A".into(),
+                kind: "folder".into(),
+                size: 0,
+                etag: "folder-v1".into(),
+                modified: Some("1970-01-01T00:00:01Z".into()),
+                deleted: false,
+            });
+        }
         let plan = NamespacePlan::build(
-            &[
-                IndexedItem {
-                    id: "root".into(),
-                    parent: None,
-                    name: "root".into(),
-                    kind: "folder".into(),
-                    size: 0,
-                    etag: "v1".into(),
-                    modified: None,
-                    deleted: false,
-                },
-                IndexedItem {
-                    id: item.remote_id.clone(),
-                    parent: Some("root".into()),
-                    name: item.name.clone(),
-                    kind: "file".into(),
-                    size: item.size,
-                    etag: item.etag.clone(),
-                    modified: Some("1970-01-01T00:00:01Z".into()),
-                    deleted: false,
-                },
-            ],
+            &indexed,
             "root",
             100,
             twodrive_local_files::names::ordinal_ignorecase_cmp,
@@ -2127,7 +2153,11 @@ mod tests {
             &checkpoint,
         )
         .unwrap();
-        let path = owner.root().join(&item.name);
+        let path = if mode == 10 {
+            root.join("A").join(&item.name)
+        } else {
+            owner.root().join(&item.name)
+        };
         if mode == 2 {
             std::fs::write(
                 owner.root().join("unrelated.txt"),
@@ -2178,7 +2208,7 @@ mod tests {
             crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.set(true));
         }
 
-        let interrupted = if mode == 7 {
+        let interrupted = if matches!(mode, 7 | 11) {
             SourceImportProgress {
                 deferred: 1,
                 ..Default::default()
@@ -2220,17 +2250,32 @@ mod tests {
         } else {
             owner.resume_source_imports().unwrap()
         };
-        if matches!(mode, 5..=8) {
+        if matches!(mode, 5..=8 | 10) {
             use std::os::windows::process::CommandExt;
-            let code = if mode == 5 {
-                "[IO.File]::Move($env:TD_FROM,$env:TD_TO)"
+            let code = if matches!(mode, 5 | 10) {
+                "if ($env:TD_MODE -eq '10') {[IO.Directory]::Move($env:TD_FROM,$env:TD_TO)} else {[IO.File]::Move($env:TD_FROM,$env:TD_TO)}"
             } else {
                 "[IO.File]::Delete($env:TD_FROM)"
             };
             let child = std::process::Command::new("powershell.exe")
                 .args(["-NoProfile", "-NonInteractive", "-Command", code])
-                .env("TD_FROM", &path)
-                .env("TD_TO", root.join("target-renamed.txt"))
+                .env(
+                    "TD_FROM",
+                    if mode == 10 {
+                        root.join("A")
+                    } else {
+                        path.clone()
+                    },
+                )
+                .env(
+                    "TD_TO",
+                    if mode == 10 {
+                        root.join("B")
+                    } else {
+                        root.join("target-renamed.txt")
+                    },
+                )
+                .env("TD_MODE", mode.to_string())
                 .creation_flags(0x08000000)
                 .output()
                 .unwrap();
@@ -2240,6 +2285,13 @@ mod tests {
                 String::from_utf8_lossy(&child.stderr)
             );
             std::fs::remove_file(private.join("source-network-paused")).unwrap();
+        }
+        if mode == 11 {
+            use crate::provider::Provider;
+            std::fs::remove_file(private.join("source-network-paused")).unwrap();
+            provider.delete_bound(&item).unwrap();
+            let removed = owner.apply_remote_removals(&HashSet::new()).unwrap();
+            assert_eq!(removed.removed, 1, "{removed:?}");
         }
         let receipt = owner.receipt().clone();
         owner.disconnect().unwrap();
@@ -2254,7 +2306,7 @@ mod tests {
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "[IO.File]::Move($env:TD_FROM,$env:TD_TO)",
+                    "if ($env:TD_MODE -eq '10') {[IO.Directory]::Move($env:TD_FROM,$env:TD_TO)} else {[IO.File]::Move($env:TD_FROM,$env:TD_TO)}",
                 ])
                 .env("TD_FROM", root.join("unrelated.txt"))
                 .env("TD_TO", root.join("unrelated-renamed.txt"))
@@ -2274,10 +2326,12 @@ mod tests {
             owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
         }
         let mut recovered = owner.resume_source_imports().unwrap();
-        if matches!(mode, 5..=8) {
+        if matches!(mode, 5..=8 | 10 | 11) {
             let mut progress = owner.synchronize_once().unwrap();
             for _ in 0..20 {
-                if (mode == 5 && progress.renamed == 1) || (mode != 5 && progress.deleted == 1) {
+                if (matches!(mode, 5 | 10) && progress.renamed == 1)
+                    || (mode != 5 && progress.deleted == 1)
+                {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2304,7 +2358,29 @@ mod tests {
                 std::fs::read(cache.join("generated-source-copy.bin")).unwrap(),
                 bytes
             );
-            if mode == 5 {
+            if mode == 10 {
+                let child = root.join("B").join(&item.name);
+                let projection = owner
+                    .bridge
+                    .journal()
+                    .native_projection_for_id(&item.remote_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(projection.path, format!("/B/{}", item.name));
+                assert_eq!(projection.state, "published");
+                owner.disconnect().unwrap();
+                drop(owner);
+                owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+                assert_eq!(std::fs::read(&child).unwrap(), bytes);
+                std::fs::write(&child, b"new child edit after ancestor move").unwrap();
+                assert_eq!(owner.synchronize_once().unwrap().uploaded, 1);
+                assert_eq!(
+                    provider.download(&item.remote_id).unwrap(),
+                    b"new child edit after ancestor move"
+                );
+                std::fs::remove_file(child).unwrap();
+                std::fs::remove_dir(root.join("B")).unwrap();
+            } else if mode == 5 {
                 assert_eq!(
                     std::fs::read(root.join("target-renamed.txt")).unwrap(),
                     bytes

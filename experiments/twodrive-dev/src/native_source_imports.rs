@@ -82,6 +82,10 @@ impl NativeCoordinator {
                 .is_some_and(|(intent, state)| {
                     state == "applied" && intent.publication == import.expected
                 })
+                || self
+                    .bridge
+                    .journal()
+                    .native_remote_removal_applied(&import.expected)?
             {
                 self.bridge
                     .journal()
