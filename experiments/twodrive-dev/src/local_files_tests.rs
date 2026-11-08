@@ -17,6 +17,7 @@ const REMOTE_PATH: &str = "/generated-中文.txt";
 const INITIAL: &[u8] = b"generated initial provider content";
 const EDITED: &[u8] = b"generated unsynchronized content survives complete-byte checks";
 struct Remote {
+    present: bool,
     bytes: Vec<u8>,
     version: u64,
 }
@@ -30,12 +31,18 @@ impl MockProvider {
     fn new() -> Self {
         Self {
             remote: Arc::new(Mutex::new(Remote {
+                present: true,
                 bytes: INITIAL.to_vec(),
                 version: 1,
             })),
             mode: Arc::new(AtomicU8::new(0)),
             conditional: true,
         }
+    }
+    fn empty() -> Self {
+        let value = Self::new();
+        value.remote.lock().unwrap().present = false;
+        value
     }
     fn metadata(remote: &Remote) -> MetadataEntry {
         MetadataEntry::new_file(
@@ -68,7 +75,8 @@ impl CloudBackend for MockProvider {
     }
     fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
         ensure!(id == OBJECT, "opaque ID required, never a path");
-        Ok(Some(Self::metadata(&self.remote.lock().unwrap())))
+        let remote = self.remote.lock().unwrap();
+        Ok(remote.present.then(|| Self::metadata(&remote)))
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         ensure!(path == REMOTE_PATH, "unexpected fixture path");
@@ -146,7 +154,7 @@ impl Provider for MockProvider {
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
         ensure!(
-            path == REMOTE_PATH && id == Some(OBJECT),
+            path == REMOTE_PATH && (id == Some(OBJECT) || id.is_none()),
             "identity/path boundary violated"
         );
         let bytes = fs::read(source)?;
@@ -155,10 +163,18 @@ impl Provider for MockProvider {
             anyhow::bail!("injected offline before commit");
         }
         let mut remote = self.remote.lock().unwrap();
-        ensure!(
-            version == Some(Self::metadata(&remote).etag.as_str()),
-            "fixture conflict"
-        );
+        if id.is_none() {
+            ensure!(
+                !remote.present && version.is_none(),
+                "fixture conflict: create-only target exists"
+            );
+        } else {
+            ensure!(
+                remote.present && version == Some(Self::metadata(&remote).etag.as_str()),
+                "fixture conflict"
+            );
+        }
+        remote.present = true;
         remote.bytes = bytes;
         remote.version += 1;
         let result = Self::metadata(&remote);
@@ -724,6 +740,190 @@ fn native_cold_replacement_creates_a_dirty_snapshot_without_old_download() {
     fs::remove_dir(&root).unwrap();
     fs::remove_file(checkpoint).unwrap();
     operation.unwrap();
+}
+
+#[cfg(all(windows, feature = "native-sync", feature = "native-test-hooks"))]
+#[test]
+#[ignore = "explicit NEW generated CFAPI root; local creation and conversion interruption recovery"]
+fn native_new_file_keeps_its_local_identity_after_cloud_binding() {
+    use std::sync::atomic::AtomicBool;
+    use twodrive_local_files::native::{HydrationSource, persistent::PersistentSession};
+    struct NoDownload;
+    impl HydrationSource for NoDownload {
+        fn size(&self, _: &[u8]) -> Result<usize, String> {
+            Err("new file is resident".into())
+        }
+        fn read_range(
+            &self,
+            _: &[u8],
+            _: usize,
+            _: usize,
+            _: &AtomicBool,
+        ) -> Result<Vec<u8>, String> {
+            Err("no download".into())
+        }
+    }
+    let root = PathBuf::from(
+        std::env::var_os("TWODRIVE_APPROVED_NEW_FILE_ROOT").expect("explicit new root"),
+    );
+    assert!(
+        root.is_absolute()
+            && !root.exists()
+            && root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("twodrive-cfapi-fixture-office-")
+    );
+    let checkpoint = root.with_extension("receipt.json");
+    let provider = MockProvider::empty();
+    let f = fixture(&provider);
+    let mut owner = PersistentSession::create_new(
+        &root,
+        b"twodrive-dev-native-v1:generated-office-only",
+        &checkpoint,
+        Arc::new(NoDownload),
+    )
+    .unwrap();
+    let relative = Path::new("generated-中文.txt");
+    let visible = root.join(relative);
+    fs::write(&visible, EDITED).unwrap();
+    let id = "local-upload-native-new";
+    let root_binding = serde_json::to_string(owner.receipt()).unwrap();
+    assert!(
+        owner
+            .with_replacement_capture_staged::<()>(
+                relative,
+                id.as_bytes(),
+                |volume, file_id| {
+                    f.bridge
+                        .journal
+                        .begin_native_creation(
+                            id,
+                            REMOTE_PATH,
+                            &root_binding,
+                            &format!("{volume:08x}:{file_id:016x}"),
+                        )
+                        .map_err(|e| e.to_string())
+                },
+                |_| Err("injected interruption after conversion before snapshot".into())
+            )
+            .is_err()
+    );
+    assert_eq!(
+        f.bridge.journal.native_creations().unwrap()[0].state,
+        "preparing"
+    );
+    owner.disconnect().unwrap();
+    drop(owner);
+    drop(f.bridge);
+    let bridge = LocalFileBridge::open(
+        f.db.clone(),
+        &f.cache,
+        Backend::new(provider.clone()),
+        "generated-provider-account-1",
+    )
+    .unwrap();
+    let mut owner =
+        PersistentSession::resume_from_checkpoint(&root, &checkpoint, Arc::new(NoDownload))
+            .unwrap();
+    bridge.create_native_file(&owner, relative, id).unwrap();
+    assert_eq!(
+        bridge.journal.native_creations().unwrap()[0].state,
+        "staged"
+    );
+    assert!(bridge.upload(id, no_progress()).unwrap());
+    assert!(bridge.acknowledge_native(&visible, id).unwrap());
+    assert_eq!(
+        bridge.journal.native_creations().unwrap()[0]
+            .cloud_id
+            .as_deref(),
+        Some(OBJECT)
+    );
+    fs::write(&visible, b"new local edit after first upload").unwrap();
+    bridge
+        .capture_native_replacement(&owner, relative, id)
+        .unwrap();
+    assert!(bridge.upload(id, no_progress()).unwrap());
+    assert!(bridge.acknowledge_native(&visible, id).unwrap());
+    assert_eq!(
+        provider.download(OBJECT).unwrap(),
+        b"new local edit after first upload"
+    );
+    assert_eq!(
+        f.db.get_by_remote_id(id)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .remote_id,
+        id
+    );
+    fs::remove_file(&visible).unwrap();
+    owner.retire_empty_office_fixture().unwrap();
+    drop(owner);
+    fs::remove_dir(&root).unwrap();
+    fs::remove_file(checkpoint).unwrap();
+}
+
+#[test]
+fn local_creation_binds_a_real_id_and_recovers_a_lost_reply_without_overwriting() {
+    for lost_reply in [false, true] {
+        let provider = MockProvider::empty();
+        let f = fixture(&provider);
+        let id = "local-upload-new-native";
+        let snapshot = f.cache.join("new-complete");
+        fs::write(&snapshot, EDITED).unwrap();
+        f.bridge.stage_creation(id, REMOTE_PATH, &snapshot).unwrap();
+        assert!(!f.bridge.status(id).unwrap().sync_confirmed());
+        assert!(
+            f.db.get_by_remote_id(id)
+                .unwrap()
+                .unwrap()
+                .cloud_remote_id
+                .is_none()
+        );
+        if lost_reply {
+            provider.mode.store(2, Ordering::SeqCst);
+            assert!(f.bridge.upload(id, no_progress()).is_err());
+            assert!(f.bridge.status(id).unwrap().uncertain_upload);
+            drop(f.bridge);
+            provider.mode.store(0, Ordering::SeqCst);
+            let reopened = LocalFileBridge::open(
+                f.db.clone(),
+                &f.cache,
+                Backend::new(provider.clone()),
+                "generated-provider-account-1",
+            )
+            .unwrap();
+            assert!(reopened.reconcile(id).unwrap());
+            assert!(reopened.status(id).unwrap().sync_confirmed());
+        } else {
+            assert!(f.bridge.upload(id, no_progress()).unwrap());
+        }
+        let record = f.db.get_by_remote_id(id).unwrap().unwrap();
+        assert_eq!(record.cloud_remote_id.as_deref(), Some(OBJECT));
+        assert_eq!(record.metadata.remote_id, id);
+        assert_eq!(provider.download(OBJECT).unwrap(), EDITED);
+        assert_eq!(fs::read(&snapshot).unwrap(), EDITED);
+    }
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    let snapshot = f.cache.join("must-not-replace");
+    fs::write(&snapshot, EDITED).unwrap();
+    f.bridge
+        .stage_creation("local-upload-conflicting", REMOTE_PATH, &snapshot)
+        .unwrap();
+    assert!(
+        f.bridge
+            .upload("local-upload-conflicting", no_progress())
+            .is_err()
+    );
+    assert_eq!(
+        f.bridge.status("local-upload-conflicting").unwrap().state,
+        FileState::Conflict
+    );
+    assert_eq!(provider.download(OBJECT).unwrap(), INITIAL);
+    assert_eq!(fs::read(&snapshot).unwrap(), EDITED);
 }
 
 #[test]

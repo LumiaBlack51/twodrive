@@ -9,6 +9,11 @@ pub use namespace::NativeEntry;
 #[path = "native_events.rs"]
 pub(crate) mod events;
 pub use events::{DatabaseEventSink, NativeEvent, NativeEventKind, NativeEventSink};
+#[path = "native_watcher.rs"]
+mod watcher;
+pub use watcher::{
+    DirectoryChange, DirectoryChangeBatch, DirectoryWatcher, DurableDirectoryWatcher,
+};
 
 pub const ROOT_IDENTITY_PREFIX: &[u8] = b"twodrive-dev-native-v1:";
 
@@ -556,6 +561,16 @@ impl PersistentSession {
         identity: &[u8],
         action: impl FnOnce(&NativeCapture<'_>) -> Result<T>,
     ) -> Result<T> {
+        self.with_replacement_capture_staged(relative, identity, |_, _| Ok(()), action)
+    }
+
+    pub fn with_replacement_capture_staged<T>(
+        &self,
+        relative: &Path,
+        identity: &[u8],
+        before_convert: impl FnOnce(u32, u64) -> Result<()>,
+        action: impl FnOnce(&NativeCapture<'_>) -> Result<T>,
+    ) -> Result<T> {
         if self.connection.is_none() || identity.is_empty() || identity.len() > 4096 {
             return Err("invalid native replacement capture".into());
         }
@@ -585,6 +600,8 @@ impl PersistentSession {
             return Err("replacement size unavailable".into());
         }
         lease.size = usize::try_from(size).map_err(|_| "replacement size overflow")?;
+        let file_id = ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64;
+        before_convert(info.dwVolumeSerialNumber, file_id)?;
         if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
             if tag.FileAttributes
                 & (FILE_ATTRIBUTE_OFFLINE

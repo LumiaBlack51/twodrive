@@ -97,6 +97,16 @@ impl LocalFileBridge {
         self.journal.open_write(id)
     }
 
+    pub fn stage_creation(
+        &self,
+        id: &str,
+        cloud_path: &str,
+        snapshot: &Path,
+    ) -> anyhow::Result<()> {
+        crate::provider::valid_path(cloud_path)?;
+        self.journal.stage_local_creation(id, cloud_path, snapshot)
+    }
+
     #[cfg(all(windows, feature = "native-local-fixture"))]
     pub fn capture_native_edit(&self, path: &Path, id: &str) -> anyhow::Result<i64> {
         let record = self
@@ -104,16 +114,13 @@ impl LocalFileBridge {
             .database()
             .get_by_remote_id(id)?
             .context("unknown native item")?;
-        let cloud_id = record
-            .cloud_remote_id
-            .as_deref()
-            .context("unbound native item")?;
+        let cloud_id = record.cloud_remote_id.as_deref().unwrap_or(id);
         self.journal.record_native_edit(cloud_id)?;
         let generation = self
             .journal
             .snapshot_if_owned(id)?
             .map(|state| state.generation);
-        twodrive_local_files::native::with_native_capture(path, cloud_id.as_bytes(), |locked| {
+        twodrive_local_files::native::with_native_capture(path, id.as_bytes(), |locked| {
             self.capture_locked_native(locked, &record, generation)
         })
         .map_err(anyhow::Error::msg)
@@ -168,10 +175,7 @@ impl LocalFileBridge {
             .database()
             .get_by_remote_id(id)?
             .context("unknown replacement item")?;
-        let cloud_id = record
-            .cloud_remote_id
-            .as_deref()
-            .context("unbound replacement item")?;
+        let cloud_id = record.cloud_remote_id.as_deref().unwrap_or(id);
         let parts = relative
             .components()
             .map(|part| match part {
@@ -191,9 +195,62 @@ impl LocalFileBridge {
             .snapshot_if_owned(id)?
             .map(|state| state.generation);
         owner
-            .with_replacement_capture(relative, cloud_id.as_bytes(), |locked| {
+            .with_replacement_capture(relative, id.as_bytes(), |locked| {
                 self.capture_locked_native(locked, &record, generation)
             })
+            .map_err(anyhow::Error::msg)
+    }
+
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub fn create_native_file(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        relative: &Path,
+        id: &str,
+    ) -> anyhow::Result<()> {
+        let parts = relative
+            .components()
+            .map(|part| match part {
+                std::path::Component::Normal(name) => {
+                    name.to_str().context("invalid creation name")
+                }
+                _ => anyhow::bail!("relative creation path required"),
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let cloud_path = format!("/{}", parts.join("/"));
+        crate::provider::valid_path(&cloud_path)?;
+        let root_binding = serde_json::to_string(owner.receipt())?;
+        owner
+            .with_replacement_capture_staged(
+                relative,
+                id.as_bytes(),
+                |volume, file_id| {
+                    self.journal
+                        .begin_native_creation(
+                            id,
+                            &cloud_path,
+                            &root_binding,
+                            &format!("{volume:08x}:{file_id:016x}"),
+                        )
+                        .map_err(|e| e.to_string())
+                },
+                |locked| {
+                    let modified = locked.modified_time()?;
+                    let mut snapshot = tempfile::NamedTempFile::new_in(self.journal.cache_root())
+                        .map_err(|e| e.to_string())?;
+                    locked.copy_resident_to(snapshot.as_file_mut())?;
+                    snapshot
+                        .as_file()
+                        .set_times(std::fs::FileTimes::new().set_modified(modified))
+                        .map_err(|e| e.to_string())?;
+                    snapshot.as_file().sync_all().map_err(|e| e.to_string())?;
+                    let (file, path) = snapshot.keep().map_err(|e| e.to_string())?;
+                    drop(file);
+                    self.journal
+                        .stage_local_creation(id, &cloud_path, &path)
+                        .map_err(|e| e.to_string())
+                },
+            )
             .map_err(anyhow::Error::msg)
     }
 
@@ -206,10 +263,7 @@ impl LocalFileBridge {
             .database()
             .get_by_remote_id(id)?
             .context("unknown native item")?;
-        let cloud_id = record
-            .cloud_remote_id
-            .as_deref()
-            .context("unbound native item")?;
+        let cloud_id = record.cloud_remote_id.as_deref().unwrap_or(id);
         let generation = self.status(id)?.generation;
         enum Verification {
             Confirmed,
@@ -222,37 +276,33 @@ impl LocalFileBridge {
                 if digest_file(cache)? != expected {
                     return Ok(Verification::CacheChanged);
                 }
-                twodrive_local_files::native::with_native_capture(
-                    path,
-                    cloud_id.as_bytes(),
-                    |locked| {
-                        struct HashSink(Sha256);
-                        impl std::io::Write for HashSink {
-                            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-                                self.0.update(data);
-                                Ok(data.len())
-                            }
-                            fn flush(&mut self) -> std::io::Result<()> {
-                                Ok(())
-                            }
+                twodrive_local_files::native::with_native_capture(path, id.as_bytes(), |locked| {
+                    struct HashSink(Sha256);
+                    impl std::io::Write for HashSink {
+                        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                            self.0.update(data);
+                            Ok(data.len())
                         }
-                        let mut hash = HashSink(Sha256::new());
-                        let size = locked.copy_resident_to(&mut hash)?;
-                        let modified = locked
-                            .modified_time()?
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_err(|e| e.to_string())?
-                            .as_secs() as i64;
-                        if size != record.metadata.size
-                            || modified != record.metadata.modified_unix
-                            || format!("{:x}", hash.0.finalize()) != expected
-                        {
-                            return Ok(Verification::NativeChanged);
+                        fn flush(&mut self) -> std::io::Result<()> {
+                            Ok(())
                         }
-                        locked.set_in_sync_after_verification()?;
-                        Ok(Verification::Confirmed)
-                    },
-                )
+                    }
+                    let mut hash = HashSink(Sha256::new());
+                    let size = locked.copy_resident_to(&mut hash)?;
+                    let modified = locked
+                        .modified_time()?
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|e| e.to_string())?
+                        .as_secs() as i64;
+                    if size != record.metadata.size
+                        || modified != record.metadata.modified_unix
+                        || format!("{:x}", hash.0.finalize()) != expected
+                    {
+                        return Ok(Verification::NativeChanged);
+                    }
+                    locked.set_in_sync_after_verification()?;
+                    Ok(Verification::Confirmed)
+                })
                 .map_err(anyhow::Error::msg)
             })?;
         match result {
@@ -332,16 +382,29 @@ impl LocalFileBridge {
         );
         let mut lease = self.journal.begin_upload(id, digest_file)?;
         let record = lease.record().clone();
-        match provider.upload_snapshot(
-            &record.metadata.path,
-            record.cache_path.as_deref().context("missing cache")?,
-            record
-                .cloud_remote_id
-                .as_deref()
-                .context("unbound cache object")?,
-            &record.metadata.etag,
-            progress,
-        ) {
+        let transfer = if let Some(cloud_id) = record.cloud_remote_id.as_deref() {
+            provider.upload_snapshot(
+                &record.metadata.path,
+                record.cache_path.as_deref().context("missing cache")?,
+                cloud_id,
+                &record.metadata.etag,
+                progress,
+            )
+        } else {
+            ensure!(
+                record.metadata.etag.is_empty(),
+                "unbound creation has an invalid version"
+            );
+            provider.create_snapshot(
+                &record.metadata.path,
+                record
+                    .cache_path
+                    .as_deref()
+                    .context("missing creation snapshot")?,
+                progress,
+            )
+        };
+        match transfer {
             Ok(remote) => {
                 let digest = digest_file(lease.file())?;
                 lease.acknowledge(&core_metadata(&remote), &digest)
@@ -364,13 +427,12 @@ impl LocalFileBridge {
             .database()
             .get_by_remote_id(id)?
             .context("unknown local item")?;
-        let remote_id = record
-            .cloud_remote_id
-            .as_deref()
-            .context("unbound local item")?;
-        let before = backend
-            .get_metadata(remote_id)?
-            .context("provider object missing")?;
+        let before = match record.cloud_remote_id.as_deref() {
+            Some(remote_id) => backend.get_metadata(remote_id)?,
+            None => backend.get_metadata_by_path(&record.metadata.path)?,
+        }
+        .context("provider object missing; creation remains uncertain")?;
+        let remote_id = before.remote_id.as_str();
         ensure!(
             !before.is_dir && !before.etag.is_empty(),
             "versioned provider file required"

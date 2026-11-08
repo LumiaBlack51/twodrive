@@ -67,6 +67,62 @@ fn edit(j: &CacheJournal) {
 }
 
 #[test]
+fn native_creation_claim_survives_restart_and_new_edits_veto_the_first_receipt() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, root, path) = paths(temp.path());
+    db.init().unwrap();
+    let binding = hash(b"new native provider");
+    let j = CacheJournal::open(db.clone(), &root, &binding).unwrap();
+    let id = "local-upload-native-claim";
+    j.begin_native_creation(id, "/new.txt", "root-a", "volume:file")
+        .unwrap();
+    assert!(
+        j.begin_native_creation(id, "/new.txt", "root-b", "volume:file")
+            .is_err()
+    );
+    assert!(
+        j.begin_native_creation("local-upload-other", "/new.txt", "root-a", "volume:file")
+            .is_err()
+    );
+    drop(j);
+    // Upgrade of old bound-only owners preserves their records; old binaries
+    // reject schema 3 instead of interpreting an empty cloud binding as an ID.
+    db.set_state_value("local_cache_schema", "2").unwrap();
+    let j = CacheJournal::open(db.clone(), &root, &binding).unwrap();
+    assert_eq!(
+        db.get_state_value("local_cache_schema").unwrap().as_deref(),
+        Some("3")
+    );
+    assert_eq!(j.native_creations().unwrap()[0].state, "preparing");
+    fs::write(&path, EDITED).unwrap();
+    j.stage_local_creation(id, "/new.txt", &path).unwrap();
+    let mut upload = j.begin_upload(id, digest).unwrap();
+    j.record_native_edit(id).unwrap();
+    let remote = MetadataEntry::new_file(
+        "new-server-id",
+        "/new.txt",
+        EDITED.len() as u64,
+        2,
+        "created-v1",
+    );
+    let checksum = digest(upload.file()).unwrap();
+    assert!(upload.acknowledge(&remote, &checksum).unwrap());
+    let status = j.snapshot(id).unwrap();
+    assert!(status.native_dirty && !status.sync_confirmed());
+    assert_eq!(
+        j.native_creations().unwrap()[0].cloud_id.as_deref(),
+        Some("new-server-id")
+    );
+    let newer = root.join("newer");
+    fs::write(&newer, b"new user edit").unwrap();
+    j.stage_native_edit(id, status.generation, &newer, 13)
+        .unwrap();
+    assert!(!j.snapshot(id).unwrap().native_dirty);
+    assert!(!j.native_dirty("new-server-id").unwrap());
+    assert_eq!(fs::read(&newer).unwrap(), b"new user edit");
+}
+
+#[test]
 fn first_native_snapshot_is_dirty_cancels_old_hydration_and_rejects_changed_baselines() {
     for invalidation in ["none", "etag", "cache", "delete"] {
         let temp = tempfile::tempdir().unwrap();

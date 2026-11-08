@@ -208,3 +208,23 @@ Complete ordinary replacements before first hydration now establish a Dirty
 initial cache journal without downloading the old version. Their observed cloud
 baseline and pending-work checks remain mandatory; stale hydration cannot publish
 over the new generation.
+
+
+New native ordinary files now persist a physical/root-bound creation claim before
+conversion, then establish an unbound Dirty snapshot. Atomic create-only upload
+binds the real cloud ID without changing the native local identity. Schema 3
+upgrades schema 2 and is refused by the older binary. Generated Windows tests
+cover interruption before snapshot publication, restart, cloud binding and a
+subsequent edit. Mock lost-reply reconciliation requires complete re-downloaded
+bytes; a same-name conflict leaves both sides intact. A fourth generated TXT file
+in the actual Office/cloud run passed new-file upload, full readback and native
+acknowledgement; all generated scopes were retired.
+
+The recursive ordinary-file watcher now reports physical file/parent IDs for
+create/write/rename/delete without reading content. Its durable wrapper commits
+whole batches before exposing a watermark; partial SQLite failure rolls back the
+batch and stops the subscription. Restart and overflow require inventory, and a
+scan cannot clear a changed epoch/generation. Native generated rename/delete
+observations survived watcher recreation; cancellation drains pending OS buffer
+references. These are observations, not permission to delete a cloud item.
+The persistent coordinator and namespace mutation consumer remain outstanding.

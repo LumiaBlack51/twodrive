@@ -62,6 +62,20 @@ impl Database {
                 payload TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_native_event_binding ON native_event_log(binding,sequence);
+            CREATE TABLE IF NOT EXISTS native_watch_state (
+                binding TEXT PRIMARY KEY,
+                epoch INTEGER NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 0,
+                rescan_required INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS native_observation_log (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                binding TEXT NOT NULL,
+                epoch INTEGER NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_native_observation_binding
+                ON native_observation_log(binding,sequence);
             "#,
         )?;
         ensure_column(

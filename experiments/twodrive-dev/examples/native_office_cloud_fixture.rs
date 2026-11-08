@@ -179,6 +179,42 @@ fn run() -> anyhow::Result<()> {
             println!("verified:{name}");
             std::io::stdout().flush()?;
         }
+        // Exercise the real create-only path too: its local identity must
+        // remain stable after the service assigns a different opaque item ID.
+        let new_name = "generated-new.txt";
+        let new_relative = Path::new(&folder_name).join(new_name);
+        let new_visible = office_folder.join(new_name);
+        let new_bytes = b"generated native creation; no previous cloud object";
+        fs::write(&new_visible, new_bytes)?;
+        let new_id = "local-upload-native-generated-creation";
+        bridge.create_native_file(&owner, &new_relative, new_id)?;
+        ensure!(
+            bridge.upload(new_id, no_progress())?,
+            "new local file was not acknowledged"
+        );
+        ensure!(
+            bridge.acknowledge_native(&new_visible, new_id)?,
+            "new native identity was not acknowledged"
+        );
+        let created = bridge
+            .journal()
+            .database()
+            .get_by_remote_id(new_id)?
+            .context("creation disappeared")?;
+        let cloud_id = created
+            .cloud_remote_id
+            .context("creation did not bind a cloud ID")?;
+        ensure!(
+            provider.download(&cloud_id)? == new_bytes,
+            "created cloud file differs"
+        );
+        receipts.push(
+            provider
+                .get_metadata(&cloud_id)?
+                .context("created item missing")?,
+        );
+        fs::remove_file(&new_visible)?;
+        println!("verified:native-create-only-file");
         println!("verified:all-office-documents");
         std::io::stdout().flush()?;
         ensure!(

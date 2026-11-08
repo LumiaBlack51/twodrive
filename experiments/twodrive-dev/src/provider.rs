@@ -148,6 +148,36 @@ impl Backend {
 }
 
 impl Backend {
+    /// No object/version means the Provider's atomic create-only contract.
+    /// Do not perform a check-then-unconditional-write fallback.
+    pub fn create_snapshot(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<MetadataEntry> {
+        valid_path(path)?;
+        self.check_pause()?;
+        let caps = self.capabilities();
+        ensure!(
+            caps.upload && caps.conditional_upload,
+            "atomic creation unavailable"
+        );
+        let paused = self.paused.clone();
+        self.inner.upload_controlled(
+            path,
+            source,
+            None,
+            None,
+            Arc::new(move |done, total| {
+                ensure!(
+                    !paused.as_ref().is_some_and(|path| path.exists()),
+                    "synchronization paused"
+                );
+                progress(done, total)
+            }),
+        )
+    }
     /// A journal claim owns an opaque object/version snapshot. Do not select a
     /// potentially replaced object by path again at transfer time.
     pub fn upload_snapshot(

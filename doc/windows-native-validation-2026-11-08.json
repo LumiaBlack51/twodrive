@@ -253,5 +253,27 @@
     "dirty_generation": 1,
     "stale_hydration_rejected": true,
     "baseline_cache_and_delete_change_vetoes": true
+  },
+  "native_new_file": {
+    "stable_local_id_then_real_cloud_binding": true,
+    "creation_intent_precedes_native_conversion": true,
+    "restart_after_conversion_before_snapshot": true,
+    "mock_lost_reply_and_same_name_conflict": true,
+    "actual_personal_onedrive_create_only_and_full_readback": true,
+    "schema": 3,
+    "schema_2_upgrade": true,
+    "generated_scopes_retired": true,
+    "production_worker_enabled": false
+  },
+  "ordinary_directory_watch": {
+    "actual_windows_create_write_rename_delete": true,
+    "file_and_parent_ids_preserved": true,
+    "no_hydration": true,
+    "pending_io_drained_on_drop": true,
+    "durable_batch_before_consumer": true,
+    "restart_and_overflow_require_inventory": true,
+    "stale_scan_watermark_cannot_clear_new_changes": true,
+    "sqlite_partial_batch_rolls_back": true,
+    "cloud_deletion_authority": false
   }
 }

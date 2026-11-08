@@ -13,6 +13,7 @@ pub use config::{
 };
 pub use credentials::{TokenData, TokenStore};
 pub use database::Database;
+pub use database::NativeWatchState;
 pub use database::cloud::{CloudIdentity, DownloadTask, IndexedItem};
 pub use database::local_journal::{
     CacheJournal, CacheReadLease, CacheSnapshot, CacheWriteLease, UploadLease,
