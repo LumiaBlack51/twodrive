@@ -52,6 +52,13 @@ impl Database {
     }
 
     pub fn recompute_pin_inheritance(&self) -> anyhow::Result<()> {
+        let native:bool=self.connect()?.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_native_projections')",[],|r|r.get(0))?;
+        self.recompute_pin_inheritance_mode(native)
+    }
+    pub(crate) fn recompute_native_pin_inheritance(&self) -> anyhow::Result<()> {
+        self.recompute_pin_inheritance_mode(true)
+    }
+    fn recompute_pin_inheritance_mode(&self, native: bool) -> anyhow::Result<()> {
         let mut conn = self
             .connect()
             .context("pin inheritance: opening connection")?;
@@ -106,15 +113,16 @@ impl Database {
                     release_pending = CASE WHEN ?2 = 1 THEN 0 ELSE release_pending END,
                     state = CASE
                         WHEN state IN ('writing', 'dirty', 'uploading', 'conflict', 'error') THEN state
+                        WHEN ?4 = 1 AND state='hydrating' THEN state
                         WHEN ?2 = 1 AND is_dir = 1 THEN 'pinned'
                         WHEN ?2 = 1 AND cache_path IS NOT NULL THEN 'pinned'
-                        WHEN ?2 = 1 THEN 'hydrating'
+                        WHEN ?2 = 1 THEN CASE WHEN ?4=1 THEN 'online_only' ELSE 'hydrating' END
                         WHEN cache_path IS NOT NULL THEN 'cached'
                         ELSE 'online_only'
                     END
                 WHERE remote_id = ?3
                 "#,
-                params![origin, effective as i64, remote_id],
+                params![origin, effective as i64, remote_id, native as i64],
             ).context("pin inheritance: updating record")?;
         }
         tx.commit()

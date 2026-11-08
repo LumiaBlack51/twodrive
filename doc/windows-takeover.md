@@ -507,3 +507,38 @@ Still required before original-folder cutover: installed continuous runtime,
 native pin/free-space and cache handling, conflict recovery interface, registered
 Office acceptance, source-resident data preservation and a tested rollback/cutover.
 The Microsoft client and original folder are retained.
+
+
+## Continuous runtime and residency, current candidate
+
+`twodrive-native-dev run --native-state <state>` enables the verified coordinator,
+30-second account delta refreshes and Shell pin/free-space consumption. Add
+`--seconds <n>` for a bounded run. `stop --native-state <state>` requests a graceful
+stop through a user-scoped event without opening a competing cache owner.
+Registration remains available after disconnect. This command does not install
+a logon task, change the Microsoft client, or adopt an existing root.
+
+Pinned files hydrate only through their published physical version, with a disk
+space reserve. Free-space requests retain the native protected oplock and private
+file/hash/generation/SQL leases together; dirty content, readers, pending namespace
+work or pins veto release. A clean successful release detaches/reclaims only the
+confirmed private cache and native resident copy. Recovery archives remain owned.
+The actual personal generated scope passed pin, a remote changed-length version,
+release of native/private cache and full real-cloud rehydration.
+
+Pinned remote updates preserve their intent durably while temporarily adjusting
+the platform pin around clean version invalidation, restoring it afterward.
+Generated restart cases cover native update and rename boundaries, full bytes and
+final pin state. Shared pin inheritance keeps a native pin intent distinct from
+an actual download claim. New private writers are fenced transactionally during
+prepared remote update/removal, including restart; both old-code contracts failed.
+
+A real limited unpackaged process ran the complete account side root, including
+idle local coordination, three real delta cycles and residency checks, then exited
+and passed a full metadata/physical inventory. It imported seven newly observed
+cloud files as metadata, with zero private user-content cache files. Single complete
+clean-inventory reconciliation reduced the initial local cycle from approximately
+156 seconds to 24,164 ms; mutations and dirty/private/unknown states retain the full
+consumers. One-shot validation tasks were removed and private evidence retained.
+Normal logon startup, conflict recovery, installed Office/open-editor acceptance,
+source data preservation and actual rollback/cutover remain required.

@@ -1923,6 +1923,23 @@ pub struct LockedPlaceholder<'a> {
     size: usize,
 }
 impl LockedPlaceholder<'_> {
+    #[cfg(feature = "native-sync")]
+    pub fn hydrate(&self) -> Result<()> {
+        let before = self.inspect()?;
+        if !before.os_in_sync || before.modified_bytes != 0 {
+            return Err("pin hydration preserves native edits".into());
+        }
+        hr(
+            unsafe {
+                CfHydratePlaceholder(self.handle, 0, -1, CF_HYDRATE_FLAG_NONE, ptr::null_mut())
+            },
+            "hydrate pinned native version",
+        )?;
+        if !self.inspect()?.resident {
+            return Err("pin hydration incomplete".into());
+        }
+        Ok(())
+    }
     pub fn inspect(&self) -> Result<NativeObservation> {
         observation(
             unsafe { CfGetWin32HandleFromProtectedHandle(self.handle) },
@@ -2018,6 +2035,7 @@ impl NativeCapture<'_> {
         size: u64,
         modified_unix: i64,
         owned_rename: bool,
+        preserve_pin: bool,
     ) -> Result<()> {
         let before = self.0.inspect()?;
         if (!before.os_in_sync && !owned_rename) || before.modified_bytes != 0 {
@@ -2053,7 +2071,21 @@ impl NativeCapture<'_> {
             StartingOffset: 0,
             Length: -1,
         };
-        hr(
+        let restore_pin = !self.0.directory && (before.pinned || preserve_pin);
+        if before.pinned && !self.0.directory {
+            hr(
+                unsafe {
+                    CfSetPinState(
+                        self.0.handle.0,
+                        CF_PIN_STATE_UNSPECIFIED,
+                        CF_SET_PIN_FLAG_NONE,
+                        ptr::null_mut(),
+                    )
+                },
+                "temporarily release preserved pin for version update",
+            )?;
+        }
+        let updated = hr(
             unsafe {
                 CfUpdatePlaceholder(
                     self.0.handle.0,
@@ -2082,7 +2114,24 @@ impl NativeCapture<'_> {
                 )
             },
             "update verified remote native version",
-        )?;
+        );
+        let restored = if restore_pin {
+            hr(
+                unsafe {
+                    CfSetPinState(
+                        self.0.handle.0,
+                        CF_PIN_STATE_PINNED,
+                        CF_SET_PIN_FLAG_NONE,
+                        ptr::null_mut(),
+                    )
+                },
+                "restore durable pin after version update",
+            )
+        } else {
+            Ok(())
+        };
+        updated?;
+        restored?;
         let after = node_observation(
             self.0.handle.0,
             &self.0.identity,

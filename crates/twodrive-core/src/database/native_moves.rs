@@ -10,6 +10,22 @@ pub struct NativeMoveIntent {
     pub parent_id: String,
 }
 impl CacheJournal {
+    pub fn native_pending_moves(
+        &self,
+        root: &str,
+    ) -> anyhow::Result<Vec<(NativeMoveIntent, String)>> {
+        let conn = journal_connection(&self.0.db)?;
+        let mut statement=conn.prepare("SELECT intent,state FROM local_native_moves WHERE root_binding=?1 AND state<>'applied' ORDER BY local_id")?;
+        statement
+            .query_map([root], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .map(|row| {
+                let (intent, state) = row?;
+                Ok((serde_json::from_str(&intent)?, state))
+            })
+            .collect()
+    }
     pub fn native_move(&self, id: &str) -> anyhow::Result<Option<(NativeMoveIntent, String)>> {
         let row = journal_connection(&self.0.db)?
             .query_row(

@@ -441,6 +441,62 @@ impl PersistentSession {
         &self.guard.root
     }
 
+    /// Parent leases remain held across the protected native file operation.
+    pub fn with_owned_exclusive<T>(
+        &self,
+        relative: &Path,
+        tag: &[u8],
+        physical: twodrive_core::NativeFileIdentity,
+        size: u64,
+        action: impl FnOnce(&LockedPlaceholder<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let (_, _parents) = self.guard_relative_parent(relative)?;
+        with_exclusive_placeholder(
+            &self.root().join(relative),
+            tag,
+            usize::try_from(size).map_err(|_| "native size overflow")?,
+            |locked| {
+                let raw = unsafe { CfGetWin32HandleFromProtectedHandle(locked.handle) };
+                let (volume, id, directory) = file_binding(raw)?;
+                let (root_id, identity) = root_identity(raw)?;
+                if directory
+                    || volume != physical.volume_serial
+                    || id != physical.file_id
+                    || root_id != self.receipt.file_id
+                    || identity != self.receipt.identity
+                {
+                    return Err("exclusive native root or physical identity changed".into());
+                }
+                action(locked)
+            },
+        )
+    }
+
+    pub fn has_hydration_space(&self, cache: &Path, size: u64) -> Result<bool> {
+        let required = size
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(64 * 1024 * 1024))
+            .ok_or("hydration size overflow")?;
+        for path in [self.root(), cache] {
+            let mut free = 0;
+            if unsafe {
+                GetDiskFreeSpaceExW(
+                    wide(path).as_ptr(),
+                    &mut free,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err("hydration free space unavailable".into());
+            }
+            if free < required {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Publish verified cloud metadata without downloading content. Never
     /// replaces a file; every existing parent must be an owned cloud directory.
     pub fn publish_placeholder(

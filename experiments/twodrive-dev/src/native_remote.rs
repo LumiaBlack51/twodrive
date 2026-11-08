@@ -13,6 +13,13 @@ pub struct RemoteProgress {
 impl NativeSession {
     /// Refresh account metadata independently of native/data mutation phases.
     pub fn refresh_remote(&mut self) -> anyhow::Result<RemoteProgress> {
+        self.refresh_remote_controlled(&mut || Ok(()))
+    }
+    pub fn refresh_remote_controlled(
+        &mut self,
+        check_stop: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<RemoteProgress> {
+        check_stop()?;
         let provider = crate::native_account::NativeAccount::new(
             self.configuration.account.clone(),
             self.configuration.identity.clone(),
@@ -22,6 +29,7 @@ impl NativeSession {
         let db = self.coordinator.bridge.journal().database();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         let mut check = || {
+            check_stop()?;
             ensure!(
                 std::time::Instant::now() < deadline,
                 "native delta refresh deadline reached"
@@ -102,8 +110,8 @@ impl NativeCoordinator {
     ) -> anyhow::Result<RemoteProgress> {
         let binding = self.binding()?.to_string();
         let mut progress = RemoteProgress::default();
-        self.last_successful_watch = None;
         for removal in self.bridge.journal().native_remote_removals(&binding)? {
+            self.last_successful_watch = None;
             match self.bridge.apply_native_remote_removal(
                 &self.owner,
                 &removal.expected,
@@ -123,6 +131,7 @@ impl NativeCoordinator {
             .into_iter()
             .filter(|p| p.state == "published" && !remaining.contains(&p.cloud_id))
         {
+            self.last_successful_watch = None;
             let result = (|| -> anyhow::Result<()> {
                 ensure!(
                     self.bridge
@@ -249,8 +258,8 @@ impl NativeCoordinator {
     ) -> anyhow::Result<RemoteProgress> {
         let mut progress = RemoteProgress::default();
         let binding = self.binding()?.to_string();
-        self.last_successful_watch = None;
         for update in self.bridge.journal().native_remote_updates(&binding)? {
+            self.last_successful_watch = None;
             match self.bridge.apply_native_remote_version(
                 &self.owner,
                 &update.expected,
@@ -286,6 +295,7 @@ impl NativeCoordinator {
             }) {
                 continue;
             }
+            self.last_successful_watch = None;
             let result = (|| -> anyhow::Result<()> {
                 let Some(record) = by_cloud.get(entry.remote_id.as_str()).copied() else {
                     self.publish_remote_create(entry)?;

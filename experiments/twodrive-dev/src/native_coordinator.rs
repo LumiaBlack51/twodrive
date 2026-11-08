@@ -21,6 +21,9 @@ mod deletions;
 #[path = "native_remote.rs"]
 mod remote;
 pub use remote::RemoteProgress;
+#[path = "native_pins.rs"]
+mod pins;
+pub use pins::ResidencyProgress;
 #[path = "native_renames.rs"]
 mod renames;
 
@@ -230,6 +233,8 @@ pub struct NativeCoordinator {
     _source: Arc<BoundPublishedSource>,
     bridge: LocalFileBridge,
     last_successful_watch: Option<(i64, i64)>,
+    last_residency_watch: Option<(i64, i64)>,
+    residency_pending: bool,
 }
 #[derive(Default, Serialize, Debug)]
 pub struct SyncProgress {
@@ -583,12 +588,71 @@ impl NativeCoordinator {
                 .database()
                 .pending_native_events(self.binding()?, 1)?
                 .is_empty()
-            && !self.bridge.journal().native_work_pending()?
+            && self
+                .bridge
+                .journal()
+                .native_publications_clean(self.binding()?)?
         {
             return Ok(SyncProgress {
                 idle: true,
                 ..Default::default()
             });
+        }
+        // A reconnect or metadata-only notification often has no work. One
+        // complete identity inventory can reconcile that gap without walking
+        // the same tree again through every mutation consumer.
+        if self
+            .bridge
+            .journal()
+            .native_publications_clean(self.binding()?)?
+        {
+            let expected = self.bridge.journal().native_projections(self.binding()?)?;
+            let by_tag = expected
+                .iter()
+                .map(|p| (p.tag.as_slice(), p))
+                .collect::<HashMap<_, _>>();
+            let entries = self.observed_entries()?;
+            let clean = entries.len() == expected.len()
+                && entries.iter().all(|entry| {
+                    let Some(p) = entry
+                        .identity
+                        .as_deref()
+                        .and_then(|tag| by_tag.get(tag))
+                        .copied()
+                    else {
+                        return false;
+                    };
+                    p.volume_serial == Some(entry.volume_serial)
+                        && p.native_file_id.as_deref()
+                            == Some(format!("{:016x}", entry.file_id).as_str())
+                        && Self::relative(&p.path).is_ok_and(|path| path == entry.relative_path)
+                        && p.directory == entry.directory
+                        && p.size == entry.size
+                        && entry
+                            .cloud
+                            .as_ref()
+                            .is_some_and(|os| os.os_in_sync && os.modified_bytes == 0)
+                });
+            if clean
+                && self
+                    .bridge
+                    .journal()
+                    .native_publications_clean(self.binding()?)?
+            {
+                let db = self.bridge.journal().database();
+                let binding = serde_json::to_string(self.receipt())?;
+                if state.rescan_required {
+                    db.complete_native_watch_scan(&binding, state)?;
+                }
+                if state.through_sequence > 0 {
+                    db.acknowledge_native_observations(&binding, state.through_sequence)?;
+                }
+                self.last_successful_watch = Some((state.epoch, state.generation));
+                return Ok(SyncProgress {
+                    idle: true,
+                    ..Default::default()
+                });
+            }
         }
         let deletion = self.synchronize_deletions()?;
         if deletion.waiting != 0 {
@@ -874,6 +938,8 @@ impl NativeCoordinator {
         source.bind_root(&owner)?;
         let mut coordinator = Self {
             last_successful_watch: None,
+            last_residency_watch: None,
+            residency_pending: false,
             watcher: None,
             owner,
             _source: source,
@@ -904,6 +970,8 @@ impl NativeCoordinator {
         Ok(Self {
             watcher: Some(watcher),
             last_successful_watch: None,
+            last_residency_watch: None,
+            residency_pending: false,
             owner,
             _source: source,
             bridge,
@@ -936,6 +1004,8 @@ impl NativeCoordinator {
         Ok(Self {
             watcher: Some(watcher),
             last_successful_watch: None,
+            last_residency_watch: None,
+            residency_pending: false,
             owner,
             _source: source,
             bridge,
@@ -1374,6 +1444,7 @@ mod tests {
             .unwrap()
             .cache_path
             .unwrap();
+        twodrive_local_files::native::pin(&file, true).unwrap();
         provider.change(b"generated newer remote complete content");
         let remote = provider.list_all().unwrap();
         crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|flag| flag.set(true));
@@ -1446,14 +1517,25 @@ mod tests {
             .root()
             .join("remote-folder-renamed/remote-renamed.txt");
         let renamed_bytes = std::fs::read(&renamed_file);
+        let pin_retained = owner
+            .owner
+            .inventory()
+            .unwrap()
+            .iter()
+            .find(|e| !e.directory)
+            .unwrap()
+            .cloud
+            .as_ref()
+            .unwrap()
+            .pinned;
         let old_preserved = std::fs::read(&old_cache).unwrap() == before
             && !db.remove_unreferenced_cache(&old_cache).unwrap();
-        std::fs::write(&renamed_file, b"generated local user edit must survive").unwrap();
+        let native_write = std::fs::write(&renamed_file, b"generated local user edit must survive");
         provider.change(b"generated concurrent remote change");
         let concurrent = owner
             .apply_remote_metadata(&provider.list_all().unwrap())
             .unwrap();
-        let local = std::fs::read(&renamed_file).unwrap();
+        let local = std::fs::read(&renamed_file);
         let cloud = provider.download(&initial.remote_id).unwrap();
         let entries = owner.owner.inventory().unwrap();
         for entry in entries.iter().filter(|e| !e.directory) {
@@ -1474,7 +1556,7 @@ mod tests {
         assert_eq!(pending, 1);
         assert_eq!(resumed.deferred, 0, "{resumed:?}");
         assert_eq!(after, b"generated newer remote complete content");
-        assert!(old_preserved);
+        assert!(old_preserved && pin_retained);
         assert_eq!(moved.deferred, 0, "{moved:?}");
         assert_eq!(directory_created.deferred, 0, "{directory_created:?}");
         assert_eq!(child_moved.deferred, 0, "{child_moved:?}");
@@ -1486,7 +1568,11 @@ mod tests {
             b"generated newer remote complete content"
         );
         assert!(concurrent.deferred > 0);
-        assert_eq!(local, b"generated local user edit must survive");
+        assert!(
+            native_write.is_ok(),
+            "{native_write:?}; child={child_moved:?} dir={directory_moved:?}"
+        );
+        assert_eq!(local.unwrap(), b"generated local user edit must survive");
         assert_eq!(cloud, b"generated concurrent remote change");
     }
     #[test]
@@ -1594,6 +1680,127 @@ mod tests {
         assert_eq!(progress.deferred, 0, "{progress:?}");
         assert!(missing && guarded);
         assert_eq!(retained, bytes);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; Shell pin/free-space, private cache removal and dirty veto"]
+    fn native_pin_release_rehydrates_and_preserves_dirty_data() {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
+                .expect("explicit generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let state = tempfile::tempdir().unwrap();
+        let private = state.path().canonicalize().unwrap();
+        let cache = private.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let provider = crate::local_files::tests::MockProvider::new();
+        let item = provider.list_all().unwrap().remove(0);
+        let plan = NamespacePlan::build(
+            &[
+                IndexedItem {
+                    id: "root".into(),
+                    parent: None,
+                    name: "root".into(),
+                    kind: "folder".into(),
+                    size: 0,
+                    etag: "v1".into(),
+                    modified: None,
+                    deleted: false,
+                },
+                IndexedItem {
+                    id: item.remote_id.clone(),
+                    parent: Some("root".into()),
+                    name: item.name.clone(),
+                    kind: "file".into(),
+                    size: item.size,
+                    etag: item.etag.clone(),
+                    modified: Some("1970-01-01T00:00:01Z".into()),
+                    deleted: false,
+                },
+            ],
+            "root",
+            100,
+            twodrive_local_files::names::ordinal_ignorecase_cmp,
+        )
+        .unwrap();
+        let db = Database::new(private.join("native.sqlite3"));
+        let open = || {
+            LocalFileBridge::open_bound(
+                db.clone(),
+                &cache,
+                Backend::new(provider.clone()),
+                "generated-residency",
+            )
+            .unwrap()
+        };
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = NativeCoordinator::create_new(
+            open(),
+            &plan,
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+        )
+        .unwrap();
+        let path = owner.root().join(&item.name);
+        twodrive_local_files::native::pin(&path, true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let pinned = loop {
+            let result = owner.synchronize_residency().unwrap();
+            let current = owner.owner.inventory().unwrap().remove(0);
+            if current.cloud.as_ref().unwrap().resident {
+                break result;
+            }
+            assert!(std::time::Instant::now() < deadline, "{result:?}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let record = db.get_by_remote_id(&item.remote_id).unwrap().unwrap();
+        let cached = record.cache_path.clone().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        twodrive_local_files::native::test_release_intent(&path).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let released = loop {
+            let result = owner.synchronize_residency().unwrap();
+            if result.released == 1 || std::time::Instant::now() >= deadline {
+                break result;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let online = owner.owner.inventory().unwrap().remove(0).cloud.unwrap();
+        let private_removed = !cached.exists();
+        let rehydrated = std::fs::read(&path).unwrap();
+        std::fs::write(&path, b"generated unsynchronized native bytes must remain").unwrap();
+        let dirty = owner.synchronize_residency().unwrap();
+        let local = std::fs::read(&path).unwrap();
+        let current_cache = db
+            .get_by_remote_id(&item.remote_id)
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .unwrap();
+        let private_preserved = current_cache.exists();
+        std::fs::remove_file(&path).unwrap();
+        owner.retire_empty_generated_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        state.close().unwrap();
+        assert_eq!(pinned.deferred, 0, "{pinned:?}");
+        assert!(record.effective_pinned());
+        assert_eq!(released.released, 1, "{released:?}");
+        assert!(!online.resident && private_removed);
+        assert_eq!(bytes, rehydrated);
+        assert_eq!(dirty.released, 0, "{dirty:?}");
+        assert!(private_preserved);
+        assert_eq!(local, b"generated unsynchronized native bytes must remain");
     }
     #[test]
     #[ignore = "explicit NEW generated root; resume a legacy-owned TMP creation after a definite paused upload"]

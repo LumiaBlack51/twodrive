@@ -28,6 +28,8 @@ pub use native_backups::NativeBackupCopy;
 #[path = "native_remote.rs"]
 mod native_remote;
 pub use native_remote::{NativeRemoteRemoval, NativeRemoteUpdate};
+#[path = "native_residency.rs"]
+mod native_residency;
 #[path = "native_projection.rs"]
 mod projection;
 pub use projection::{NativeCaptureBinding, NativeFileIdentity, NativeProjection};
@@ -760,6 +762,8 @@ impl CacheJournal {
                 && !state.uncertain_upload
                 && !state.recovery_required
                 && !state.pending_operations
+                && !state.native_namespace_pending
+                && !state.native_dirty
                 && matches!(
                     state.state,
                     FileState::Cached | FileState::Pinned | FileState::Dirty

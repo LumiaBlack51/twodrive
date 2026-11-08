@@ -1,5 +1,7 @@
-//! Explicit native staging/observation commands. No existing-root adoption,
-//! startup installation or automatic cloud mutation is exposed here.
+#[cfg(all(windows, feature = "native-sync"))]
+#[path = "../native_runtime_cli.rs"]
+mod native_runtime;
+// Native staging and an explicit writable runtime; existing roots are not adopted.
 #[cfg(all(windows, feature = "native-sync"))]
 mod enabled {
     use anyhow::ensure;
@@ -20,6 +22,19 @@ mod enabled {
     }
     #[derive(Subcommand)]
     enum Command {
+        /// Continuously synchronize a previously verified, account-bound root.
+        Run {
+            #[arg(long)]
+            native_state: PathBuf,
+            /// Zero runs until Ctrl+C or the stop command.
+            #[arg(long, default_value_t = 0)]
+            seconds: u64,
+        },
+        /// Request a graceful stop without opening a competing cache owner.
+        Stop {
+            #[arg(long)]
+            native_state: PathBuf,
+        },
         /// Publish a new independent root from an account-verified catalogue.
         Prepare {
             #[arg(long)]
@@ -48,6 +63,11 @@ mod enabled {
     }
     pub fn run() -> anyhow::Result<()> {
         match Cli::parse().command {
+            Command::Run {
+                native_state,
+                seconds,
+            } => crate::native_runtime::run(native_state, seconds)?,
+            Command::Stop { native_state } => crate::native_runtime::stop(native_state)?,
             Command::Prepare {
                 account,
                 expected_owner,

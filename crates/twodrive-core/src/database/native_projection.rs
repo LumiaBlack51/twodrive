@@ -141,11 +141,23 @@ fn baseline_valid(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<bool>
         AND NOT EXISTS(SELECT 1 FROM native_event_log WHERE binding=p.root_binding))",[id],|row|row.get(0))?)
 }
 impl CacheJournal {
+    /// Metadata-only fast inventory eligibility, never a data acknowledgement.
+    pub fn native_publications_clean(&self, root: &str) -> anyhow::Result<bool> {
+        if self.native_work_pending()? {
+            return Ok(false);
+        }
+        Ok(journal_connection(&self.0.db)?.query_row("SELECT NOT EXISTS(SELECT 1 FROM files f LEFT JOIN local_native_projections p ON p.local_id=f.remote_id
+            WHERE f.path<>'/' AND (p.local_id IS NULL OR p.root_binding<>?1 OR p.state<>'published' OR p.cloud_id IS NOT f.cloud_remote_id OR p.path<>f.path OR p.etag<>f.etag OR p.size<>f.size OR p.modified_unix<>f.modified_unix OR p.directory<>f.is_dir
+                OR (f.cache_path IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_cache_journal j WHERE j.local_id=f.remote_id))))
+            AND NOT EXISTS(SELECT 1 FROM local_native_projections p LEFT JOIN files f ON f.remote_id=p.local_id WHERE p.root_binding=?1 AND f.remote_id IS NULL)
+            AND NOT EXISTS(SELECT 1 FROM native_event_log WHERE binding=?1)",[root],|r|r.get(0))?)
+    }
     pub fn native_work_ids(&self) -> anyhow::Result<Vec<String>> {
         let conn = journal_connection(&self.0.db)?;
         let mut stmt=conn.prepare("SELECT f.remote_id FROM files f WHERE f.state IN ('dirty','writing','uploading','conflict','error','hydrating')
             OR EXISTS(SELECT 1 FROM local_native_dirty n WHERE n.cloud_id=f.remote_id OR n.cloud_id=f.cloud_remote_id)
-            OR EXISTS(SELECT 1 FROM local_native_captures c WHERE c.local_id=f.remote_id)")?;
+            OR EXISTS(SELECT 1 FROM local_native_captures c WHERE c.local_id=f.remote_id)
+            OR EXISTS(SELECT 1 FROM local_cache_journal j WHERE j.local_id=f.remote_id AND (j.dirty_intent=1 OR j.recovery_required=1 OR j.uncertain_upload=1 OR j.upload_generation IS NOT NULL OR j.writers>0 OR j.generation<>j.acknowledged_generation OR j.base_etag<>f.etag OR j.cloud_path<>f.path OR j.cloud_id IS NOT f.cloud_remote_id OR j.cache_path IS NOT f.cache_path))")?;
         Ok(stmt
             .query_map([], |r| r.get(0))?
             .collect::<Result<_, _>>()?)

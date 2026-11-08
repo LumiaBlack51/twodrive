@@ -47,10 +47,9 @@
     "production_native_mount_enabled": false,
     "complete": false,
     "remaining": [
-      "installed continuous native runtime",
-      "native pin/free-space and cache handling",
+      "normal logon startup and Shell presentation",
       "conflict recovery interface",
-      "registered COM/ribbon acceptance",
+      "registered COM/ribbon and open-editor cloud save acceptance",
       "source-resident data preservation and tested rollback/cutover"
     ],
     "personal_vault_scope": "user confirmed unused; excluded"
@@ -98,6 +97,10 @@
       "backup_event_future_and_unrelated_rows_preserved": true,
       "cloud_backend_for_recovery_regressions": "mock",
       "cache_schema": 6
+    },
+    "pending_remote_private_writer_fence": {
+      "old_code_failed_two_contracts": true,
+      "update_and_removal_prepare_and_restart_fence_passed": true
     }
   },
   "cleanup": {
@@ -571,5 +574,31 @@
     "generated_scopes_retired": true,
     "user_documents_used": false,
     "automatic_conflict_copy": false
+  },
+  "native_residency_current_candidate": {
+    "actual_generated_cfapi_pin_hydration": true,
+    "clean_native_and_private_cache_release": true,
+    "readers_pins_dirty_native_and_private_corruption_veto": true,
+    "rehydration_after_release": true,
+    "actual_personal_generated_scope_pin_release_rehydrate": true,
+    "pinned_remote_same_path_rename_and_restart": true,
+    "native_pin_intent_does_not_forge_hydration_claim": true,
+    "windows_journal_contracts": 36
+  },
+  "continuous_runtime_current_candidate": {
+    "commands": [
+      "run",
+      "stop"
+    ],
+    "outside_codex_package_query": 15700,
+    "actual_complete_account_side_root": true,
+    "local_idle_remote_delta_and_residency_cycles": true,
+    "private_content_cache_files_after_validation": 0,
+    "cloud_metadata_creations_observed": 7,
+    "initial_local_cycle_ms": 24164,
+    "previous_initial_cycle_seconds": 156,
+    "one_shot_validation_tasks_removed": true,
+    "normal_logon_startup_installed": false,
+    "original_root_cutover": false
   }
 }

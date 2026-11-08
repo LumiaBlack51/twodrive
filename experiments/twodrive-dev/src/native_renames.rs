@@ -20,19 +20,19 @@ impl NativeCoordinator {
                 .map(|p| (p.tag.as_slice(), p))
                 .collect::<HashMap<_, _>>();
             let mut recovered = false;
-            for p in &projections {
-                if let Some((_, state)) = self.bridge.journal().native_move(&p.local_id)? {
-                    if state == "received" {
-                        self.bridge.journal().apply_native_move(&p.local_id)?;
-                        moved += 1;
-                        recovered = true;
-                        break;
-                    }
-                    ensure!(
-                        state != "dispatched",
-                        "native rename outcome uncertain; reconciliation required"
-                    );
+            for (intent, state) in self.bridge.journal().native_pending_moves(&binding)? {
+                if state == "received" {
+                    self.bridge
+                        .journal()
+                        .apply_native_move(&intent.publication.local_id)?;
+                    moved += 1;
+                    recovered = true;
+                    break;
                 }
+                ensure!(
+                    state != "dispatched",
+                    "native rename outcome uncertain; reconciliation required"
+                );
             }
             if recovered {
                 continue;

@@ -168,6 +168,18 @@ impl LocalFileBridge {
                     if pending.is_none() && observed.logical_size != expected.size {
                         return Err("remote update native size changed".into());
                     }
+                    if observed.pinned {
+                        self.journal
+                            .mirror_native_pins(&[(expected.local_id.clone(), true, false)])
+                            .map_err(|e| e.to_string())?;
+                    }
+                    let preserve_pin = self
+                        .journal
+                        .database()
+                        .get_by_remote_id(&expected.local_id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or("remote pin owner missing")?
+                        .effective_pinned();
                     let update = if let Some(update) = pending {
                         update
                     } else {
@@ -190,6 +202,7 @@ impl LocalFileBridge {
                         next.size,
                         next.modified_unix,
                         actual != target || resumed_rename,
+                        preserve_pin,
                     )?;
                     #[cfg(all(test, feature = "native-test-hooks"))]
                     if INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|flag| flag.replace(false)) {

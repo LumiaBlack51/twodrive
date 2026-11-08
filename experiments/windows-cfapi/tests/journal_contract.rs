@@ -1340,6 +1340,12 @@ fn remote_update_restarts_with_old_bytes_owned_and_new_hydration_fenced() {
         })
         .unwrap();
     assert!(j.snapshot(ID).unwrap().native_namespace_pending);
+    let before_writer = j.snapshot(ID).unwrap().generation;
+    assert!(
+        j.open_write(ID).is_err(),
+        "remote preparation must reject a new writer"
+    );
+    assert_eq!(j.snapshot(ID).unwrap().generation, before_writer);
     assert!(j.begin_upload(ID, digest).is_err());
     assert_eq!(
         j.native_projection_for_id(ID).unwrap().unwrap().state,
@@ -1351,6 +1357,11 @@ fn remote_update_restarts_with_old_bytes_owned_and_new_hydration_fenced() {
     let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
     let recovered = j.native_remote_updates("generated-root").unwrap();
     assert_eq!(recovered, vec![update.clone()]);
+    assert!(
+        j.open_write(ID).is_err(),
+        "remote update restart must reject a writer"
+    );
+    assert_eq!(j.snapshot(ID).unwrap().generation, before_writer);
     let physical = twodrive_core::NativeFileIdentity {
         volume_serial: 7,
         file_id: 9,
@@ -1387,7 +1398,22 @@ fn remote_removal_cannot_retire_dirty_bytes_or_lose_the_retained_revision() {
         })
         .unwrap();
     assert!(j.snapshot(ID).unwrap().native_namespace_pending);
+    let before_writer = j.snapshot(ID).unwrap().generation;
+    assert!(
+        j.open_write(ID).is_err(),
+        "remote preparation must reject a new writer"
+    );
+    assert_eq!(j.snapshot(ID).unwrap().generation, before_writer);
     assert!(j.begin_upload(ID, digest).is_err());
+    let db = j.database().clone();
+    let cache = path.parent().unwrap().to_path_buf();
+    drop(j);
+    let j = CacheJournal::open(db, &cache, &hash(b"generated-provider-binding")).unwrap();
+    assert!(
+        j.open_write(ID).is_err(),
+        "remote removal restart must reject a new writer"
+    );
+    assert_eq!(j.snapshot(ID).unwrap().generation, before_writer);
     j.complete_native_remote_removal(&removal).unwrap();
     assert!(j.database().get_by_remote_id(ID).unwrap().is_none());
     assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
@@ -1414,5 +1440,112 @@ fn remote_removal_cannot_retire_dirty_bytes_or_lose_the_retained_revision() {
                 |_, _| Ok(())
             )
             .is_err()
+    );
+}
+
+#[test]
+fn native_free_space_retires_only_a_confirmed_unleased_generation() {
+    let (_temp, j, path) = fixture();
+    let generation = j.snapshot(ID).unwrap().generation;
+    let reader = j.open_read(ID).unwrap();
+    assert!(
+        !j.release_native_cache(ID, generation, digest, || panic!(
+            "reader veto must precede platform action"
+        ))
+        .unwrap()
+    );
+    drop(reader);
+    j.mirror_native_pins(&[(ID.into(), true, false)]).unwrap();
+    assert!(
+        !j.release_native_cache(ID, generation, digest, || panic!(
+            "pinned veto must precede platform action"
+        ))
+        .unwrap()
+    );
+    j.mirror_native_pins(&[(ID.into(), false, true)]).unwrap();
+    assert!(
+        j.release_native_cache(ID, generation, digest, || anyhow::bail!(
+            "generated native operation rejection"
+        ))
+        .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+    assert!(j.snapshot(ID).unwrap().sync_confirmed());
+    assert!(
+        j.release_native_cache(ID, generation, digest, || Ok(()))
+            .unwrap()
+    );
+    assert!(!path.exists());
+    let record = j.database().get_by_remote_id(ID).unwrap().unwrap();
+    assert_eq!(record.metadata.etag, "version-1");
+    assert!(record.cache_path.is_none() && record.state == FileState::OnlineOnly);
+    assert!(j.snapshot_if_owned(ID).unwrap().is_none());
+}
+
+#[test]
+fn native_free_space_records_private_corruption_and_keeps_native_bytes() {
+    let (_temp, j, path) = fixture();
+    let generation = j.snapshot(ID).unwrap().generation;
+    fs::write(&path, EDITED).unwrap();
+    assert!(
+        j.release_native_cache(ID, generation, digest, || panic!(
+            "corruption veto must precede native dehydration"
+        ))
+        .is_err()
+    );
+    let state = j.snapshot(ID).unwrap();
+    assert!(state.dirty_intent && state.recovery_required);
+    assert_eq!(fs::read(path).unwrap(), EDITED);
+}
+
+#[test]
+fn native_pin_inheritance_is_not_a_bound_download_claim() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, _) = paths(temp.path());
+    db.init().unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(ID, "/generated.txt", 12, 1, "v1"))
+        .unwrap();
+    let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    db.mark_pinned(ID).unwrap();
+    let expected = db.get_by_remote_id(ID).unwrap().unwrap();
+    assert!(expected.effective_pinned());
+    assert_eq!(
+        expected.state,
+        FileState::OnlineOnly,
+        "native pin is an intent, not a download claim"
+    );
+    j.begin_bound_download(&expected).unwrap();
+    db.recompute_pin_inheritance().unwrap();
+    assert_eq!(
+        db.get_by_remote_id(ID).unwrap().unwrap().state,
+        FileState::Hydrating,
+        "an actual live download claim must survive pin recomputation"
+    );
+    assert!(j.begin_bound_download(&expected).is_err());
+}
+
+#[test]
+fn native_clean_inventory_cannot_trust_stale_cached_labels_or_unpublished_metadata() {
+    let (_temp, j, _) = remote_fixture(b"generated-clean-inventory");
+    assert!(j.native_publications_clean("generated-root").unwrap());
+    edit(&j);
+    j.database().mark_state(ID, FileState::Cached).unwrap();
+    assert!(
+        !j.native_publications_clean("generated-root").unwrap(),
+        "private dirty intent must defeat the cached label"
+    );
+    let (_temp2, j2, _) = remote_fixture(b"generated-other-inventory");
+    j2.database()
+        .upsert_metadata(&MetadataEntry::new_file(
+            "unpublished-id",
+            "/unpublished.txt",
+            0,
+            1,
+            "v1",
+        ))
+        .unwrap();
+    assert!(
+        !j2.native_publications_clean("generated-root").unwrap(),
+        "an unmaterialized cloud item is not an idle complete tree"
     );
 }

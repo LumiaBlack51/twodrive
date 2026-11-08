@@ -161,6 +161,7 @@ fn run() -> anyhow::Result<()> {
             fs::read(&remote_native)? == b"generated first remote version",
             "remote creation bytes mismatch"
         );
+        twodrive_local_files::native::pin(&remote_native, true).map_err(anyhow::Error::msg)?;
         fs::write(
             &remote_source,
             b"generated complete changed remote version, longer",
@@ -180,6 +181,19 @@ fn run() -> anyhow::Result<()> {
         ensure!(
             fs::read(&remote_native)? == fs::read(&remote_source)?,
             "remote updated bytes mismatch"
+        );
+        let pinned = coordinator.synchronize_residency()?;
+        ensure!(pinned.deferred == 0, "real-cloud pin deferred: {pinned:?}");
+        twodrive_local_files::native::test_release_intent(&remote_native)
+            .map_err(anyhow::Error::msg)?;
+        let released = coordinator.synchronize_residency()?;
+        ensure!(
+            released.released == 1 && released.deferred == 0,
+            "real-cloud free-space deferred: {released:?}"
+        );
+        ensure!(
+            fs::read(&remote_native)? == fs::read(&remote_source)?,
+            "real-cloud rehydration after free-space mismatch"
         );
         let current_dir = provider
             .get_metadata(&remote_dir.remote_id)?
@@ -490,7 +504,7 @@ if(![GeneratedReplaceFile]::ReplaceFileW('__TARGET__','__TEMP__','__BACKUP__',0,
         fs::remove_dir(&root)?;
         println!(
             "{}",
-            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"remote_create_update_subtree_move_delete_full_native_readback":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"native_file_delete_conditional_recycle":true,"native_directory_delete_object_version_recycle":true,"retained_backup_keeps_original_target_id_and_backup_bytes":true,"observed_nonempty_directory_is_not_recycled":true,"generated_scopes_retired":true,"production_takeover":false})
+            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"remote_create_update_subtree_move_delete_full_native_readback":true,"native_pin_and_private_cache_release_and_real_cloud_rehydration":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"native_file_delete_conditional_recycle":true,"native_directory_delete_object_version_recycle":true,"retained_backup_keeps_original_target_id_and_backup_bytes":true,"observed_nonempty_directory_is_not_recycled":true,"generated_scopes_retired":true,"production_takeover":false})
         );
         Ok(())
     })();
