@@ -32,7 +32,7 @@ impl NativeCoordinator {
             if recovered {
                 continue;
             }
-            let mut entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+            let mut entries = self.observed_entries()?;
             entries.sort_by_key(|e| e.relative_path.components().count());
             let mut candidate = None;
             for entry in &entries {
@@ -192,7 +192,7 @@ impl NativeCoordinator {
             .iter()
             .map(|p| (p.tag.as_slice(), p))
             .collect::<HashMap<_, _>>();
-        let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let entries = self.observed_entries()?;
         let mut decisions = Vec::new();
         for (sequence, payload) in db.pending_native_events(&binding, 1000)? {
             let event: NativeEvent = serde_json::from_str(&payload)?;

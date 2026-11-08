@@ -4,10 +4,29 @@
 
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
+## TD-20261108-37：Office 锁文件与系统临时文件进入原生新建上传队列
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：按 Linux known-folder 临时文件规则和微软限制补齐本地保留策略；生成实机回归通过
+
+原生新建消费尚未区分普通文档和 ~$ Office 锁文件、TMP 与 desktop.ini 等本地
+产物。它们可能发起服务拒绝的上传，且因不属于已发布集合，使完整目录检查
+持续等待命名空间协调。此前 Windows 实机测试只创建正常文件，没有锁文件。
+[微软限制](https://support.microsoft.com/en-us/onedrive/restrictions-and-limitations-in-onedrive-and-sharepoint)
+明确列出这些限制；Linux known_folders/scan.rs 已有相邻排除逻辑。
+
+仅忽略尚无原生身份、无数据库文件所有者的本地普通文件：Office 锁名、TMP、
+desktop.ini、Thumbs.db、.DS_Store、.lock。保留文件本身，不把规则用于已发布
+云端对象，不忽略目录，也不跳过底层的重解析点和根拥有权检查。直接新建 API
+在转换前拒绝该类临时文件。生成实机测试同时保留四个该类文件：未转换、完整字节不变，正常文件与两层
+目录仍能创建/发布，空闲后独立进程目录与文件重命名仍能唤醒并完成协调。
+该回归使用 MockProvider；没有向真实服务发送这些保留名称。
+本地恢复操作：无。
+
 ## TD-20261108-36：父目录移动遗漏尚未发布的新文件路径
 
 - 日期：2026-11-08（Asia/Shanghai）
-- 状态：旧回归实际失败；全部文件记录的路径协调修复后 Windows 回归通过，Linux 复核中
+- 状态：旧回归实际失败；全部文件记录的路径协调修复后 Windows 与 Linux 回归通过
 - 关联：Linux 子树例程已移动 files.path，但新增原生日志更新按已发布 projection 枚举
 
 新文件捕获后因暂停/凭据预检而未发出上传，尚无发布记录。父目录移动允许该

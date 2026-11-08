@@ -405,3 +405,24 @@ before another snapshot, then full native/private hashes gate publication. A
 concurrent remote outcome remains Conflict and repeated passes create no extra
 snapshots. The previous source order failed the native regression by retaining
 three extra captures across three retries; see TD-20261108-34.
+
+
+The Windows `native-sync` build also provides `twodrive-native-dev`. Its `prepare`
+command accepts only a new state/root plus an account-verified private catalogue;
+`verify` reconnects and checks native metadata/physical identities; `observe`
+keeps hydration and durable notifications available for a bounded period while
+exposing no cloud mutation consumer. These are staging diagnostics, not autostart
+installation or an existing OneDrive root adoption command. Example arguments:
+
+```powershell
+twodrive-native-dev prepare --account <independent-account> --expected-owner <account-id> --catalogue <private-catalogue> --native-state <new-private-state> --root <new-root>
+twodrive-native-dev verify --native-state <private-state>
+twodrive-native-dev observe --native-state <private-state> --seconds 30
+```
+
+A complete-account side root is being staged independently of the running
+Microsoft client. Its counts/evidence will be recorded after full native inventory
+and restart verification; it must not be mistaken for an actual source cutover.
+Only untracked ordinary Office lock/TMP/system artifacts are excluded from new
+creation; existing cloud publications are retained and all underlying root/reparse
+checks still run. The files are preserved locally. See TD-20261108-37.

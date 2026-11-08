@@ -238,7 +238,90 @@ pub struct SyncProgress {
     pub renamed: usize,
     pub idle: bool,
 }
+#[derive(Serialize)]
+pub struct NativeSummary {
+    pub catalogue_files: usize,
+    pub catalogue_directories: usize,
+    pub logical_bytes: u64,
+    pub published: usize,
+    pub durable_work_items: usize,
+    pub native_event_batch: usize,
+    pub rescan_required: bool,
+}
 impl NativeCoordinator {
+    fn is_untracked_artifact(path: &Path, directory: bool) -> bool {
+        if directory {
+            return false;
+        }
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                let lower = name.to_ascii_lowercase();
+                lower.starts_with("~$")
+                    || lower.ends_with(".tmp")
+                    || matches!(
+                        lower.as_str(),
+                        "desktop.ini" | "thumbs.db" | ".ds_store" | ".lock"
+                    )
+            })
+    }
+    fn observed_entries(
+        &self,
+    ) -> anyhow::Result<Vec<twodrive_local_files::native::persistent::NativeEntry>> {
+        let mut entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let mut kept = Vec::with_capacity(entries.len());
+        for entry in entries.drain(..) {
+            if entry.identity.is_none()
+                && Self::is_untracked_artifact(&entry.relative_path, entry.directory)
+                && self
+                    .bridge
+                    .journal()
+                    .database()
+                    .get_by_path(&Self::cloud_path(&entry.relative_path)?)?
+                    .is_none()
+            {
+                continue;
+            }
+            kept.push(entry);
+        }
+        Ok(kept)
+    }
+    /// Aggregate diagnostics only; no user names, tokens or content are returned.
+    pub fn summary(&self) -> anyhow::Result<NativeSummary> {
+        let records = self.bridge.journal().database().all_records()?;
+        let state = self
+            .watcher
+            .as_ref()
+            .context("native watcher stopped")?
+            .state()
+            .map_err(anyhow::Error::msg)?;
+        Ok(NativeSummary {
+            catalogue_files: records.iter().filter(|r| !r.metadata.is_dir).count(),
+            catalogue_directories: records.iter().filter(|r| r.metadata.is_dir).count(),
+            logical_bytes: records.iter().filter(|r| !r.metadata.is_dir).try_fold(
+                0u64,
+                |sum, r| {
+                    sum.checked_add(r.metadata.size)
+                        .context("native total size overflow")
+                },
+            )?,
+            published: self
+                .bridge
+                .journal()
+                .native_projections(self.binding()?)?
+                .iter()
+                .filter(|p| p.state == "published")
+                .count(),
+            durable_work_items: self.bridge.journal().native_work_ids()?.len(),
+            native_event_batch: self
+                .bridge
+                .journal()
+                .database()
+                .pending_native_events(self.binding()?, 1000)?
+                .len(),
+            rescan_required: state.rescan_required,
+        })
+    }
     fn cloud_path(relative: &Path) -> anyhow::Result<String> {
         let names = relative
             .components()
@@ -397,6 +480,10 @@ impl NativeCoordinator {
     /// Create-only transfer for a named ordinary file beneath an already owned
     /// directory. The physical creation claim and immutable bytes precede I/O.
     pub fn synchronize_new_file(&mut self, relative: &Path) -> anyhow::Result<bool> {
+        ensure!(
+            !Self::is_untracked_artifact(relative, false),
+            "local temporary/system file is outside new-file synchronization"
+        );
         let cloud_path = format!(
             "/{}",
             relative
@@ -494,7 +581,7 @@ impl NativeCoordinator {
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
         let projections = self.bridge.journal().native_projections(&binding)?;
-        let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let entries = self.observed_entries()?;
         let by_path = entries
             .iter()
             .map(|entry| (entry.relative_path.as_path(), entry))
@@ -630,21 +717,24 @@ impl NativeCoordinator {
         }
         // Discover ordinary children only after the existing native namespace
         // decisions above have been durably handled. Parents always precede files.
-        let mut entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let mut entries = self.observed_entries()?;
         entries.sort_by_key(|entry| (entry.relative_path.components().count(), !entry.directory));
+        let records = db.all_records()?;
+        let records_by_path = records
+            .iter()
+            .map(|record| (record.metadata.path.as_str(), record))
+            .collect::<HashMap<_, _>>();
+        let published_ids = projections
+            .iter()
+            .filter(|p| p.state == "published")
+            .map(|p| p.local_id.as_str())
+            .collect::<HashSet<_>>();
         for entry in entries {
             let path = Self::cloud_path(&entry.relative_path)?;
-            let existing = db.get_by_path(&path)?;
-            let published = existing
-                .as_ref()
-                .map(|record| {
-                    self.bridge
-                        .journal()
-                        .native_projection_for_id(&record.metadata.remote_id)
-                })
-                .transpose()?
-                .flatten();
-            if published.is_some() {
+            let existing = records_by_path.get(path.as_str()).copied();
+            if existing
+                .is_some_and(|record| published_ids.contains(record.metadata.remote_id.as_str()))
+            {
                 continue;
             }
             let owned_pending = existing
@@ -937,7 +1027,7 @@ impl NativeCoordinator {
             .native_work_ids()?
             .into_iter()
             .collect::<HashSet<_>>();
-        let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let entries = self.observed_entries()?;
         let by_tag = expected
             .iter()
             .map(|p| (p.tag.as_slice(), p))
@@ -1095,7 +1185,7 @@ impl NativeCoordinator {
         anyhow::bail!("native namespace remains busy")
     }
     fn inventory_matches(&self, expected: &[NativeProjection]) -> anyhow::Result<()> {
-        let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let entries = self.observed_entries()?;
         ensure!(
             entries.len() == expected.len(),
             "native bootstrap has unexpected or missing entries"
@@ -1234,10 +1324,27 @@ mod tests {
         let bytes = b"generated new file only, no original cloud bytes";
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, bytes).unwrap();
+        let artifacts = [
+            "~$generated.xlsx",
+            "generated-save.tmp",
+            "desktop.ini",
+            "Thumbs.db",
+        ];
+        for name in artifacts {
+            std::fs::write(
+                coordinator.root().join(name),
+                b"generated local artifact only",
+            )
+            .unwrap();
+        }
         let progress = coordinator.synchronize_once().unwrap();
         assert_eq!(progress.created, 3, "{progress:?}");
         assert_eq!(progress.deferred, 0, "{progress:?}");
         assert!(!progress.needs_namespace, "{progress:?}");
+        for name in artifacts {
+            let inventory = coordinator.owner.inventory().unwrap();
+            assert!(inventory.iter().any(|entry|entry.relative_path==Path::new(name) && entry.identity.is_none()));
+        }
         let idle = coordinator.synchronize_once().unwrap();
         assert!(
             idle.idle,
@@ -1306,6 +1413,14 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(coordinator.root().join("renamed-dir/sub")).unwrap();
         std::fs::remove_dir(coordinator.root().join("renamed-dir")).unwrap();
+        for name in artifacts {
+            let path = coordinator.root().join(name);
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                b"generated local artifact only"
+            );
+            std::fs::remove_file(path).unwrap();
+        }
         coordinator.retire_empty_generated_fixture().unwrap();
         drop(coordinator);
         std::fs::remove_dir(root).unwrap();
