@@ -246,3 +246,25 @@ Dot's definite-pre-transfer rejection finding is fixed: a local pause before
 Provider invocation returns the exact upload claim to Dirty using generation,
 owner and digest checks. Actual provider errors remain uncertain; an intervening
 native edit is retained and blocks a stale retry. See TD-20261108-22.
+
+
+The account-checked Graph namespace boundary now uses explicit drive, item and
+parent IDs, atomic fail-on-name-conflict creation, and If-Match moves/deletes.
+Ordinary deletion uses the service recycle bin. A mismatched embedded drive ID
+requires independent retrieval inside the exact bound drive; identifiers are not
+case-folded. That authority readback never substitutes a newer content ETag for
+the operation receipt. HTTP regressions and a generated real personal OneDrive
+run passed directory creation, duplicate/name conflict preservation, cross-parent
+move with stable ID/full bytes, rejection of a deliberately noncurrent tag, and
+exact generated-scope cleanup. The native mutation consumer and concurrent
+folder-delete/child-insert handling are still required. No original root changed.
+
+The CFAPI reader initialization now checks offline/stopping/cancelled after
+active-request registration and before any begin_read. Callback-body regressions
+use a recording engine and replace only the OS transfer boundary; old ordering
+opened the reader once, while fixed offline/stopping states open it zero times.
+The per-chunk checks remain. See TD-20261108-23 and 24.
+
+Relevant service contracts: [conditional move](https://learn.microsoft.com/en-us/graph/api/driveitem-move?view=graph-rest-1.0),
+[conditional recycle](https://learn.microsoft.com/en-us/graph/api/driveitem-delete?view=graph-rest-1.0),
+and [case sensitivity](https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/case-sensitivity?view=odsp-graph-online).

@@ -131,6 +131,14 @@ unsafe extern "system" fn fetch(
     info: *const CF_CALLBACK_INFO,
     params: *const CF_CALLBACK_PARAMETERS,
 ) {
+    unsafe { fetch_with_transfer(info, params, execute_transfer) };
+}
+
+unsafe fn fetch_with_transfer(
+    info: *const CF_CALLBACK_INFO,
+    params: *const CF_CALLBACK_PARAMETERS,
+    mut transfer: impl FnMut(&CF_CALLBACK_INFO, i32, i64, i64, &[u8]) -> Result<()>,
+) {
     // SAFETY: CldApi supplies valid pointers for the duration of this callback.
     let (info, params) = unsafe { (&*info, &*params) };
     let source = unsafe { &*(info.CallbackContext as *const Source) };
@@ -185,6 +193,12 @@ unsafe extern "system" fn fetch(
         }
         offset = start as i64;
         length = (end - start) as i64;
+        if source.offline.load(Ordering::SeqCst)
+            || source.stopping.load(Ordering::SeqCst)
+            || cancelled.load(Ordering::SeqCst)
+        {
+            return Err("request unavailable or cancelled".into());
+        }
         // Register cancellation before any blocking provider download.
         let mut reader = match &source.engine {
             Some(engine) => engine.begin_read(identity, &cancelled)?,
@@ -211,7 +225,7 @@ unsafe extern "system" fn fetch(
             {
                 return Err("short or cancelled engine read".into());
             }
-            execute_transfer(info, 0, start as i64, count as i64, &bytes)?;
+            transfer(info, 0, start as i64, count as i64, &bytes)?;
             source
                 .transferred_bytes
                 .fetch_add(count as u64, Ordering::SeqCst);
@@ -242,7 +256,7 @@ unsafe extern "system" fn fetch(
     if source.offline.load(Ordering::SeqCst) {
         status = OFFLINE;
     }
-    let _ = execute_transfer(info, status, offset, length, &[]);
+    let _ = transfer(info, status, offset, length, &[]);
     source.failures.fetch_add(1, Ordering::SeqCst);
 }
 
@@ -2005,6 +2019,63 @@ pub fn release(path: &Path, engine_state: FileState) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn unavailable_fetch_never_opens_an_engine_reader() {
+        struct Recording(Arc<AtomicUsize>);
+        impl HydrationSource for Recording {
+            fn size(&self, _: &[u8]) -> Result<usize> {
+                Ok(4096)
+            }
+            fn begin_read(
+                &self,
+                _: &[u8],
+                _: &AtomicBool,
+            ) -> Result<Option<Box<dyn HydrationRead>>> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+            fn read_range(&self, _: &[u8], _: usize, _: usize, _: &AtomicBool) -> Result<Vec<u8>> {
+                panic!("unavailable callback must not read")
+            }
+        }
+        for stopping in [false, true] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let source = Source {
+                engine: Some(Arc::new(Recording(calls.clone()))),
+                ..Default::default()
+            };
+            source.offline.store(!stopping, Ordering::SeqCst);
+            source.stopping.store(stopping, Ordering::SeqCst);
+            let identity = b"generated-unavailable-object";
+            let info = CF_CALLBACK_INFO {
+                StructSize: size_of::<CF_CALLBACK_INFO>() as u32,
+                CallbackContext: (&source as *const Source).cast_mut().cast(),
+                FileIdentity: identity.as_ptr().cast(),
+                FileIdentityLength: identity.len() as u32,
+                ..Default::default()
+            };
+            let mut parameters = CF_CALLBACK_PARAMETERS {
+                ParamSize: size_of::<CF_CALLBACK_PARAMETERS>() as u32,
+                ..Default::default()
+            };
+            parameters.Anonymous.FetchData.RequiredLength = 4096;
+            // Exercise the callback body; replace only the final OS transfer.
+            // Never pass synthetic connection keys into CldApi itself.
+            unsafe {
+                fetch_with_transfer(&info, &parameters, |_, status, _, _, bytes| {
+                    assert!(status < 0 && bytes.is_empty());
+                    Ok(())
+                })
+            };
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "unavailable reader was opened"
+            );
+            assert!(source.active.lock().unwrap().is_empty());
+            assert_eq!(source.failures.load(Ordering::SeqCst), 1);
+        }
+    }
     #[test]
     fn only_known_unmanaged_hresult_allows_creation() {
         assert!(require_unmanaged(0x80070186u32 as i32).is_ok());

@@ -291,5 +291,25 @@
     "dirty_retry_survives_restart": true,
     "same_local_identity_full_content_and_cloud_binding": true,
     "ambiguous_provider_failures_stay_fenced": true
+  },
+  "native_reader_availability": {
+    "old_callback_regression_failed": true,
+    "offline_and_stopping_block_reader_initialization": true,
+    "active_request_cleanup": true,
+    "test_os_transfer_boundary_replaced": true
+  },
+  "conditional_namespace": {
+    "explicit_drive_item_and_parent_ids": true,
+    "http_contracts_windows_linux": 3,
+    "windows_backend_unit_tests": 57,
+    "windows_backend_contract_tests": 2,
+    "real_personal_onedrive": true,
+    "name_conflict_preserves_both_contents": true,
+    "cross_parent_move_stable_id_full_bytes": true,
+    "deliberately_noncurrent_tag_move_and_delete_refused": true,
+    "generated_scope_retired": true,
+    "retained_local_scope_recycled": true,
+    "native_consumer_enabled": false,
+    "concurrent_folder_delete_child_insert_tested": false
   }
 }

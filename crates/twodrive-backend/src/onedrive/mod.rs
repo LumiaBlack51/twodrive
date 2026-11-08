@@ -22,6 +22,7 @@ pub mod browse;
 mod desktop;
 mod http;
 mod model;
+mod namespace;
 mod paths;
 pub mod readonly;
 mod upload;
