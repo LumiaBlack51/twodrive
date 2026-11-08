@@ -16,6 +16,8 @@ use twodrive_local_files::{
         DatabaseEventSink, DurableDirectoryWatcher, PersistentSession, RootReceipt,
     },
 };
+#[path = "native_deletions.rs"]
+mod deletions;
 #[path = "native_renames.rs"]
 mod renames;
 
@@ -237,6 +239,7 @@ pub struct SyncProgress {
     pub created: usize,
     pub renamed: usize,
     pub idle: bool,
+    pub deleted: usize,
 }
 #[derive(Serialize)]
 pub struct NativeSummary {
@@ -584,6 +587,17 @@ impl NativeCoordinator {
                 ..Default::default()
             });
         }
+        let deletion = self.synchronize_deletions()?;
+        if deletion.waiting != 0 {
+            return Ok(SyncProgress {
+                deleted: deletion.deleted,
+                deferred: deletion.waiting,
+                needs_namespace: true,
+                error: deletion.error,
+                ..Default::default()
+            });
+        }
+        let deleted = deletion.deleted;
         let renamed = self.synchronize_renames()?;
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
@@ -650,6 +664,7 @@ impl NativeCoordinator {
                 return Ok(SyncProgress {
                     needs_namespace: true,
                     renamed,
+                    deleted,
                     ..Default::default()
                 });
             };
@@ -660,12 +675,14 @@ impl NativeCoordinator {
                 return Ok(SyncProgress {
                     needs_namespace: true,
                     renamed,
+                    deleted,
                     ..Default::default()
                 });
             }
         }
         let mut progress = SyncProgress {
             renamed,
+            deleted,
             ..Default::default()
         };
         for (projection, relative, current_id) in candidates.values() {
@@ -774,6 +791,7 @@ impl NativeCoordinator {
         data.replacements = progress.replacements;
         data.created = progress.created;
         data.renamed = progress.renamed;
+        data.deleted = progress.deleted;
         Ok(data)
     }
     /// The caller supplies a verified account-owned bridge and an all-or-nothing
@@ -1561,7 +1579,100 @@ mod tests {
             .unwrap()
             .expect("clean new file snapshot");
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        std::fs::remove_file(path).unwrap();
+        // A request without completion may be a failed delete. Its no-op
+        // decision requires a real namespace lease, not a scan alone.
+        use std::os::windows::fs::OpenOptionsExt;
+        let pending = std::fs::OpenOptions::new()
+            .read(true)
+            .access_mode(0x10080)
+            .share_mode(7)
+            .custom_flags(0x00300000)
+            .open(&path)
+            .unwrap();
+        let request = twodrive_local_files::native::persistent::NativeEvent {
+            schema_version: 1,
+            kind: twodrive_local_files::native::persistent::NativeEventKind::DeleteRequested,
+            volume_serial: coordinator.receipt().volume_serial,
+            root_file_id: coordinator.receipt().file_id,
+            file_id: u64::from_str_radix(projection.native_file_id.as_deref().unwrap(), 16)
+                .unwrap(),
+            identity: projection.tag.clone(),
+            path: "generated request history".into(),
+            related_path: None,
+            flags: 0,
+            connection_key: 0,
+            request_key: 2,
+        };
+        coordinator
+            .bridge
+            .journal()
+            .database()
+            .append_native_event(
+                coordinator.binding().unwrap(),
+                &serde_json::to_string(&request).unwrap(),
+            )
+            .unwrap();
+        assert!(coordinator.synchronize_once().unwrap().needs_namespace);
+        assert_eq!(
+            coordinator
+                .bridge
+                .journal()
+                .database()
+                .pending_native_events(coordinator.binding().unwrap(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(pending);
+        let no_op = coordinator.synchronize_once().unwrap();
+        assert!(!no_op.needs_namespace, "{no_op:?}");
+        assert!(
+            coordinator
+                .bridge
+                .journal()
+                .database()
+                .pending_native_events(coordinator.binding().unwrap(), 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            provider
+                .get_metadata(&projection.cloud_id)
+                .unwrap()
+                .unwrap()
+                .etag,
+            projection.etag
+        );
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_coordinator::tests::namespace_rename_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("TWODRIVE_NAMESPACE_CHILD_ROOT", coordinator.root())
+            .env("TWODRIVE_NAMESPACE_CHILD_ACTION", "delete")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "generated deletion child failed");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let deleted = loop {
+            let progress = coordinator.synchronize_once().unwrap();
+            if progress.deleted == 1 || std::time::Instant::now() >= deadline {
+                break progress;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let archive_count = coordinator
+            .bridge
+            .journal()
+            .native_deleted_archive_count()
+            .unwrap();
+        let remote_missing = provider
+            .get_metadata(&projection.cloud_id)
+            .unwrap()
+            .is_none();
         std::fs::remove_dir(coordinator.root().join("renamed-dir/sub")).unwrap();
         std::fs::remove_dir(coordinator.root().join("renamed-dir")).unwrap();
         for name in artifacts {
@@ -1577,6 +1688,10 @@ mod tests {
         std::fs::remove_dir(root).unwrap();
         std::fs::remove_file(checkpoint).unwrap();
         state.close().unwrap();
+        assert_eq!(deleted.deleted, 1, "{deleted:?}");
+        assert_eq!(deleted.deferred, 0, "{deleted:?}");
+        assert!(remote_missing);
+        assert_eq!(archive_count, 1);
     }
     #[test]
     #[ignore = "child helper for explicit generated namespace tests"]
@@ -1599,6 +1714,7 @@ mod tests {
             "directory" => {
                 std::fs::rename(root.join("generated-dir"), root.join("renamed-dir")).unwrap()
             }
+            "delete" => std::fs::remove_file(root.join("renamed-dir/sub/renamed.txt")).unwrap(),
             "file" => std::fs::rename(
                 root.join("renamed-dir/sub/generated-中文.txt"),
                 root.join("renamed-dir/sub/renamed.txt"),

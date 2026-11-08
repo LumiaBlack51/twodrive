@@ -1044,3 +1044,93 @@ fn native_subtree_move_receipt_recovers_between_linux_metadata_and_journal_commi
         .unwrap();
     assert!(journal.snapshot(ID).unwrap().sync_confirmed());
 }
+
+#[test]
+fn native_delete_requires_kernel_proof_and_keeps_private_revisions_owned() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, path) = paths(temp.path());
+    db.init().unwrap();
+    let version =
+        MetadataEntry::new_file(ID, "/generated.txt", ORIGINAL.len() as u64, 1, "version-1");
+    db.upsert_metadata(&version).unwrap();
+    let binding = hash(b"generated-provider-binding");
+    let journal = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    let tag = b"generated-delete-private-tag";
+    journal
+        .prepare_native_projection(ID, "generated-root", tag)
+        .unwrap();
+    journal
+        .complete_native_projection(ID, "generated-root", tag, 7, 9)
+        .unwrap();
+    fs::write(&path, ORIGINAL).unwrap();
+    journal
+        .publish_download(ID, 0, &path, &hash(ORIGINAL), "version-1")
+        .unwrap();
+    edit(&journal);
+    let root=serde_json::json!({"schema_version":1,"identity":b"generated-root","volume_serial":7,"file_id":8}).to_string();
+    let event = |kind: &str| {
+        serde_json::json!({"schema_version":1,"kind":kind,"identity":tag,"volume_serial":7,"root_file_id":8,"file_id":9,"connection_key":1,"request_key":if kind=="delete_completed" {0} else {2}}).to_string()
+    };
+    let request = event("delete_requested");
+    let complete = event("delete_completed");
+    let request_sequence = db.append_native_event("generated-root", &request).unwrap();
+    let completion_sequence = db.append_native_event("generated-root", &complete).unwrap();
+    let intent = twodrive_core::NativeDeleteIntent {
+        publication: journal.native_projection_for_id(ID).unwrap().unwrap(),
+        version,
+        root_receipt: root,
+        physical: twodrive_core::NativeFileIdentity {
+            volume_serial: 7,
+            file_id: 9,
+        },
+        request_sequence,
+        request_payload: request.clone(),
+        completion_sequence,
+        completion_payload: complete.clone(),
+        not_before_unix: 0,
+    };
+    let mut bad = intent.clone();
+    bad.physical.file_id = 10;
+    assert!(journal.prepare_native_delete(&bad).is_err());
+    bad = intent.clone();
+    bad.version.etag = "unrelated-version".into();
+    assert!(journal.prepare_native_delete(&bad).is_err());
+    bad = intent.clone();
+    let mut mismatched: serde_json::Value = serde_json::from_str(&bad.completion_payload).unwrap();
+    mismatched["request_key"] = 3.into();
+    bad.completion_payload = mismatched.to_string();
+    assert!(journal.prepare_native_delete(&bad).is_err());
+    journal.prepare_native_delete(&intent).unwrap();
+    assert!(journal.snapshot(ID).unwrap().pending_operations);
+    assert!(journal.cancel_prepared_native_delete(ID).unwrap());
+    assert!(!journal.snapshot(ID).unwrap().pending_operations);
+    journal.prepare_native_delete(&intent).unwrap();
+    // Once copied into the durable decision, raw hints can be consumed exactly.
+    db.acknowledge_native_event_decisions(
+        "generated-root",
+        &[(request_sequence, request), (completion_sequence, complete)],
+    )
+    .unwrap();
+    assert!(journal.dispatch_native_delete(ID).unwrap());
+    drop(journal);
+    let journal = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    assert!(
+        journal.dispatch_native_delete(ID).is_err(),
+        "lost delete reply must not be blindly retried"
+    );
+    assert!(!journal.cancel_prepared_native_delete(ID).unwrap());
+    journal.receive_native_delete(ID).unwrap();
+    journal.apply_native_delete(ID).unwrap();
+    assert!(db.get_by_remote_id(ID).unwrap().is_none());
+    assert!(journal.native_projection_for_id(ID).unwrap().is_none());
+    assert_eq!(journal.native_deleted_archive_count().unwrap(), 1);
+    assert_eq!(fs::read(&path).unwrap(), EDITED);
+    assert!(
+        !db.remove_unreferenced_cache(&path).unwrap(),
+        "archive must retain a durable cache reference"
+    );
+    assert_eq!(fs::read(&path).unwrap(), EDITED);
+    assert!(!journal.native_work_pending().unwrap());
+    journal.apply_native_delete(ID).unwrap();
+    assert_eq!(journal.native_deleted_archive_count().unwrap(), 1);
+}

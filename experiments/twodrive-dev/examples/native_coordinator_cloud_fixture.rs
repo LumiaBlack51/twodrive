@@ -156,11 +156,38 @@ fn run() -> anyhow::Result<()> {
                 && fs::read(&path)? == bytes,
             "generated rename did not preserve ID/full bytes"
         );
-        // Retire only the exact generated files after both independent readbacks.
-        provider
-            .graph
-            .delete_item_bound(&identity, &file.remote_id, &file.etag, &mut || Ok(()))?;
-        fs::remove_file(&path)?;
+        // A different process produces actual kernel delete notifications.
+        use base64::Engine;
+        use std::os::windows::process::CommandExt;
+        let script = format!(
+            "[IO.File]::Delete('{}')",
+            path.to_string_lossy().replace('\'', "''")
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        let child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+            .creation_flags(0x08000000)
+            .output()?;
+        ensure!(child.status.success(), "generated deletion child failed");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let deleted = loop {
+            let progress = coordinator.synchronize_once()?;
+            if progress.deleted == 1 || std::time::Instant::now() >= deadline {
+                break progress;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        ensure!(
+            deleted.deleted == 1
+                && deleted.deferred == 0
+                && provider.get_metadata(&original_id)?.is_none(),
+            "generated native conditional recycle deferred: {deleted:?}"
+        );
         for relative_dir in [
             PathBuf::from(&scope).join("renamed-child"),
             PathBuf::from(&scope),
@@ -196,7 +223,7 @@ fn run() -> anyhow::Result<()> {
         fs::remove_dir(&root)?;
         println!(
             "{}",
-            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"generated_scopes_retired":true,"production_takeover":false})
+            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"native_file_delete_conditional_recycle":true,"generated_scopes_retired":true,"production_takeover":false})
         );
         Ok(())
     })();

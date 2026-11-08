@@ -19,6 +19,9 @@ mod native_directory;
 #[path = "native_moves.rs"]
 mod native_moves;
 pub use native_moves::NativeMoveIntent;
+#[path = "native_deletes.rs"]
+mod native_deletes;
+pub use native_deletes::NativeDeleteIntent;
 #[path = "native_projection.rs"]
 mod projection;
 pub use projection::{NativeCaptureBinding, NativeFileIdentity, NativeProjection};
@@ -1335,6 +1338,7 @@ fn snapshot(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<CacheSnapsh
             WHERE f.path=parent.path OR substr(f.path,1,length(parent.path)+1)=parent.path||'/')
         OR EXISTS(SELECT 1 FROM local_native_moves m JOIN files f ON f.remote_id=?1
             WHERE m.state<>'applied' AND (f.path=m.source_path OR substr(f.path,1,length(m.source_path)+1)=m.source_path||'/'))
+        OR EXISTS(SELECT 1 FROM local_native_deletes d WHERE d.local_id=?1 AND d.state NOT IN ('applied','cancelled'))
         OR EXISTS(SELECT 1 FROM files f JOIN local_cache_journal j ON j.local_id=f.remote_id
             WHERE f.remote_id=?1 AND (f.etag<>j.base_etag OR COALESCE(f.cloud_remote_id,'') IS NOT j.cloud_id
                 OR f.path<>j.cloud_path OR f.cache_path IS NOT j.cache_path))";

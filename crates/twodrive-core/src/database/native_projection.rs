@@ -17,7 +17,7 @@ pub struct NativeProjection {
     pub volume_serial: Option<u32>,
     pub native_file_id: Option<String>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NativeFileIdentity {
     pub volume_serial: u32,
     pub file_id: u64,
@@ -39,7 +39,10 @@ pub(super) fn init(conn: &rusqlite::Connection) -> anyhow::Result<()> {
             WHERE native_file_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS local_native_captures(local_id TEXT PRIMARY KEY,generation INTEGER NOT NULL,volume_serial INTEGER NOT NULL,file_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS local_native_directory_transfers(local_id TEXT PRIMARY KEY,parent_id TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);
-        CREATE TABLE IF NOT EXISTS local_native_moves(local_id TEXT PRIMARY KEY,root_binding TEXT NOT NULL,source_path TEXT NOT NULL,intent TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);",
+        CREATE TABLE IF NOT EXISTS local_native_moves(local_id TEXT PRIMARY KEY,root_binding TEXT NOT NULL,source_path TEXT NOT NULL,intent TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);
+        CREATE TABLE IF NOT EXISTS local_native_deletes(local_id TEXT PRIMARY KEY,root_binding TEXT NOT NULL,intent TEXT NOT NULL,state TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS idx_native_pending_delete ON local_native_deletes(local_id) WHERE state NOT IN ('applied','cancelled');
+        CREATE TABLE IF NOT EXISTS local_native_deleted_archives(archive_id TEXT PRIMARY KEY,local_id TEXT NOT NULL,root_binding TEXT NOT NULL,record_json TEXT NOT NULL,cache_path TEXT,deleted_unix INTEGER NOT NULL);",
     )?;
     Ok(())
 }
@@ -62,7 +65,10 @@ pub(super) fn record_capture(
         ON CONFLICT(local_id) DO UPDATE SET generation=excluded.generation,volume_serial=excluded.volume_serial,file_id=excluded.file_id",params![id,generation,physical.volume_serial,format!("{:016x}",physical.file_id)])?;
     Ok(())
 }
-fn capture(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<Option<NativeCaptureBinding>> {
+pub(super) fn capture(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> anyhow::Result<Option<NativeCaptureBinding>> {
     let row = conn
         .query_row(
             "SELECT generation,volume_serial,file_id FROM local_native_captures WHERE local_id=?1",
@@ -142,6 +148,7 @@ impl CacheJournal {
             return Ok(true);
         }
         Ok(journal_connection(&self.0.db)?.query_row("SELECT EXISTS(SELECT 1 FROM local_native_moves WHERE state<>'applied')
+            OR EXISTS(SELECT 1 FROM local_native_deletes WHERE state NOT IN ('applied','cancelled'))
             OR EXISTS(SELECT 1 FROM pending_metadata_operations) OR EXISTS(SELECT 1 FROM pending_deletes)
             OR EXISTS(SELECT 1 FROM local_native_projections WHERE state<>'published')
             OR EXISTS(SELECT 1 FROM local_native_creations c WHERE NOT EXISTS(SELECT 1 FROM local_native_projections p WHERE p.local_id=c.local_id AND p.state='published'))",[],|r|r.get(0))?)

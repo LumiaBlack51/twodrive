@@ -217,6 +217,19 @@ impl Provider for MockProvider {
         }
         Ok(result)
     }
+    fn delete_bound(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
+        ensure!(entry.remote_id == OBJECT, "opaque fixture file ID required");
+        let mut remote = self.remote.lock().unwrap();
+        ensure!(
+            remote.present
+                && entry.path == remote.path
+                && entry.etag == Self::metadata(&remote).etag,
+            "fixture conflict"
+        );
+        remote.present = false;
+        remote.version += 1;
+        Ok(())
+    }
     fn create_directory_bound(
         &self,
         parent: &MetadataEntry,

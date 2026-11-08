@@ -497,5 +497,19 @@
     "prepared_only_claim_resumes_after_restart": true,
     "fresh_artifacts_remain_ordinary": true,
     "backend": "mock"
+  },
+  "native_file_delete": {
+    "actual_cfapi_external_child": true,
+    "actual_personal_onedrive_conditional_recycle": true,
+    "old_completion_request_key_assumption_failed": true,
+    "completion_zero_key_identity_matching": true,
+    "different_nonzero_key_refused": true,
+    "exact_proof_and_version_required": true,
+    "uncertain_dispatch_not_blindly_retried": true,
+    "private_revisions_archived": true,
+    "retired_cache_pruning_preserves_archive": true,
+    "no_op_waits_for_delete_capable_handle": true,
+    "generated_scopes_retired": true,
+    "directory_delete_not_implemented": true
   }
 }

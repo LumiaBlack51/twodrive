@@ -391,7 +391,13 @@ personal OneDrive run preserve object IDs and complete bytes. Ambiguous move
 responses remain fenced; no blind replay is enabled. Idle local workers use the
 acknowledged watcher epoch/generation plus a durable-work veto, and full scans
 use path/tag/physical maps rather than repeated whole-tree searches.
-Delete, remote delta and pin/eviction consumers remain incomplete;
+File delete consumption now requires durable matching root/volume/tag/physical
+request and completion evidence plus the compared cloud version. A short prepared
+phase can coalesce replacements or cancel a restored object before dispatch.
+Conditional recycle receipts retire visible metadata but retain private revisions
+under an independent archive journal key, protected from retired-cache pruning.
+Generated actual native and actual personal OneDrive file-delete runs passed.
+Directory delete, remote delta and pin/eviction consumers remain incomplete;
 production takeover is not enabled by these tests.
 
 The coordinator integration exposed a shutdown tail: native disconnect returned
@@ -437,3 +443,11 @@ interruption before conversion/metadata. A native upgrade regression failed the
 previous early rejection; converted/paused and prepared-only creation restarts now
 recover with a mock provider. See TD-20261108-38. This does not promise every
 service accepts every historically claimed reserved filename.
+
+The delete integration exposed completion RequestKey=0 on this host; the original
+request key remains echoed in CfExecute responses. Historical matching accepts a
+zero completion key only with the other durable identity/order/version conditions,
+and rejects different nonzero keys. Failed/present-object request histories need
+a held no-delete-sharing namespace lease for no-op consumption. The generated
+regression holds DELETE access to prove the decision waits for that handle to
+close. See TD-20261108-39. A file-ID lookup failure is never deletion authority.
