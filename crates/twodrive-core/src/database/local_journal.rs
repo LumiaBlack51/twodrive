@@ -30,6 +30,9 @@ mod native_remote;
 pub use native_remote::{NativeRemoteRemoval, NativeRemoteUpdate};
 #[path = "native_residency.rs"]
 mod native_residency;
+#[path = "native_source_imports.rs"]
+mod native_source_imports;
+pub use native_source_imports::NativeSourceImport;
 #[path = "native_projection.rs"]
 mod projection;
 pub use projection::{NativeCaptureBinding, NativeFileIdentity, NativeProjection};
@@ -149,8 +152,9 @@ impl CacheJournal {
         ensure!(
             schema
                 .as_deref()
-                .is_none_or(|value| matches!(value, "2" | "3" | "4" | "5" | "6"))
-                && (!existing || matches!(schema.as_deref(), Some("2" | "3" | "4" | "5" | "6"))),
+                .is_none_or(|value| matches!(value, "2" | "3" | "4" | "5" | "6" | "7"))
+                && (!existing
+                    || matches!(schema.as_deref(), Some("2" | "3" | "4" | "5" | "6" | "7"))),
             "unsupported private-cache journal schema"
         );
         for (key, expected) in [
@@ -186,10 +190,10 @@ impl CacheJournal {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS local_native_creations(local_id TEXT PRIMARY KEY,path TEXT NOT NULL,root_binding TEXT NOT NULL,native_binding TEXT NOT NULL,state TEXT NOT NULL,cloud_id TEXT);")?;
         tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_native_creation_path ON local_native_creations(root_binding,path);")?;
         projection::init(&tx)?;
-        if schema.as_deref() != Some("6") {
+        if schema.as_deref() != Some("7") {
             native_deletes::upgrade_intents(&tx)?;
         }
-        tx.execute("INSERT INTO app_state(key,value) VALUES('local_cache_schema','6') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[])?;
+        tx.execute("INSERT INTO app_state(key,value) VALUES('local_cache_schema','7') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[])?;
         let old: Option<String> = tx
             .query_row(
                 "SELECT value FROM app_state WHERE key='local_cache_epoch'",
@@ -211,6 +215,9 @@ impl CacheJournal {
             dirty_intent=CASE WHEN writers>0 THEN 1 ELSE dirty_intent END,
             uncertain_upload=CASE WHEN upload_generation IS NOT NULL THEN 1 ELSE uncertain_upload END,
             readers=0,writers=0", [])?;
+        // No prior downloader can remain alive after the exclusive owner lock
+        // was acquired. Incomplete clean reads are retryable; dirty caches are not.
+        tx.execute("UPDATE files SET state='online_only',download_generation=download_generation+1 WHERE state='hydrating' AND cache_path IS NULL AND NOT EXISTS(SELECT 1 FROM local_cache_journal j WHERE j.local_id=files.remote_id)",[])?;
         // Repair accepted legacy flag/state commit gaps before observations
         // can be deduplicated. This does not invent a hydration claim.
         super::pins::recompute_in(&tx, true)?;

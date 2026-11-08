@@ -198,7 +198,8 @@ impl ReadOnlyRegisteredRoot {
             usize::try_from(entry.size).map_err(|_| "source size overflow")?,
             false,
         )?;
-        if !current.resident
+        if current.logical_size != entry.size
+            || !current.resident
             || current.partial
             || !current.os_in_sync
             || current.modified_bytes != 0
@@ -279,6 +280,138 @@ mod tests {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(BYTES[offset..offset + count].to_vec())
         }
+    }
+    #[test]
+    #[ignore = "explicit NEW generated source root; partial 4KiB growth and zero-to-nonzero refuse before data access"]
+    fn source_growth_is_rejected_before_read_data_or_recall() {
+        struct Growing {
+            size: Arc<AtomicUsize>,
+            calls: Arc<AtomicUsize>,
+        }
+        impl HydrationSource for Growing {
+            fn size(&self, _: &[u8]) -> Result<usize> {
+                Ok(self.size.load(Ordering::SeqCst))
+            }
+            fn read_range(
+                &self,
+                _: &[u8],
+                _: usize,
+                count: usize,
+                _: &AtomicBool,
+            ) -> Result<Vec<u8>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![0x61; count])
+            }
+        }
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_READONLY_SOURCE_ROOT").expect("generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let checkpoint = root.with_extension("receipt.json");
+        let size = Arc::new(AtomicUsize::new(4096));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut owner = PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+            Arc::new(Growing {
+                size: size.clone(),
+                calls: calls.clone(),
+            }),
+        )
+        .unwrap();
+        let zero = owner
+            .publish_placeholder(
+                Path::new("zero.txt"),
+                b"generated-zero-source-tag",
+                0,
+                false,
+                1,
+            )
+            .unwrap();
+        let full = owner
+            .publish_placeholder(
+                Path::new("growth.txt"),
+                b"generated-growth-source-tag",
+                4096,
+                false,
+                1,
+            )
+            .unwrap();
+        assert_eq!(std::fs::read(&full).unwrap().len(), 4096);
+        let source = ReadOnlyRegisteredRoot::open(&root).unwrap();
+        let entries = source.inventory().unwrap();
+        size.store(8192, Ordering::SeqCst);
+        for entry in &entries {
+            owner
+                .with_owned_exclusive(
+                    &entry.relative_path,
+                    entry.identity.as_deref().unwrap(),
+                    twodrive_core::NativeFileIdentity {
+                        volume_serial: entry.volume_serial,
+                        file_id: entry.file_id,
+                    },
+                    entry.size,
+                    |locked| {
+                        let metadata = CF_FS_METADATA {
+                            BasicInfo: FILE_BASIC_INFO {
+                                LastWriteTime: entry.last_write_time as i64,
+                                FileAttributes: FILE_ATTRIBUTE_NORMAL,
+                                ..Default::default()
+                            },
+                            FileSize: 8192,
+                        };
+                        let range = CF_FILE_RANGE {
+                            StartingOffset: entry.size as i64,
+                            Length: 8192 - entry.size as i64,
+                        };
+                        hr(
+                            unsafe {
+                                CfUpdatePlaceholder(
+                                    locked.handle,
+                                    &metadata,
+                                    ptr::null(),
+                                    0,
+                                    &range,
+                                    1,
+                                    CF_UPDATE_FLAG_MARK_IN_SYNC
+                                        | CF_UPDATE_FLAG_VERIFY_IN_SYNC
+                                        | CF_UPDATE_FLAG_DEHYDRATE,
+                                    ptr::null_mut(),
+                                    ptr::null_mut(),
+                                )
+                            },
+                            "generated source partial growth",
+                        )
+                    },
+                )
+                .unwrap();
+        }
+        let before = calls.load(Ordering::SeqCst);
+        let mut outcomes = Vec::new();
+        for entry in &entries {
+            let mut output = Vec::new();
+            outcomes
+                .push(source.copy_complete_clean(entry, &mut output).is_err() && output.is_empty());
+        }
+        let unchanged = calls.load(Ordering::SeqCst) == before;
+        drop(source);
+        std::fs::remove_file(zero).unwrap();
+        std::fs::remove_file(full).unwrap();
+        owner.retire_empty_office_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        assert!(outcomes.into_iter().all(|v| v));
+        assert!(unchanged, "growth must not recall missing ranges");
     }
     #[test]
     #[ignore = "explicit NEW generated registered source root; metadata/stale-residency no-recall and complete clean export"]

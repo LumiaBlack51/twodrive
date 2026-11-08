@@ -22,6 +22,20 @@ mod enabled {
     }
     #[derive(Subcommand)]
     enum Command {
+        /// Move this provider's disconnected root with a sealed recovery intent.
+        Relocate {
+            #[arg(long)]
+            native_state: PathBuf,
+            #[arg(long)]
+            root: PathBuf,
+        },
+        /// Copy service-verified complete personal replicas into the staged root.
+        SourceCopy {
+            #[arg(long)]
+            native_state: PathBuf,
+            #[arg(long, default_value_t = 0)]
+            max_files: usize,
+        },
         /// Verify a small sample of complete source data against service checksums.
         SourceVerify {
             #[arg(long)]
@@ -75,6 +89,27 @@ mod enabled {
     }
     pub fn run() -> anyhow::Result<()> {
         match Cli::parse().command {
+            Command::Relocate { native_state, root } => {
+                let mut session = NativeSession::relocate(&native_state, &root)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"phase":"owned_root_relocated","root":session.coordinator.root(),"summary":session.coordinator.summary()?})
+                );
+                session.coordinator.disconnect()?;
+            }
+            Command::SourceCopy {
+                native_state,
+                max_files,
+            } => {
+                let mut session = NativeSession::resume(&native_state)?;
+                session.refresh_remote()?;
+                let summary = session.copy_personal_source(max_files)?;
+                println!(
+                    "{}",
+                    serde_json::json!({"phase":"verified_source_copy","source_mutations":false,"cloud_content_uploads":false,"summary":summary})
+                );
+                session.coordinator.disconnect()?;
+            }
             Command::SourceVerify {
                 native_state,
                 sample,

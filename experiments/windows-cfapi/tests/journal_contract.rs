@@ -338,7 +338,7 @@ fn native_creation_claim_survives_restart_and_new_edits_veto_the_first_receipt()
     let j = CacheJournal::open(db.clone(), &root, &binding).unwrap();
     assert_eq!(
         db.get_state_value("local_cache_schema").unwrap().as_deref(),
-        Some("6")
+        Some("7")
     );
     assert_eq!(j.native_creations().unwrap()[0].state, "preparing");
     fs::write(&path, EDITED).unwrap();
@@ -1548,4 +1548,128 @@ fn native_clean_inventory_cannot_trust_stale_cached_labels_or_unpublished_metada
         !j2.native_publications_clean("generated-root").unwrap(),
         "an unmaterialized cloud item is not an idle complete tree"
     );
+}
+
+#[test]
+fn migration_timestamp_restart_keeps_confirmed_bytes_and_fences_writers() {
+    let (_temp, j, path) = remote_fixture(b"generated-source-timestamp");
+    let expected = j.native_projection_for_id(ID).unwrap().unwrap();
+    let stamp = 116_444_736_000_000_000 + 123_000_000;
+    let update = j
+        .prepare_native_migration_time(&expected, stamp, |f, hash| {
+            anyhow::ensure!(digest(f)? == hash, "hash changed");
+            Ok(())
+        })
+        .unwrap();
+    assert!(j.open_write(ID).is_err());
+    let db = j.database().clone();
+    let cache = path.parent().unwrap().to_path_buf();
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    let recovered = j.native_remote_updates("generated-root").unwrap().remove(0);
+    assert_eq!(recovered.local_modified_filetime, Some(stamp));
+    j.complete_native_remote_update(
+        &update,
+        twodrive_core::NativeFileIdentity {
+            volume_serial: 7,
+            file_id: 9,
+        },
+    )
+    .unwrap();
+    let record = db.get_by_remote_id(ID).unwrap().unwrap();
+    assert_eq!(record.metadata.modified_unix, 12);
+    assert_eq!(record.metadata.etag, "version-1");
+    assert_eq!(record.cache_path.as_ref(), Some(&path));
+    assert!(j.snapshot(ID).unwrap().sync_confirmed());
+    assert_eq!(fs::read(path).unwrap(), ORIGINAL);
+}
+
+#[test]
+fn owner_restart_retries_incomplete_hydration_without_replacing_dirty_data() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, _) = paths(temp.path());
+    db.init().unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(ID, "/generated.txt", 5, 1, "v1"))
+        .unwrap();
+    let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    let original = db.get_by_remote_id(ID).unwrap().unwrap();
+    let generation = j.begin_bound_download(&original).unwrap();
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    assert_eq!(
+        db.get_by_remote_id(ID).unwrap().unwrap().state,
+        FileState::OnlineOnly
+    );
+    assert!(j.begin_bound_download(&original).unwrap() > generation);
+    drop(j);
+    let (_temp2, dirty, path) = fixture();
+    edit(&dirty);
+    let db = dirty.database().clone();
+    let cache = path.parent().unwrap().to_path_buf();
+    drop(dirty);
+    let dirty = CacheJournal::open(db, &cache, &hash(b"generated-provider-binding")).unwrap();
+    assert!(dirty.snapshot(ID).unwrap().dirty_intent);
+    assert_eq!(fs::read(path).unwrap(), EDITED);
+}
+
+#[test]
+fn verified_source_receipt_retains_data_across_cache_and_metadata_restart_boundaries() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, path) = paths(temp.path());
+    db.init().unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(
+        ID,
+        "/generated.txt",
+        ORIGINAL.len() as u64,
+        1,
+        "version-1",
+    ))
+    .unwrap();
+    let binding = hash(b"generated-provider-binding");
+    let j = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    j.prepare_native_projection(ID, "generated-root", b"generated-source-copy")
+        .unwrap();
+    j.complete_native_projection(ID, "generated-root", b"generated-source-copy", 7, 9)
+        .unwrap();
+    fs::write(&path, ORIGINAL).unwrap();
+    let source=twodrive_core::NativeSourceImport{sequence:0,expected:j.native_projection_for_id(ID).unwrap().unwrap(),source_root_receipt:serde_json::json!({"schema_version":1,"volume_serial":7,"file_id":88,"identity":b"generated-source"}).to_string(),source_file:twodrive_core::NativeFileIdentity{volume_serial:7,file_id:99},cache_path:path.clone(),digest:hash(ORIGINAL),source_filetime:116_444_736_000_000_000+123_456_789,source_pinned:false,state:"verified".into()};
+    let source = j.prepare_native_source_import(source, digest).unwrap();
+    assert!(!db.remove_unreferenced_cache(&path).unwrap());
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    let sources = j.native_source_imports("generated-root").unwrap();
+    assert_eq!(sources.len(), 1);
+    let record = db.get_by_remote_id(ID).unwrap().unwrap();
+    let generation = j.begin_bound_download(&record).unwrap();
+    j.publish_download(ID, generation, &path, &hash(ORIGINAL), "version-1")
+        .unwrap();
+    j.mark_native_source_data_ready(&source).unwrap();
+    let update = j
+        .prepare_native_migration_time(&source.expected, source.source_filetime, |f, h| {
+            anyhow::ensure!(digest(f)? == h, "hash changed");
+            Ok(())
+        })
+        .unwrap();
+    j.complete_native_remote_update(
+        &update,
+        twodrive_core::NativeFileIdentity {
+            volume_serial: 7,
+            file_id: 9,
+        },
+    )
+    .unwrap();
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    let source = j.native_source_imports("generated-root").unwrap().remove(0);
+    assert_eq!(source.state, "data_ready");
+    j.finish_native_source_import(&source, digest).unwrap();
+    assert!(
+        j.native_source_imports("generated-root")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(j.snapshot(ID).unwrap().sync_confirmed());
+    assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+    assert!(!db.remove_unreferenced_cache(&path).unwrap());
+    assert!(!j.native_work_pending().unwrap());
 }

@@ -106,6 +106,102 @@ impl LocalFileBridge {
         next: &MetadataEntry,
         pending: Option<twodrive_core::NativeRemoteUpdate>,
     ) -> anyhow::Result<()> {
+        self.apply_native_version_change(owner, expected, next, pending, None)
+    }
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub(crate) fn apply_native_source_time(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        expected: &twodrive_core::NativeProjection,
+        stamp: u64,
+    ) -> anyhow::Result<()> {
+        let next = MetadataEntry::new_file(
+            &expected.cloud_id,
+            &expected.path,
+            expected.size,
+            (stamp / 10_000_000) as i64 - 11_644_473_600,
+            &expected.etag,
+        );
+        self.apply_native_version_change(owner, expected, &next, None, Some(stamp))
+    }
+    #[cfg(all(windows, feature = "native-sync"))]
+    fn apply_native_version_change(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        expected: &twodrive_core::NativeProjection,
+        next: &MetadataEntry,
+        pending: Option<twodrive_core::NativeRemoteUpdate>,
+        local_modified_filetime: Option<u64>,
+    ) -> anyhow::Result<()> {
+        if let Some(stamp) = pending
+            .as_ref()
+            .and_then(|u| u.local_modified_filetime)
+            .or(local_modified_filetime)
+        {
+            let physical = twodrive_core::NativeFileIdentity {
+                volume_serial: expected
+                    .volume_serial
+                    .context("source target volume missing")?,
+                file_id: u64::from_str_radix(
+                    expected
+                        .native_file_id
+                        .as_deref()
+                        .context("source target file identity missing")?,
+                    16,
+                )?,
+            };
+            let relative: std::path::PathBuf = expected
+                .path
+                .strip_prefix('/')
+                .context("source target path unrooted")?
+                .split('/')
+                .collect();
+            return owner
+                .with_owned_exclusive(
+                    &relative,
+                    &expected.tag,
+                    physical,
+                    expected.size,
+                    |locked| {
+                        let os = locked.inspect()?;
+                        if !os.os_in_sync
+                            || os.modified_bytes != 0
+                            || os.logical_size != expected.size
+                        {
+                            if let Some(update) = pending.as_ref() {
+                                self.journal
+                                    .supersede_native_migration_time(update)
+                                    .map_err(|e| e.to_string())?;
+                            }
+                            return Err("source timestamp preserves native changes".into());
+                        }
+                        let update = if let Some(update) = pending {
+                            update
+                        } else {
+                            self.journal
+                                .prepare_native_migration_time(expected, stamp, |file, digest| {
+                                    ensure!(
+                                        digest_file(file)? == digest,
+                                        "source timestamp private data changed"
+                                    );
+                                    Ok(())
+                                })
+                                .map_err(|e| e.to_string())?
+                        };
+                        locked.preserve_verified_filetime(stamp)?;
+                        #[cfg(all(test, feature = "native-test-hooks"))]
+                        if INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.replace(false)) {
+                            return Err(
+                                "generated interruption after source timestamp update".into()
+                            );
+                        }
+                        self.journal
+                            .complete_native_remote_update(&update, physical)
+                            .map_err(|e| e.to_string())
+                    },
+                )
+                .map_err(anyhow::Error::msg);
+        }
         let relative: std::path::PathBuf = expected
             .path
             .strip_prefix('/')
@@ -187,15 +283,21 @@ impl LocalFileBridge {
                     let update = if let Some(update) = pending {
                         update
                     } else {
-                        self.journal
-                            .prepare_native_remote_update(expected, next, |file, digest| {
-                                ensure!(
-                                    digest_file(file)? == digest,
-                                    "old private version changed before remote update"
-                                );
-                                Ok(())
-                            })
-                            .map_err(|e| e.to_string())?
+                        let verify = |file: &mut File, digest: &str| {
+                            ensure!(
+                                digest_file(file)? == digest,
+                                "old private version changed before native update"
+                            );
+                            Ok(())
+                        };
+                        if let Some(stamp) = local_modified_filetime {
+                            self.journal
+                                .prepare_native_migration_time(expected, stamp, verify)
+                        } else {
+                            self.journal
+                                .prepare_native_remote_update(expected, next, verify)
+                        }
+                        .map_err(|e| e.to_string())?
                     };
                     rename()?;
                     #[cfg(all(test, feature = "native-test-hooks"))]
@@ -207,6 +309,7 @@ impl LocalFileBridge {
                         next.modified_unix,
                         actual != target || resumed_rename,
                         preserve_pin,
+                        update.local_modified_filetime,
                     )?;
                     #[cfg(all(test, feature = "native-test-hooks"))]
                     if INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|flag| flag.replace(false)) {

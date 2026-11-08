@@ -7,6 +7,8 @@ pub struct NativeRemoteUpdate {
     pub sequence: i64,
     pub expected: NativeProjection,
     pub next: MetadataEntry,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_modified_filetime: Option<u64>,
     pub state: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -200,13 +202,48 @@ impl CacheJournal {
         next: &MetadataEntry,
         verify: impl FnOnce(&mut File, &str) -> anyhow::Result<()>,
     ) -> anyhow::Result<NativeRemoteUpdate> {
+        self.prepare_native_update(expected, next, None, verify)
+    }
+    pub fn prepare_native_migration_time(
+        &self,
+        expected: &NativeProjection,
+        filetime: u64,
+        verify: impl FnOnce(&mut File, &str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<NativeRemoteUpdate> {
+        ensure!(
+            !expected.directory && filetime >= 116_444_736_000_000_000,
+            "valid source file timestamp required"
+        );
+        let next = MetadataEntry::new_file(
+            &expected.cloud_id,
+            &expected.path,
+            expected.size,
+            (filetime / 10_000_000) as i64 - 11_644_473_600,
+            &expected.etag,
+        );
+        self.prepare_native_update(expected, &next, Some(filetime), verify)
+    }
+    fn prepare_native_update(
+        &self,
+        expected: &NativeProjection,
+        next: &MetadataEntry,
+        local_modified_filetime: Option<u64>,
+        verify: impl FnOnce(&mut File, &str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<NativeRemoteUpdate> {
         ensure!(
             expected.state == "published"
                 && expected.directory == next.is_dir
                 && next.remote_id == expected.cloud_id
                 && next.path != "/"
                 && !next.etag.is_empty()
-                && (next.etag != expected.etag || next.path != expected.path),
+                && (if local_modified_filetime.is_some() {
+                    !expected.directory
+                        && next.etag == expected.etag
+                        && next.path == expected.path
+                        && next.size == expected.size
+                } else {
+                    next.etag != expected.etag || next.path != expected.path
+                }),
             "invalid remote native version change"
         );
         let _guard = self
@@ -236,6 +273,10 @@ impl CacheJournal {
             verify(&mut file, &state.acknowledged_digest)?;
             held = Some(file);
         } else {
+            ensure!(
+                local_modified_filetime.is_none(),
+                "source timestamp requires confirmed private bytes"
+            );
             ensure!((record.state==FileState::OnlineOnly || (record.state==FileState::Hydrating && record.effective_pinned()) || (expected.directory && matches!(record.state,FileState::Cached | FileState::Pinned))) && record.cache_path.is_none()
                 && !tx.query_row("SELECT EXISTS(SELECT 1 FROM local_native_dirty WHERE cloud_id=?1 OR cloud_id=?2)",params![expected.local_id,expected.cloud_id],|r|r.get::<_,bool>(0))?,"remote update has uncaptured local work");
         }
@@ -253,6 +294,7 @@ impl CacheJournal {
             sequence: 0,
             expected: expected.clone(),
             next: next.clone(),
+            local_modified_filetime,
             state: "prepared".into(),
         };
         tx.execute("INSERT INTO local_native_remote_updates(local_id,root_binding,payload,state) VALUES(?1,?2,?3,'prepared')",params![expected.local_id,expected.root_binding,serde_json::to_string(&update)?])?;
@@ -261,6 +303,56 @@ impl CacheJournal {
         tx.commit()?;
         drop(held);
         Ok(update)
+    }
+    /// Only a local timestamp transition may be cancelled on positive native
+    /// edits. Preserve the newer bytes and require a fresh complete capture.
+    pub fn supersede_native_migration_time(
+        &self,
+        update: &NativeRemoteUpdate,
+    ) -> anyhow::Result<()> {
+        ensure!(
+            update.local_modified_filetime.is_some(),
+            "only local metadata intent can be superseded"
+        );
+        let _guard = self
+            .0
+            .gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache gate poisoned"))?;
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let payload:String=tx.query_row("SELECT payload FROM local_native_remote_updates WHERE sequence=?1 AND state='prepared'",[update.sequence],|r|r.get(0))?;
+        let stored: NativeRemoteUpdate = serde_json::from_str(&payload)?;
+        ensure!(
+            stored.expected == update.expected
+                && stored.next == update.next
+                && stored.local_modified_filetime == update.local_modified_filetime,
+            "local metadata intent changed"
+        );
+        let mut expected = update.expected.clone();
+        expected.state = "updating".into();
+        ensure!(
+            projection::get(&tx, &expected.local_id)?.as_ref() == Some(&expected),
+            "local metadata publication changed"
+        );
+        tx.execute(
+            "UPDATE local_native_projections SET state='published' WHERE local_id=?1",
+            [&expected.local_id],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO local_native_dirty(cloud_id) VALUES(?1)",
+            [&expected.local_id],
+        )?;
+        tx.execute(
+            "UPDATE files SET state='dirty' WHERE remote_id=?1",
+            [&expected.local_id],
+        )?;
+        tx.execute(
+            "UPDATE local_native_remote_updates SET state='cancelled' WHERE sequence=?1",
+            [update.sequence],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
     pub fn complete_native_remote_update(
         &self,
@@ -291,7 +383,9 @@ impl CacheJournal {
         let payload:String=tx.query_row("SELECT payload FROM local_native_remote_updates WHERE sequence=?1 AND state='prepared'",[update.sequence],|r|r.get(0))?;
         let stored: NativeRemoteUpdate = serde_json::from_str(&payload)?;
         ensure!(
-            stored.expected == update.expected && stored.next == update.next,
+            stored.expected == update.expected
+                && stored.next == update.next
+                && stored.local_modified_filetime == update.local_modified_filetime,
             "native remote update receipt changed"
         );
         expected.state = "updating".into();
@@ -320,11 +414,13 @@ impl CacheJournal {
                     && !state.native_dirty,
                 "native remote completion has local edits"
             );
-            let archive = format!("native-remote-before-{}", update.sequence);
-            tx.execute(
-                "UPDATE local_cache_journal SET local_id=?2 WHERE local_id=?1",
-                params![expected.local_id, archive],
-            )?;
+            if update.local_modified_filetime.is_none() {
+                let archive = format!("native-remote-before-{}", update.sequence);
+                tx.execute(
+                    "UPDATE local_cache_journal SET local_id=?2 WHERE local_id=?1",
+                    params![expected.local_id, archive],
+                )?;
+            }
         }
         if expected.path != update.next.path {
             let mut stmt=tx.prepare("SELECT remote_id,path FROM files WHERE path=?1 OR substr(path,1,length(?1)+1)=?1||'/'")?;
@@ -348,7 +444,19 @@ impl CacheJournal {
                 params![expected.local_id, update.next.path],
             )?;
         }
-        tx.execute("UPDATE files SET etag=?2,size=?3,modified_unix=?4,state=CASE WHEN is_dir=1 THEN 'cached' ELSE 'online_only' END,cache_path=NULL,cache_accessed_unix=NULL,download_generation=download_generation+1 WHERE remote_id=?1",params![expected.local_id,update.next.etag,i64::try_from(update.next.size)?,update.next.modified_unix])?;
+        if update.local_modified_filetime.is_some() {
+            ensure!(
+                has_journal_record(&tx, &expected.local_id)?,
+                "source timestamp private data missing"
+            );
+            tx.execute(
+                "UPDATE files SET modified_unix=?2 WHERE remote_id=?1",
+                params![expected.local_id, update.next.modified_unix],
+            )?;
+        } else {
+            tx.execute("UPDATE files SET etag=?2,size=?3,modified_unix=?4,state=CASE WHEN is_dir=1 THEN 'cached' ELSE 'online_only' END,cache_path=NULL,cache_accessed_unix=NULL,download_generation=download_generation+1 WHERE remote_id=?1",params![expected.local_id,update.next.etag,i64::try_from(update.next.size)?,update.next.modified_unix])?;
+        }
+
         tx.execute("UPDATE local_native_projections SET etag=?2,size=?3,modified_unix=?4,state='published' WHERE local_id=?1",params![expected.local_id,update.next.etag,i64::try_from(update.next.size)?,update.next.modified_unix])?;
         ensure!(tx.execute("UPDATE local_native_remote_updates SET state='applied' WHERE sequence=?1 AND state='prepared'",[update.sequence])?==1,"native remote update receipt changed");
         tx.commit()?;

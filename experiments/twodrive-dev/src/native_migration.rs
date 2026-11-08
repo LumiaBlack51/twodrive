@@ -28,6 +28,37 @@ impl std::io::Write for ChecksumSink {
     }
 }
 
+#[derive(Default, Debug, Serialize)]
+pub struct SourceCopySummary {
+    pub candidates: usize,
+    pub staged: usize,
+    pub already_owned: usize,
+    pub bytes_copied: u64,
+    pub deferred: usize,
+    pub checksum_mismatches: usize,
+    pub completed: usize,
+    pub isolated: usize,
+}
+struct SnapshotWriter<'a> {
+    file: &'a mut std::fs::File,
+    sha: sha2::Sha256,
+    quick: QuickXorHash,
+}
+impl std::io::Write for SnapshotWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        use sha2::Digest;
+        let count = self.file.write(bytes)?;
+        self.sha.update(&bytes[..count]);
+        self.quick
+            .update(&bytes[..count])
+            .map_err(std::io::Error::other)?;
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
 fn sorted_records(
     records: Vec<twodrive_core::FileRecord>,
 ) -> anyhow::Result<Vec<twodrive_core::FileRecord>> {
@@ -108,6 +139,211 @@ pub struct SourceSummary {
     pub maximum_file_bytes: u64,
 }
 impl NativeSession {
+    /// Import only full, clean replicas whose bytes match the bound service
+    /// version. The personal source is never registered, modified or stopped.
+    pub fn copy_personal_source(&mut self, maximum: usize) -> anyhow::Result<SourceCopySummary> {
+        use sha2::Digest;
+        let recovered = self.coordinator.resume_source_imports()?;
+        let mut summary = SourceCopySummary {
+            completed: recovered.imported,
+            deferred: recovered.deferred,
+            isolated: recovered.isolated,
+            ..Default::default()
+        };
+        let (owner, path) = personal_source_location().map_err(|e| failure("registry", e))?;
+        ensure!(
+            owner.eq_ignore_ascii_case(&self.configuration.identity.account),
+            "source account mismatch"
+        );
+        let provider = crate::native_account::NativeAccount::new(
+            self.configuration.account.clone(),
+            self.configuration.identity.clone(),
+            false,
+        )?
+        .verified()?;
+        let source =
+            ReadOnlyRegisteredRoot::open(&path).map_err(|e| failure("registered_root", e))?;
+        ensure!(
+            source.receipt().volume_serial != self.coordinator.receipt().volume_serial
+                || source.receipt().file_id != self.coordinator.receipt().file_id,
+            "source and target must be distinct"
+        );
+        let db = self.coordinator.bridge.journal().database().clone();
+        let records = sorted_records(db.all_records()?)?;
+        let root = db
+            .get_state_value("native_cloud_root_id")?
+            .context("source cloud root missing")?;
+        let receipt = serde_json::to_string(source.receipt())?;
+        let mut batch = Vec::new();
+        let mut attempted = 0usize;
+        for entry in source.inventory().map_err(|e| failure("inventory", e))? {
+            if entry.directory
+                || entry.attributes & 0x4000 != 0
+                || entry.cloud.as_ref().is_none_or(|os| {
+                    !os.resident || os.partial || !os.os_in_sync || os.modified_bytes != 0
+                })
+            {
+                continue;
+            }
+            let path = NativeCoordinator::cloud_path(&entry.relative_path)?;
+            let Some(record) = find_record(&records, &path)? else {
+                continue;
+            };
+            if record.metadata.is_dir || record.metadata.size != entry.size {
+                summary.deferred += 1;
+                continue;
+            }
+            let Some(id) = record.cloud_remote_id.as_ref() else {
+                summary.deferred += 1;
+                continue;
+            };
+            summary.candidates += 1;
+            if record.cache_path.is_some()
+                && record.metadata.modified_unix
+                    == (entry.last_write_time / 10_000_000) as i64 - 11_644_473_600
+                && self
+                    .coordinator
+                    .bridge
+                    .journal()
+                    .snapshot_if_owned(&record.metadata.remote_id)?
+                    .is_some_and(|s| s.sync_confirmed())
+            {
+                summary.already_owned += 1;
+                continue;
+            }
+            let parent = if record.metadata.parent_path == "/" {
+                root.clone()
+            } else {
+                find_record(&records, &record.metadata.parent_path)?
+                    .and_then(|p| p.cloud_remote_id.clone())
+                    .context("source parent unbound")?
+            };
+            let mut expected = record.metadata.clone();
+            expected.remote_id = id.clone();
+            let projection = self
+                .coordinator
+                .bridge
+                .journal()
+                .native_projection_for_id(&record.metadata.remote_id)?
+                .context("source target publication missing")?;
+            if projection.state != "published" {
+                summary.deferred += 1;
+                continue;
+            }
+            let mut temporary =
+                tempfile::NamedTempFile::new_in(self.coordinator.bridge.journal().cache_root())?;
+            let mut writer = SnapshotWriter {
+                file: temporary.as_file_mut(),
+                sha: sha2::Sha256::new(),
+                quick: QuickXorHash::default(),
+            };
+            attempted += 1;
+            let copied = source.copy_complete_clean(&entry, &mut writer);
+            let sha = format!("{:x}", writer.sha.finalize());
+            let quick = writer.quick;
+            let Ok(bytes) = copied else {
+                summary.deferred += 1;
+                if maximum != 0 && attempted >= maximum {
+                    break;
+                }
+                continue;
+            };
+            temporary.as_file().sync_all()?;
+            summary.bytes_copied = summary
+                .bytes_copied
+                .checked_add(bytes)
+                .context("source copy byte total overflow")?;
+            batch.push((
+                Candidate {
+                    entry,
+                    request: IntegrityRequest {
+                        parent_id: parent,
+                        expected,
+                    },
+                },
+                projection,
+                temporary,
+                sha,
+                quick,
+            ));
+            if batch.len() == 20 || (maximum != 0 && attempted >= maximum) {
+                self.finish_source_batch(&provider, &receipt, &mut batch, &mut summary)?;
+            }
+            if maximum != 0 && attempted >= maximum {
+                break;
+            }
+        }
+        if !batch.is_empty() {
+            self.finish_source_batch(&provider, &receipt, &mut batch, &mut summary)?;
+        }
+        Ok(summary)
+    }
+
+    fn finish_source_batch(
+        &mut self,
+        provider: &crate::onedrive::OneDrive,
+        receipt: &str,
+        batch: &mut Vec<(
+            Candidate,
+            NativeProjection,
+            tempfile::NamedTempFile,
+            String,
+            QuickXorHash,
+        )>,
+        summary: &mut SourceCopySummary,
+    ) -> anyhow::Result<()> {
+        let requests = batch
+            .iter()
+            .map(|(c, _, _, _, _)| c.request.clone())
+            .collect::<Vec<_>>();
+        let fingerprints = provider.graph.file_integrities_bound(
+            &self.configuration.identity,
+            &requests,
+            &mut || Ok(()),
+        )?;
+        for ((candidate, projection, temporary, digest, quick), fingerprint) in
+            batch.drain(..).zip(fingerprints)
+        {
+            let Ok(fingerprint) = fingerprint else {
+                let _ = temporary.keep()?;
+                summary.deferred += 1;
+                continue;
+            };
+            if !fingerprint.matches(&quick) {
+                let _ = temporary.keep()?;
+                summary.checksum_mismatches += 1;
+                continue;
+            }
+            let (file, cache_path) = temporary.keep()?;
+            drop(file);
+            self.coordinator
+                .bridge
+                .journal()
+                .prepare_native_source_import(
+                    twodrive_core::NativeSourceImport {
+                        sequence: 0,
+                        expected: projection,
+                        source_root_receipt: receipt.into(),
+                        source_file: twodrive_core::NativeFileIdentity {
+                            volume_serial: candidate.entry.volume_serial,
+                            file_id: candidate.entry.file_id,
+                        },
+                        cache_path,
+                        digest,
+                        source_filetime: candidate.entry.last_write_time,
+                        source_pinned: candidate.entry.cloud.as_ref().is_some_and(|s| s.pinned),
+                        state: "verified".into(),
+                    },
+                    crate::local_files::digest_file,
+                )?;
+            summary.staged += 1;
+        }
+        let progress = self.coordinator.resume_source_imports()?;
+        summary.completed += progress.imported;
+        summary.deferred += progress.deferred;
+        summary.isolated += progress.isolated;
+        Ok(())
+    }
     pub fn verify_personal_source_sample(
         &self,
         limit: usize,

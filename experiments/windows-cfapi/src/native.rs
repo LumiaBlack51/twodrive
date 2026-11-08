@@ -1689,7 +1689,7 @@ fn directory_observation(handle: HANDLE, expected_identity: &[u8]) -> Result<Nat
 fn node_observation(
     handle: HANDLE,
     expected_identity: &[u8],
-    size: usize,
+    _size: usize,
     directory: bool,
 ) -> Result<NativeObservation> {
     // u64 buffer provides alignment for the variable-length standard-info blob.
@@ -1748,8 +1748,8 @@ fn node_observation(
         (!partial, partial)
     } else {
         (
-            info.OnDiskDataSize >= size as i64,
-            info.OnDiskDataSize > 0 && info.OnDiskDataSize < size as i64,
+            info.OnDiskDataSize >= logical_size,
+            info.OnDiskDataSize > 0 && info.OnDiskDataSize < logical_size,
         )
     };
     Ok(NativeObservation {
@@ -1924,6 +1924,94 @@ pub struct LockedPlaceholder<'a> {
 }
 impl LockedPlaceholder<'_> {
     #[cfg(feature = "native-sync")]
+    pub fn retain_pin_intent(&self) -> Result<()> {
+        if self.inspect()?.release_requested {
+            return Ok(());
+        }
+        hr(
+            unsafe {
+                CfSetPinState(
+                    self.handle,
+                    CF_PIN_STATE_PINNED,
+                    CF_SET_PIN_FLAG_NONE,
+                    ptr::null_mut(),
+                )
+            },
+            "retain copied pin intent",
+        )
+    }
+    #[cfg(feature = "native-sync")]
+    pub fn preserve_verified_filetime(&self, filetime: u64) -> Result<()> {
+        let before = self.inspect()?;
+        if !before.os_in_sync || before.modified_bytes != 0 {
+            return Err("source timestamp preserves native edits".into());
+        }
+        let raw = unsafe { CfGetWin32HandleFromProtectedHandle(self.handle) };
+        let mut metadata = CF_FS_METADATA::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                raw,
+                FileBasicInfo,
+                (&mut metadata.BasicInfo as *mut FILE_BASIC_INFO).cast(),
+                size_of::<FILE_BASIC_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err("source timestamp metadata unavailable".into());
+        }
+        metadata.FileSize = i64::try_from(self.size).map_err(|_| "source size overflow")?;
+        metadata.BasicInfo.LastWriteTime =
+            i64::try_from(filetime).map_err(|_| "source timestamp overflow")?;
+        metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
+            | FILE_ATTRIBUTE_HIDDEN
+            | FILE_ATTRIBUTE_SYSTEM
+            | FILE_ATTRIBUTE_ARCHIVE
+            | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+        if metadata.BasicInfo.FileAttributes == 0 {
+            metadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+        }
+        hr(
+            unsafe {
+                CfUpdatePlaceholder(
+                    self.handle,
+                    &metadata,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    CF_UPDATE_FLAG_MARK_IN_SYNC | CF_UPDATE_FLAG_VERIFY_IN_SYNC,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            },
+            "preserve verified source filetime without dehydration",
+        )?;
+        let pin = if before.pinned {
+            Some(CF_PIN_STATE_PINNED)
+        } else if before.release_requested {
+            Some(CF_PIN_STATE_UNPINNED)
+        } else if before.pin_known_unpinned {
+            Some(CF_PIN_STATE_UNSPECIFIED)
+        } else {
+            None
+        };
+        if let Some(pin) = pin {
+            hr(
+                unsafe { CfSetPinState(self.handle, pin, CF_SET_PIN_FLAG_NONE, ptr::null_mut()) },
+                "preserve pin around local timestamp metadata",
+            )?;
+        }
+        let after = self.inspect()?;
+        if !after.os_in_sync
+            || after.modified_bytes != 0
+            || after.logical_size != before.logical_size
+            || after.resident != before.resident
+        {
+            return Err("source timestamp changed native data state".into());
+        }
+        Ok(())
+    }
+    #[cfg(feature = "native-sync")]
     pub fn hydrate(&self) -> Result<()> {
         let before = self.inspect()?;
         if !before.os_in_sync || before.modified_bytes != 0 {
@@ -2036,6 +2124,7 @@ impl NativeCapture<'_> {
         modified_unix: i64,
         owned_rename: bool,
         preserve_pin: bool,
+        local_modified_filetime: Option<u64>,
     ) -> Result<()> {
         let before = self.0.inspect()?;
         if (!before.os_in_sync && !owned_rename) || before.modified_bytes != 0 {
@@ -2054,11 +2143,15 @@ impl NativeCapture<'_> {
             return Err("native update basic metadata unavailable".into());
         }
         metadata.FileSize = i64::try_from(size).map_err(|_| "remote size overflow")?;
-        metadata.BasicInfo.LastWriteTime = modified_unix
-            .checked_add(11_644_473_600)
-            .and_then(|v| v.checked_mul(10_000_000))
-            .filter(|v| *v > 0)
-            .ok_or("remote timestamp overflow")?;
+        metadata.BasicInfo.LastWriteTime = if let Some(stamp) = local_modified_filetime {
+            i64::try_from(stamp).map_err(|_| "source timestamp overflow")?
+        } else {
+            modified_unix
+                .checked_add(11_644_473_600)
+                .and_then(|v| v.checked_mul(10_000_000))
+                .filter(|v| *v > 0)
+                .ok_or("remote timestamp overflow")?
+        };
         metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
             | FILE_ATTRIBUTE_HIDDEN
             | FILE_ATTRIBUTE_SYSTEM
@@ -2071,8 +2164,9 @@ impl NativeCapture<'_> {
             StartingOffset: 0,
             Length: -1,
         };
-        let restore_pin = !self.0.directory && (before.pinned || preserve_pin);
-        if before.pinned && !self.0.directory {
+        let dehydrate = !self.0.directory && local_modified_filetime.is_none();
+        let restore_pin = dehydrate && (before.pinned || preserve_pin);
+        if before.pinned && dehydrate {
             hr(
                 unsafe {
                     CfSetPinState(
@@ -2092,12 +2186,8 @@ impl NativeCapture<'_> {
                     &metadata,
                     ptr::null(),
                     0,
-                    if self.0.directory {
-                        ptr::null()
-                    } else {
-                        &range
-                    },
-                    if self.0.directory { 0 } else { 1 },
+                    if dehydrate { &range } else { ptr::null() },
+                    if dehydrate { 1 } else { 0 },
                     CF_UPDATE_FLAG_MARK_IN_SYNC
                         | if owned_rename {
                             0
@@ -2106,8 +2196,10 @@ impl NativeCapture<'_> {
                         }
                         | if self.0.directory {
                             CF_UPDATE_FLAG_DISABLE_ON_DEMAND_POPULATION
-                        } else {
+                        } else if dehydrate {
                             CF_UPDATE_FLAG_DEHYDRATE
+                        } else {
+                            0
                         },
                     ptr::null_mut(),
                     ptr::null_mut(),

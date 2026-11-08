@@ -45,6 +45,84 @@ fn valid_identity(identity: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Move only an owned, disconnected registration. The caller retains the
+/// private cache/configuration lock and a durable relocation decision.
+pub fn relocate_owned_root(from: &Path, to: &Path, receipt: &RootReceipt) -> Result<()> {
+    valid_identity(&receipt.identity)?;
+    let source_parent = RootGuard::lock_parent(from)?;
+    let target_parent = RootGuard::lock_parent(to)?;
+    source_parent.require_unmanaged_parent()?;
+    target_parent.require_unmanaged_parent()?;
+    match std::fs::symlink_metadata(to) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err("root relocation destination must not exist".into()),
+    }
+    let parent = target_parent
+        ._handles
+        .last()
+        .ok_or("destination parent lease missing")?;
+    if file_binding(parent.0)?.0 != receipt.volume_serial {
+        return Err("root relocation must stay on the same volume".into());
+    }
+    let raw = unsafe {
+        CreateFileW(
+            wide(from).as_ptr(),
+            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_OPEN_NO_RECALL,
+            ptr::null_mut(),
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err("owned root is connected or busy".into());
+    }
+    let handle = Handle(raw, false);
+    let (volume, id, directory) = file_binding(handle.0)?;
+    let (root_id, identity) = root_identity(handle.0)?;
+    if !directory
+        || volume != receipt.volume_serial
+        || id != receipt.file_id
+        || root_id != id
+        || identity != receipt.identity
+    {
+        return Err("root relocation ownership changed".into());
+    }
+    let leaf = to.as_os_str().encode_wide().collect::<Vec<_>>();
+    let offset = offset_of!(FILE_RENAME_INFO, FileName);
+    let size = offset
+        .checked_add((leaf.len() + 1) * 2)
+        .ok_or("relocation path too long")?;
+    let mut buffer = vec![0u64; size.div_ceil(8)];
+    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        (*info).RootDirectory = ptr::null_mut();
+        (*info).FileNameLength =
+            u32::try_from(leaf.len() * 2).map_err(|_| "relocation name too long")?;
+        ptr::copy_nonoverlapping(leaf.as_ptr(), (*info).FileName.as_mut_ptr(), leaf.len());
+    }
+    if unsafe {
+        SetFileInformationByHandle(
+            handle.0,
+            FileRenameInfo,
+            info.cast(),
+            u32::try_from(size).map_err(|_| "relocation buffer too long")?,
+        )
+    } == 0
+    {
+        return Err(format!("owned root relocation: {}", unsafe {
+            GetLastError()
+        }));
+    }
+    if file_binding(handle.0)? != (receipt.volume_serial, receipt.file_id, true)
+        || root_identity(handle.0)? != (receipt.file_id, receipt.identity.clone())
+    {
+        return Err("relocated root identity not retained".into());
+    }
+    Ok(())
+}
+
 pub(super) fn root_identity(handle: HANDLE) -> Result<(u64, Vec<u8>)> {
     let mut buffer = [0u64; 1024];
     let mut returned = 0;
@@ -442,6 +520,56 @@ impl PersistentSession {
     }
     pub fn root(&self) -> &Path {
         &self.guard.root
+    }
+
+    /// Metadata-only target lease before installing an already verified cache.
+    /// READ_DATA/WRITE_ACCESS could start a provider fetch before that cache exists.
+    pub fn with_clean_cache_import<T>(
+        &self,
+        relative: &Path,
+        tag: &[u8],
+        physical: twodrive_core::NativeFileIdentity,
+        size: u64,
+        action: impl FnOnce(&NativeObservation) -> Result<T>,
+    ) -> Result<T> {
+        let (_, _parents) = self.guard_relative_parent(relative)?;
+        let raw = unsafe {
+            CreateFileW(
+                wide(&self.root().join(relative)).as_ptr(),
+                FILE_READ_ATTRIBUTES | DELETE,
+                FILE_SHARE_READ,
+                ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT
+                    | FILE_FLAG_OPEN_NO_RECALL
+                    | FILE_FLAG_BACKUP_SEMANTICS,
+                ptr::null_mut(),
+            )
+        };
+        if raw == INVALID_HANDLE_VALUE {
+            return Err("cache import target metadata is busy".into());
+        }
+        let handle = Handle(raw, false);
+        let (volume, id, directory) = file_binding(handle.0)?;
+        let (root_id, identity) = root_identity(handle.0)?;
+        if directory
+            || volume != physical.volume_serial
+            || id != physical.file_id
+            || root_id != self.receipt.file_id
+            || identity != self.receipt.identity
+        {
+            return Err("cache import target identity changed".into());
+        }
+        let os = node_observation(
+            handle.0,
+            tag,
+            usize::try_from(size).map_err(|_| "cache import size overflow")?,
+            false,
+        )?;
+        if !os.os_in_sync || os.modified_bytes != 0 || os.logical_size != size {
+            return Err("cache import preserves native edits".into());
+        }
+        action(&os)
     }
 
     /// Parent leases remain held across the protected native file operation.
@@ -919,6 +1047,106 @@ fn guard_registered_parent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "explicit NEW generated root; retained cold/cached placeholders survive relocation and rollback"]
+    fn owned_root_relocation_preserves_identity_and_rolls_back() {
+        struct Bytes;
+        impl HydrationSource for Bytes {
+            fn size(&self, _: &[u8]) -> Result<usize> {
+                Ok(65536)
+            }
+            fn read_range(
+                &self,
+                _: &[u8],
+                _: usize,
+                count: usize,
+                _: &AtomicBool,
+            ) -> Result<Vec<u8>> {
+                Ok(vec![0x61; count])
+            }
+        }
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_ROOT_RELOCATION_ROOT")
+                .expect("generated root required"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let moved = root.with_file_name(format!(
+            "{}-moved",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        assert!(!moved.exists());
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+            Arc::new(Bytes),
+        )
+        .unwrap();
+        owner
+            .publish_placeholder(
+                Path::new("cached.bin"),
+                b"generated-relocation-cached",
+                65536,
+                false,
+                1,
+            )
+            .unwrap();
+        owner
+            .publish_placeholder(
+                Path::new("cold.bin"),
+                b"generated-relocation-online",
+                65536,
+                false,
+                1,
+            )
+            .unwrap();
+        let bytes = std::fs::read(root.join("cached.bin")).unwrap();
+        let receipt = owner.receipt().clone();
+        assert!(
+            relocate_owned_root(&root, &moved, &receipt).is_err(),
+            "live root must retain its lease"
+        );
+        owner.disconnect().unwrap();
+        drop(owner);
+        relocate_owned_root(&root, &moved, &receipt).unwrap();
+        assert!(!root.exists());
+        assert_eq!(std::fs::read(moved.join("cached.bin")).unwrap(), bytes);
+        let mut owner = PersistentSession::resume(&moved, &receipt, Arc::new(Bytes)).unwrap();
+        let inventory = owner.inventory().unwrap();
+        let cold = inventory
+            .iter()
+            .find(|e| e.relative_path == Path::new("cold.bin"))
+            .unwrap()
+            .cloud
+            .as_ref()
+            .unwrap()
+            .resident;
+        let hydrated = std::fs::read(moved.join("cold.bin")).unwrap();
+        owner.disconnect().unwrap();
+        drop(owner);
+        relocate_owned_root(&moved, &root, &receipt).unwrap();
+        let mut owner = PersistentSession::resume(&root, &receipt, Arc::new(Bytes)).unwrap();
+        let restored = std::fs::read(root.join("cached.bin")).unwrap();
+        std::fs::remove_file(root.join("cached.bin")).unwrap();
+        std::fs::remove_file(root.join("cold.bin")).unwrap();
+        owner.retire_empty_office_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        assert!(!cold);
+        assert_eq!(hydrated, bytes);
+        assert_eq!(restored, bytes);
+        assert!(!moved.exists());
+    }
     #[test]
     #[ignore = "explicit NEW generated root; native publication and hydration beyond MAX_PATH"]
     #[cfg(feature = "native-test-hooks")]

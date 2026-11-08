@@ -28,6 +28,8 @@ pub struct NativeCaptureBinding {
     pub physical: NativeFileIdentity,
 }
 pub(super) fn init(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS local_native_source_imports(sequence INTEGER PRIMARY KEY AUTOINCREMENT,local_id TEXT NOT NULL,root_binding TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_native_source_import_pending ON local_native_source_imports(local_id) WHERE state IN ('verified','data_ready');")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS local_native_projections(
         local_id TEXT PRIMARY KEY,root_binding TEXT NOT NULL,tag BLOB NOT NULL UNIQUE,
@@ -170,6 +172,7 @@ impl CacheJournal {
             OR EXISTS(SELECT 1 FROM local_native_backup_copies WHERE state='prepared')
             OR EXISTS(SELECT 1 FROM local_native_remote_updates WHERE state='prepared')
             OR EXISTS(SELECT 1 FROM local_native_remote_removals WHERE state='prepared')
+            OR EXISTS(SELECT 1 FROM local_native_source_imports WHERE state IN ('verified','data_ready'))
             OR EXISTS(SELECT 1 FROM local_native_deletes WHERE state NOT IN ('applied','cancelled'))
             OR EXISTS(SELECT 1 FROM pending_metadata_operations) OR EXISTS(SELECT 1 FROM pending_deletes)
             OR EXISTS(SELECT 1 FROM local_native_projections WHERE state<>'published')

@@ -568,3 +568,29 @@ private tags. A stale-residency test failed before the metadata-first lease fix:
 READ_DATA could recall data even with OPEN_NO_RECALL. The corrected test refuses
 cold/stale, busy and dirty sources, then exports complete data without recalls.
 See TD-20261108-50 through -52 for pin-boundary and source verification limits.
+
+
+## Verified replica import and owned-root relocation
+
+`source-copy --native-state <state> [--max-files <n>]` copies complete clean source
+files, then checks bound service versions/checksums before installing private
+replicas. Source receipts retain recovery ownership through cache, native residency,
+pin and timestamp completion. The actual run imported 2,070 files / 734,168,870
+bytes, with no mismatch, deferral or isolation, source mutation or cloud content
+upload. Original client/helper entries remain in the retained source. The staged
+access DACL was matched to the original, with its previous policy saved privately.
+
+Cache schema 7 adds recoverable local timestamp updates that retain verified cache
+and residency. Owner reopen resets only incomplete cacheless/logless read claims,
+advancing their generation; dirty journals are preserved. An actual interrupted
+source-import test passes with all provider I/O paused. Source growth and stale
+residency tests refuse before READ_DATA and do not trigger hydration.
+
+`relocate --native-state <state> --root <new-nonexistent-path>` moves only this
+provider's disconnected root on the same volume, under private-cache ownership
+and a DPAPI-sealed intent. It does not adopt, replace or unregister foreign roots.
+Restart after the physical move but before configuration commit recovers the exact
+saved root identity. Generated cached/cold roundtrip and sealed recovery passed.
+The complete-account staged root also moved to a new sibling and back, with full
+physical/metadata verification in both locations. The actual Microsoft root was
+not moved or stopped. See TD-20261108-53 through -56 for precise limits.

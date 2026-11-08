@@ -632,5 +632,33 @@
     },
     "full_import_completed": false,
     "original_root_moved": false
+  },
+  "verified_source_import_current_candidate": {
+    "cache_schema": 7,
+    "cloud_files": 2070,
+    "bytes": 734168870,
+    "mismatches": 0,
+    "deferred": 0,
+    "isolated": 0,
+    "source_mutations": false,
+    "cloud_content_uploads": false,
+    "native_source_restart_with_provider_paused": true,
+    "local_filetime_retains_cache_and_pin": true,
+    "source_acl_original_unchanged": true,
+    "staged_access_dacl_matches_source": true,
+    "journal_contracts": 39,
+    "actual_full_metadata_inventory_after_import": {
+      "files": 12745,
+      "directories": 7425,
+      "published": 20170,
+      "logical_bytes": 105689431788
+    }
+  },
+  "owned_root_relocation_current_candidate": {
+    "native_cached_and_cold_root_roundtrip": true,
+    "sealed_intent_after_rename_before_config_commit_restart": true,
+    "full_account_staging_roundtrip_and_both_inventories": true,
+    "original_microsoft_folder_moved": false,
+    "microsoft_client_stopped": false
   }
 }

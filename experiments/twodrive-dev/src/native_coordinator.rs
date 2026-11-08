@@ -26,7 +26,12 @@ mod pins;
 pub use pins::ResidencyProgress;
 #[path = "native_migration.rs"]
 mod migration;
-pub use migration::{SourceAuditFailure, SourceChecksumSummary, SourceSummary};
+pub use migration::{SourceAuditFailure, SourceChecksumSummary, SourceCopySummary, SourceSummary};
+#[path = "native_source_imports.rs"]
+mod source_imports;
+pub use source_imports::SourceImportProgress;
+#[path = "native_relocation.rs"]
+mod relocation;
 #[path = "native_renames.rs"]
 mod renames;
 
@@ -196,6 +201,7 @@ impl NativeSession {
             configuration.identity.clone(),
             true,
         )?;
+        relocation::recover(&state, &mut configuration)?;
         let mut coordinator = if let Some(receipt) = configuration.receipt.as_ref() {
             ensure!(
                 receipt.identity == configuration.registration,
@@ -577,6 +583,14 @@ impl NativeCoordinator {
     /// delete notifications. The new immutable snapshot is durable first.
     pub fn synchronize_once(&mut self) -> anyhow::Result<SyncProgress> {
         self.drain_observations()?;
+        let imports = self.resume_source_imports()?;
+        if imports.deferred != 0 {
+            return Ok(SyncProgress {
+                deferred: imports.deferred,
+                error: imports.error,
+                ..Default::default()
+            });
+        }
         let state = self
             .watcher
             .as_ref()
@@ -1449,6 +1463,34 @@ mod tests {
         .unwrap();
         let file = owner.root().join(&initial.name);
         let before = std::fs::read(&file).unwrap();
+        let original_projection = owner
+            .bridge
+            .journal()
+            .native_projection_for_id(&initial.remote_id)
+            .unwrap()
+            .unwrap();
+        let source_stamp = 116_444_736_000_000_000 + 123_456_789;
+        crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.set(true));
+        let time_interrupted =
+            owner
+                .bridge
+                .apply_native_source_time(&owner.owner, &original_projection, source_stamp);
+        let receipt = owner.receipt().clone();
+        owner.disconnect().unwrap();
+        drop(owner);
+        owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        let time_resumed = owner
+            .apply_remote_metadata(&provider.list_all().unwrap())
+            .unwrap();
+        let source_time_preserved = owner
+            .owner
+            .inventory()
+            .unwrap()
+            .iter()
+            .find(|e| !e.directory)
+            .unwrap()
+            .last_write_time
+            == source_stamp;
         let old_cache = db
             .get_by_remote_id(&initial.remote_id)
             .unwrap()
@@ -1575,6 +1617,9 @@ mod tests {
         std::fs::remove_dir(root).unwrap();
         std::fs::remove_file(checkpoint).unwrap();
         state.close().unwrap();
+        assert!(time_interrupted.is_err());
+        assert_eq!(time_resumed.deferred, 0, "{time_resumed:?}");
+        assert!(source_time_preserved);
         assert_eq!(interrupted.deferred, 1, "{interrupted:?}");
         assert_eq!(pending, 1);
         assert_eq!(resumed.deferred, 0, "{resumed:?}");
@@ -1967,6 +2012,125 @@ mod tests {
         assert_eq!(dirty.released, 0, "{dirty:?}");
         assert!(private_preserved);
         assert_eq!(local, b"generated unsynchronized native bytes must remain");
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; verified source data, local time and pin survive interrupted native completion"]
+    fn source_replica_resumes_after_native_metadata_before_receipt_completion() {
+        use sha2::Digest;
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
+                .expect("explicit generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let state = tempfile::tempdir().unwrap();
+        let private = state.path().canonicalize().unwrap();
+        let cache = private.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let provider = crate::local_files::tests::MockProvider::new();
+        let item = provider.list_all().unwrap().remove(0);
+        let plan = NamespacePlan::build(
+            &[
+                IndexedItem {
+                    id: "root".into(),
+                    parent: None,
+                    name: "root".into(),
+                    kind: "folder".into(),
+                    size: 0,
+                    etag: "v1".into(),
+                    modified: None,
+                    deleted: false,
+                },
+                IndexedItem {
+                    id: item.remote_id.clone(),
+                    parent: Some("root".into()),
+                    name: item.name.clone(),
+                    kind: "file".into(),
+                    size: item.size,
+                    etag: item.etag.clone(),
+                    modified: Some("1970-01-01T00:00:01Z".into()),
+                    deleted: false,
+                },
+            ],
+            "root",
+            100,
+            twodrive_local_files::names::ordinal_ignorecase_cmp,
+        )
+        .unwrap();
+        let db = Database::new(private.join("native.sqlite3"));
+        let open = || {
+            LocalFileBridge::open_bound(
+                db.clone(),
+                &cache,
+                Backend::new(provider.clone())
+                    .with_pause_file(private.join("source-network-paused")),
+                "generated-source-replica",
+            )
+            .unwrap()
+        };
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = NativeCoordinator::create_new(
+            open(),
+            &plan,
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+        )
+        .unwrap();
+        let path = owner.root().join(&item.name);
+        let bytes = provider.download(&item.remote_id).unwrap();
+        std::fs::write(
+            private.join("source-network-paused"),
+            b"pause all provider IO during import",
+        )
+        .unwrap();
+        let input = cache.join("generated-source-copy.bin");
+        std::fs::write(&input, &bytes).unwrap();
+        let expected = owner
+            .bridge
+            .journal()
+            .native_projection_for_id(&item.remote_id)
+            .unwrap()
+            .unwrap();
+        owner.bridge.journal().prepare_native_source_import(twodrive_core::NativeSourceImport{sequence:0,expected,source_root_receipt:serde_json::json!({"schema_version":1,"volume_serial":42,"file_id":88,"identity":b"generated-foreign-source"}).to_string(),source_file:twodrive_core::NativeFileIdentity{volume_serial:42,file_id:99},cache_path:input,digest:format!("{:x}",sha2::Sha256::digest(&bytes)),source_filetime:116_444_736_000_000_000+123_456_789,source_pinned:true,state:"verified".into()},crate::local_files::digest_file).unwrap();
+        crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.set(true));
+        let interrupted = owner.resume_source_imports().unwrap();
+        let receipt = owner.receipt().clone();
+        owner.disconnect().unwrap();
+        drop(owner);
+        owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        let recovered = owner.resume_source_imports().unwrap();
+        let content = std::fs::read(&path);
+        let native = owner.owner.inventory().unwrap().remove(0);
+        let pending = owner
+            .bridge
+            .journal()
+            .native_source_imports(owner.binding().unwrap())
+            .unwrap()
+            .len();
+        std::fs::remove_file(path).unwrap();
+        owner.retire_empty_generated_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        state.close().unwrap();
+        assert_eq!(interrupted.deferred, 1, "{interrupted:?}");
+        assert_eq!(recovered.imported, 1, "{recovered:?}");
+        assert_eq!(recovered.deferred, 0, "{recovered:?}");
+        assert_eq!(content.unwrap(), bytes);
+        assert_eq!(
+            native.last_write_time,
+            116_444_736_000_000_000 + 123_456_789
+        );
+        assert!(native.cloud.unwrap().pinned);
+        assert_eq!(pending, 0);
     }
     #[test]
     #[ignore = "explicit NEW generated root; resume a legacy-owned TMP creation after a definite paused upload"]
@@ -3230,6 +3394,32 @@ mod tests {
         assert!(
             std::fs::read(session.coordinator.root().join(&files[2].relative_path)).is_err(),
             "uncached source bypassed account verification"
+        );
+        let relocated = root.with_file_name(format!(
+            "{}-relocated",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        session.coordinator.disconnect().unwrap();
+        drop(session);
+        relocation::INTERRUPT_AFTER_ROOT_MOVE.with(|f| f.set(true));
+        let interrupted = NativeSession::relocate(&private, &relocated);
+        assert!(interrupted.is_err());
+        let mut session = NativeSession::resume(&private).unwrap();
+        assert_eq!(
+            session.coordinator.root(),
+            relocated.canonicalize().unwrap()
+        );
+        assert_eq!(
+            std::fs::read(session.coordinator.root().join(&files[0].relative_path)).unwrap(),
+            dataset.bytes(0)
+        );
+        session.coordinator.disconnect().unwrap();
+        drop(session);
+        let mut session = NativeSession::relocate(&private, &root).unwrap();
+        assert!(!relocated.exists());
+        assert_eq!(
+            std::fs::read(session.coordinator.root().join(&files[0].relative_path)).unwrap(),
+            dataset.bytes(0)
         );
         let coordinator = &mut session.coordinator;
         for file in files {
