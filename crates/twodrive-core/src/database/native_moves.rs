@@ -194,9 +194,9 @@ impl CacheJournal {
                         && (p.path == old_path || p.path == new_path),
                     "native move descendant publication changed"
                 );
-                // The verified ancestor move owns this subtree path transition.
-                // Local-only timestamp payloads still name the old child path;
-                // cancel them atomically, preserving their independent source.
+                // Rebase durable child work in the same projection transaction.
+                // Real remote versions and interrupted pin restoration remain
+                // pending; ancestor movement grants no content acknowledgement.
                 if p.state == "updating" {
                     let mut pending = tx.prepare("SELECT sequence,payload FROM local_native_remote_updates WHERE local_id=?1 AND state='prepared'")?;
                     let rows = pending
@@ -206,24 +206,55 @@ impl CacheJournal {
                         .collect::<Result<Vec<_>, _>>()?;
                     drop(pending);
                     for (sequence, payload) in rows {
-                        let update: super::native_remote::NativeRemoteUpdate =
+                        let mut update: super::native_remote::NativeRemoteUpdate =
                             serde_json::from_str(&payload)?;
-                        if update.local_modified_filetime.is_none() {
-                            continue;
-                        }
                         let mut baseline = update.expected.clone();
                         baseline.state = "updating".into();
                         baseline.path = p.path.clone();
                         ensure!(
                             baseline == p
-                                && update.expected.path == old_path
-                                && update.next.path == old_path
-                                && update.next.etag == p.etag,
-                            "moved child timestamp identity changed"
+                                && matches!(update.expected.path.as_str(), path if path == old_path || path == new_path),
+                            "moved child update identity changed"
                         );
-                        tx.execute("UPDATE local_native_remote_updates SET state='cancelled' WHERE sequence=?1 AND state='prepared'",[sequence])?;
+                        update.expected.path = new_path.clone();
+                        if update.next.path == *source
+                            || update.next.path.starts_with(&format!("{source}/"))
+                        {
+                            update.next.path = format!(
+                                "{}{}",
+                                intent.destination,
+                                &update.next.path[source.len()..]
+                            );
+                            update.next.parent_path =
+                                crate::paths::parent_cloud_path(&update.next.path);
+                            update.next.name = crate::paths::cloud_name(&update.next.path);
+                        }
+                        ensure!(tx.execute("UPDATE local_native_remote_updates SET payload=?2 WHERE sequence=?1 AND state='prepared' AND payload=?3",params![sequence,serde_json::to_string(&update)?,payload])?==1,"moved child update fence changed");
                         tx.execute("UPDATE local_native_source_imports SET state='isolated' WHERE local_id=?1 AND state IN ('verified','data_ready')",[&child])?;
-                        tx.execute("UPDATE local_native_projections SET state='published' WHERE local_id=?1 AND state='updating'",[&child])?;
+                    }
+                }
+                if p.state == "removing" {
+                    let mut pending=tx.prepare("SELECT sequence,payload FROM local_native_remote_removals WHERE local_id=?1 AND state='prepared'")?;
+                    let rows = pending
+                        .query_map([&child], |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    drop(pending);
+                    for (sequence, payload) in rows {
+                        let mut removal: super::native_remote::NativeRemoteRemoval =
+                            serde_json::from_str(&payload)?;
+                        let mut baseline = removal.expected.clone();
+                        baseline.state = "removing".into();
+                        baseline.path = p.path.clone();
+                        ensure!(
+                            baseline == p
+                                && (removal.expected.path == old_path
+                                    || removal.expected.path == new_path),
+                            "moved child removal identity changed"
+                        );
+                        removal.expected.path = new_path.clone();
+                        ensure!(tx.execute("UPDATE local_native_remote_removals SET payload=?2 WHERE sequence=?1 AND state='prepared' AND payload=?3",params![sequence,serde_json::to_string(&removal)?,payload])?==1,"moved child removal fence changed");
                     }
                 }
                 ensure!(tx.execute("UPDATE local_native_projections SET path=?2 WHERE local_id=?1 AND root_binding=?3",params![child,new_path,intent.publication.root_binding])?==1,"native move descendant changed");
