@@ -323,3 +323,26 @@ now compiles the actual shared bridge on Linux as well as Windows.
 
 The writable bound-source coordinator, projection advancement after local edits,
 namespace consumer and final takeover remain unfinished.
+
+
+The final-publication metadata binding now holds effective namespace leases
+through the database callback. File leases request DELETE permission to engage
+share-access checks without reading content; directory leases remain NT
+DirectoryOnly. The old attributes-only file helper allowed an actual rename.
+Its focused regression now refuses rename with zero hydration. Long-directory
+and bound-reader/dehydrate/restart tests passed with these leases.
+
+The shared upload-session store now records a full SHA-256 source fingerprint.
+Same-size/same-mtime snapshots and legacy entries without a fingerprint cannot
+resume each other's fragments. An old predicate regression failed; the corrected
+Windows/Linux regression passed. A separate generated 20 MiB personal-cloud
+race observed session HTTP 404 after a concurrent update; retry with the original
+ETag failed with 412, and the concurrent full bytes/ETag survived. All generated
+scopes and isolated credential copies were cleaned. This does not prove every
+possible server race; see TD-20261108-28 and 29.
+
+Windows native-sync without the Shell fixture now compiles and runs its 21 shared
+bridge contracts and has a dedicated hosted CI step. A generated writable-map
+probe also confirmed that the current capture refused entry after the original
+file handle closed but a writable view remained; the registration was retired.
+These remain prerequisites for, not completion of, the writable coordinator.

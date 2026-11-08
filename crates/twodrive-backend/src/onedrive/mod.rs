@@ -87,6 +87,7 @@ impl GraphBackend {
         source_modified_unix: i64,
         remote_id: Option<&str>,
         if_match: Option<&str>,
+        source_digest: &str,
     ) -> anyhow::Result<Option<PersistedUploadSession>> {
         let sessions = self
             .upload_sessions
@@ -100,6 +101,7 @@ impl GraphBackend {
                     && session.source_modified_unix == source_modified_unix
                     && session.remote_id.as_deref() == remote_id
                     && session.if_match.as_deref() == if_match
+                    && session.source_digest.as_deref() == Some(source_digest)
             })
             .cloned())
     }
@@ -502,6 +504,7 @@ impl GraphBackend {
             .map(|value| value.as_secs() as i64)
             .unwrap_or_default();
         let session_key = normalize_cloud_path(path);
+        let source_digest = upload::source_digest(source_path)?;
         let persisted = self
             .matching_upload_session(
                 &session_key,
@@ -509,6 +512,7 @@ impl GraphBackend {
                 source_modified_unix,
                 remote_id,
                 if_match,
+                &source_digest,
             )?
             .filter(|session| session.create_only == create_only);
         let resumed = match persisted {
@@ -556,6 +560,7 @@ impl GraphBackend {
                     remote_id: remote_id.map(str::to_string),
                     if_match: if_match.map(str::to_string),
                     create_only,
+                    source_digest: Some(source_digest),
                 },
             )?;
             (session.upload_url, 0)

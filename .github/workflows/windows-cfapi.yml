@@ -42,6 +42,9 @@ jobs:
       - run: cargo fmt --manifest-path experiments/windows-cfapi/Cargo.toml -- --check
       - run: cargo clippy --manifest-path experiments/windows-cfapi/Cargo.toml --all-features --all-targets --locked -- -D warnings
       - run: cargo test --manifest-path experiments/windows-cfapi/Cargo.toml --all-features --locked
+      - name: Check native-sync without Shell fixtures
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path experiments/windows-cfapi/Cargo.toml --features native-sync --test engine_cache_contract --locked
       - run: cargo build --manifest-path experiments/windows-cfapi/Cargo.toml --example export_visual_fixture --locked
       - name: Decode generated PNG bytes without filesystem fixture reads
         shell: pwsh

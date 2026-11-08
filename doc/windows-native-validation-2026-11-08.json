@@ -376,5 +376,39 @@
     "same_cloud_version_different_server_timestamp_allowed": true,
     "native_timestamp_cas_retained": true,
     "mock_data_only": true
+  },
+  "publication_metadata_lease": {
+    "old_attributes_only_file_rename_test_failed": true,
+    "file_delete_access_share_check_zero_hydration": true,
+    "directory_only_lease_and_long_paths": true,
+    "callback_held_through_sqlite_completion": true
+  },
+  "upload_session_snapshot_fingerprint": {
+    "full_sha256": true,
+    "old_predicate_regression_failed": true,
+    "same_size_time_changed_content_refused": true,
+    "legacy_missing_digest_refused": true,
+    "windows_linux_regression": true,
+    "real_mixed_content_not_created": true
+  },
+  "personal_upload_session_midflight_race": {
+    "bytes": 20971643,
+    "concurrent_update_after_first_fragment": true,
+    "old_session_http_status": 404,
+    "original_etag_retry_http_412": true,
+    "concurrent_full_bytes_and_etag_preserved": true,
+    "scope_and_isolated_credentials_cleaned": true
+  },
+  "native_sync_only_windows": {
+    "old_compile_failed": true,
+    "fixed_contracts_passed": 21,
+    "hosted_gate_added": true
+  },
+  "writable_mapping_capture": {
+    "generated_actual_cfapi": true,
+    "original_file_handle_closed_view_still_alive": true,
+    "capture_body_not_entered": true,
+    "scope_retired": true,
+    "all_mapping_models_certified": false
   }
 }

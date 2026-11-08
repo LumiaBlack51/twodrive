@@ -2062,6 +2062,126 @@ mod tests {
     use super::*;
     use std::fs;
     #[test]
+    #[ignore = "explicit NEW generated CFAPI root; writable mapped view after file handle close"]
+    #[cfg(all(feature = "native-sync", feature = "native-test-hooks"))]
+    fn writable_mapping_is_a_capture_veto_even_after_the_file_handle_closes() {
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, FILE_MAP_WRITE, MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
+        };
+        struct Bytes;
+        impl HydrationSource for Bytes {
+            fn size(&self, _: &[u8]) -> Result<usize> {
+                Ok(131072)
+            }
+            fn read_range(
+                &self,
+                _: &[u8],
+                _: usize,
+                count: usize,
+                _: &AtomicBool,
+            ) -> Result<Vec<u8>> {
+                Ok(vec![0x51; count])
+            }
+        }
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_MAPPED_CAPTURE_ROOT")
+                .expect("explicit new generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = persistent::PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+            Arc::new(Bytes),
+        )
+        .unwrap();
+        let path = owner
+            .publish_placeholder(
+                Path::new("generated-mapped.bin"),
+                b"generated-mapped-file",
+                131072,
+                false,
+                1,
+            )
+            .unwrap();
+        let raw = unsafe {
+            CreateFileW(
+                wide(&path).as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                ptr::null(),
+                OPEN_EXISTING,
+                0,
+                ptr::null_mut(),
+            )
+        };
+        assert!(raw != INVALID_HANDLE_VALUE);
+        let file = Handle(raw, false);
+        let raw =
+            unsafe { CreateFileMappingW(file.0, ptr::null(), PAGE_READWRITE, 0, 0, ptr::null()) };
+        assert!(!raw.is_null());
+        let mapping = Handle(raw, false);
+        let view = unsafe { MapViewOfFile(mapping.0, FILE_MAP_WRITE, 0, 0, 0) };
+        assert!(!view.Value.is_null());
+        drop(file);
+        let mut entered = false;
+        let capture = with_native_capture(&path, b"generated-mapped-file", |locked| {
+            entered = true;
+            struct Writer {
+                pointer: *mut u8,
+                bytes: Vec<u8>,
+                changed: bool,
+            }
+            impl std::io::Write for Writer {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    self.bytes.extend_from_slice(bytes);
+                    if !self.changed {
+                        unsafe {
+                            self.pointer.write_volatile(0xa5);
+                            self.pointer.add(131071).write_volatile(0xa5);
+                        }
+                        self.changed = true;
+                    }
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let before = locked.modified_time()?;
+            let mut output = Writer {
+                pointer: view.Value.cast(),
+                bytes: Vec::new(),
+                changed: false,
+            };
+            locked.copy_resident_to(&mut output)?;
+            if locked.modified_time()? != before {
+                return Err("mapped edit changed timestamp".into());
+            }
+            Ok(output.bytes)
+        });
+        assert_ne!(unsafe { UnmapViewOfFile(view) }, 0);
+        drop(mapping);
+        fs::remove_file(&path).unwrap();
+        owner.retire_empty_office_fixture().unwrap();
+        drop(owner);
+        fs::remove_dir(root).unwrap();
+        fs::remove_file(checkpoint).unwrap();
+        assert!(
+            capture.is_err() && !entered,
+            "capture entered despite an active writable mapped view"
+        );
+    }
+    #[test]
     fn unavailable_fetch_never_opens_an_engine_reader() {
         struct Recording(Arc<AtomicUsize>);
         impl HydrationSource for Recording {

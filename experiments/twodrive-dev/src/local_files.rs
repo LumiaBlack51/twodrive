@@ -107,7 +107,10 @@ impl LocalFileBridge {
         self.journal.stage_local_creation(id, cloud_path, snapshot)
     }
 
-    #[cfg(all(windows, feature = "native-local-fixture"))]
+    #[cfg(all(
+        windows,
+        any(feature = "native-local-fixture", feature = "native-sync")
+    ))]
     pub fn capture_native_edit(&self, path: &Path, id: &str) -> anyhow::Result<i64> {
         let record = self
             .journal
@@ -126,7 +129,10 @@ impl LocalFileBridge {
         .map_err(anyhow::Error::msg)
     }
 
-    #[cfg(all(windows, feature = "native-local-fixture"))]
+    #[cfg(all(
+        windows,
+        any(feature = "native-local-fixture", feature = "native-sync")
+    ))]
     fn capture_locked_native(
         &self,
         locked: &twodrive_local_files::native::NativeCapture<'_>,
@@ -256,7 +262,10 @@ impl LocalFileBridge {
 
     /// A cloud acknowledgement alone cannot mark a subsequently edited native
     /// file synchronized. Rehash both complete snapshots under retained leases.
-    #[cfg(all(windows, feature = "native-local-fixture"))]
+    #[cfg(all(
+        windows,
+        any(feature = "native-local-fixture", feature = "native-sync")
+    ))]
     pub fn acknowledge_native(&self, path: &Path, id: &str) -> anyhow::Result<bool> {
         let record = self
             .journal

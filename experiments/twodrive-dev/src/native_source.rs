@@ -213,7 +213,7 @@ impl HydrationSource for BoundPublishedSource {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native-local-fixture"))]
 mod tests {
     use super::*;
     use crate::{model::CloudBackend, native_local_fixture::GeneratedProvider, provider::Backend};
@@ -287,20 +287,19 @@ mod tests {
         let file = owner
             .publish_placeholder(&relative, tag, metadata.size, false, metadata.modified_unix)
             .unwrap();
-        let entries = owner.inventory().unwrap();
-        let physical = entries
-            .iter()
-            .find(|entry| entry.relative_path == relative)
-            .unwrap();
-        bridge
-            .journal()
-            .complete_native_projection(
-                &metadata.remote_id,
-                binding,
-                tag,
-                physical.volume_serial,
-                physical.file_id,
-            )
+        let mut renamed_while_bound = false;
+        owner
+            .with_publication_binding(&relative, tag, metadata.size, false, |volume, file_id| {
+                let moved = file.with_extension("unexpected-pub-rename");
+                if fs::rename(&file, &moved).is_ok() {
+                    renamed_while_bound = true;
+                    fs::rename(&moved, &file).map_err(|e| e.to_string())?;
+                }
+                bridge
+                    .journal()
+                    .complete_native_projection(&metadata.remote_id, binding, tag, volume, file_id)
+                    .map_err(|e| e.to_string())
+            })
             .unwrap();
         assert_eq!(fs::read(&file).unwrap(), dataset.bytes(0));
         let duplicate = owner
@@ -360,6 +359,10 @@ mod tests {
         fs::remove_dir(root).unwrap();
         fs::remove_file(checkpoint).unwrap();
         state.close().unwrap();
+        assert!(
+            !renamed_while_bound,
+            "publication file lease permitted replacement"
+        );
     }
     #[test]
     fn callback_context_requires_published_tag_root_volume_file_id_and_size() {

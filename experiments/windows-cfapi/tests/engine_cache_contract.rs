@@ -10,7 +10,10 @@ mod model;
 mod native_source;
 #[path = "../../twodrive-dev/src/provider.rs"]
 mod provider;
-#[cfg(all(windows, feature = "native-local-fixture"))]
+#[cfg(all(
+    windows,
+    any(feature = "native-local-fixture", feature = "native-sync")
+))]
 extern crate twodrive_cfapi_probe as twodrive_local_files;
 #[cfg(all(windows, feature = "native-local-fixture"))]
 #[path = "../../twodrive-dev/src/native_local_fixture.rs"]

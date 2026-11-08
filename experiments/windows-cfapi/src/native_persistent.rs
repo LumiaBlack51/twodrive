@@ -734,6 +734,7 @@ mod tests {
         .unwrap();
         let mut relative = PathBuf::new();
         let mut directories = Vec::new();
+        let mut renamed_while_bound = false;
         for index in 0..6 {
             relative.push(format!("generated-{index}-{}", "x".repeat(35)));
             owner
@@ -743,6 +744,23 @@ mod tests {
                     0,
                     true,
                     1,
+                )
+                .unwrap();
+            let path = owner.root().join(&relative);
+            owner
+                .with_publication_binding(
+                    &relative,
+                    format!("generated-directory-{index}").as_bytes(),
+                    0,
+                    true,
+                    |_, _| {
+                        let moved = path.with_file_name(format!("unexpected-directory-{index}"));
+                        if std::fs::rename(&path, &moved).is_ok() {
+                            renamed_while_bound = true;
+                            std::fs::rename(&moved, &path).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    },
                 )
                 .unwrap();
             directories.push(owner.root().join(&relative));
@@ -767,6 +785,10 @@ mod tests {
         drop(owner);
         std::fs::remove_dir(&root).unwrap();
         std::fs::remove_file(checkpoint).unwrap();
+        assert!(
+            !renamed_while_bound,
+            "publication directory lease permitted replacement"
+        );
     }
     struct NoCloud;
     impl HydrationSource for NoCloud {

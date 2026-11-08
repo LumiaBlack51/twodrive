@@ -23,6 +23,66 @@ enum InventoryStage {
 }
 
 impl PersistentSession {
+    /// Bind a newly published entry while its namespace lease remains held.
+    /// This observes metadata only; it is not authority for a content snapshot.
+    pub fn with_publication_binding<T>(
+        &self,
+        relative: &Path,
+        identity: &[u8],
+        size: u64,
+        directory: bool,
+        action: impl FnOnce(u32, u64) -> Result<T>,
+    ) -> Result<T> {
+        let (_, parents) = self.guard_relative_parent(relative)?;
+        let parent = parents
+            .last()
+            .map(|handle| handle.0)
+            .or_else(|| self.guard._handles.last().map(|handle| handle.0))
+            .ok_or("publication parent lease missing")?;
+        let handle = if directory {
+            directory_lease(
+                parent,
+                relative.file_name().ok_or("publication leaf missing")?,
+            )?
+        } else {
+            let raw = unsafe {
+                CreateFileW(
+                    wide(&self.root().join(relative)).as_ptr(),
+                    FILE_READ_ATTRIBUTES | DELETE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT
+                        | FILE_FLAG_OPEN_NO_RECALL
+                        | FILE_FLAG_BACKUP_SEMANTICS,
+                    ptr::null_mut(),
+                )
+            };
+            if raw == INVALID_HANDLE_VALUE {
+                return Err("publication file lease unavailable".into());
+            }
+            Handle(raw, false)
+        };
+        let (handle, _) = self.namespace_checked_handle(handle)?;
+        let (volume, id, actual_directory) = file_binding(handle.0)?;
+        if actual_directory != directory || volume != self.receipt.volume_serial {
+            return Err("publication kind or volume changed".into());
+        }
+        let observation = node_observation(
+            handle.0,
+            identity,
+            usize::try_from(size).map_err(|_| "publication size overflow")?,
+            directory,
+        )?;
+        if !observation.os_in_sync
+            || observation.modified_bytes != 0
+            || observation.logical_size != size
+        {
+            return Err("publication metadata already changed".into());
+        }
+        action(volume, id)
+    }
+
     fn namespace_handle(&self, path: &Path) -> Result<(Handle, FILE_ATTRIBUTE_TAG_INFO)> {
         self.namespace_checked_handle(metadata_handle(path)?)
     }
@@ -273,6 +333,64 @@ mod tests {
         fn read_range(&self, _: &[u8], _: usize, _: usize, _: &AtomicBool) -> Result<Vec<u8>> {
             Err("inventory must not fetch content".into())
         }
+    }
+    #[test]
+    #[ignore = "explicit NEW generated CFAPI root; file metadata lease rename exclusion without hydration"]
+    fn publication_file_lease_blocks_rename_without_fetching_contents() {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_PUBLICATION_LEASE_ROOT")
+                .expect("explicit new generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+            Arc::new(NoData),
+        )
+        .unwrap();
+        let path = owner
+            .publish_placeholder(
+                Path::new("generated-online.bin"),
+                b"generated-publication-file",
+                16,
+                false,
+                1,
+            )
+            .unwrap();
+        let mut renamed = false;
+        let result = owner.with_publication_binding(
+            Path::new("generated-online.bin"),
+            b"generated-publication-file",
+            16,
+            false,
+            |_, _| {
+                let other = owner.root().join("unexpected-rename.bin");
+                if std::fs::rename(&path, &other).is_ok() {
+                    renamed = true;
+                    std::fs::rename(&other, &path).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            },
+        );
+        let fetches = owner.source.as_ref().unwrap().calls.load(Ordering::SeqCst);
+        std::fs::remove_file(&path).unwrap();
+        owner.retire_empty_office_fixture().unwrap();
+        drop(owner);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        result.unwrap();
+        assert_eq!(fetches, 0);
+        assert!(!renamed, "file attributes alone did not exclude rename");
     }
     fn substitution_case(held: bool, replacement_file: bool) {
         let base = PathBuf::from(
