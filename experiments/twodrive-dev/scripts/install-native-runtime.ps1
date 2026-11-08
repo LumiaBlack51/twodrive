@@ -19,8 +19,20 @@ $sha=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant
 $versionDir=Join-Path $runtimeDir $sha
 if (!(Test-Path -LiteralPath $versionDir)) {New-Item -ItemType Directory -Path $versionDir | Out-Null}
 $target=Join-Path $versionDir 'twodrive-native-dev.exe'
-if (!(Test-Path -LiteralPath $target)) {Copy-Item -LiteralPath $source -Destination $target}
-if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) {throw 'Versioned runtime hash differs'}
+if (!(Test-Path -LiteralPath $target) -or (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) {
+    $staging=Join-Path $versionDir ('candidate-'+[Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $staging | Out-Null
+    $candidate=Join-Path $staging 'twodrive-native-dev.exe'
+    Copy-Item -LiteralPath $source -Destination $candidate
+    if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) {throw 'Staged runtime hash differs; task preserved'}
+    & $candidate verify --native-state $state
+    if ($LASTEXITCODE -ne 0) {throw 'Staged candidate verification failed; task preserved'}
+    if (Test-Path -LiteralPath $target) {
+        # Retain the invalid uncommitted bytes for inspection; replace atomically.
+        [IO.File]::Replace($candidate,$target,(Join-Path $versionDir ('rejected-'+[Guid]::NewGuid().ToString('N')+'.exe')))
+    } else { [IO.File]::Move($candidate,$target) }
+    [IO.Directory]::Delete($staging)
+}
 # Candidate verification precedes task changes. The previous executable remains
 # at its original path, so failure cannot replace a working installation.
 & $target verify --native-state $state

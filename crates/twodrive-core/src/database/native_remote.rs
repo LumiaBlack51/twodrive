@@ -321,6 +321,87 @@ impl CacheJournal {
         drop(held);
         Ok(update)
     }
+    /// Persist a later explicit pin observation before native APIs can erase it.
+    pub fn refresh_native_migration_pin(
+        &self,
+        update: &NativeRemoteUpdate,
+        pin: i32,
+    ) -> anyhow::Result<NativeRemoteUpdate> {
+        ensure!(
+            update.local_modified_filetime.is_some() && matches!(pin, 1..=2),
+            "explicit local pin required"
+        );
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let raw: String = tx.query_row("SELECT payload FROM local_native_remote_updates WHERE sequence=?1 AND state='prepared'", [update.sequence], |r| r.get(0))?;
+        let mut stored: NativeRemoteUpdate = serde_json::from_str(&raw)?;
+        stored.sequence = update.sequence;
+        ensure!(&stored == update, "local pin decision changed");
+        stored.local_pin = Some(pin);
+        ensure!(tx.execute("UPDATE local_native_remote_updates SET payload=?2 WHERE sequence=?1 AND state='prepared' AND payload=?3", params![update.sequence, serde_json::to_string(&stored)?, raw])? == 1, "local pin fence changed");
+        tx.commit()?;
+        Ok(stored)
+    }
+    /// A durable, identity-bound namespace completion supersedes only local
+    /// timestamp work. It grants no authority to mutate cloud/native content.
+    pub fn cancel_native_migration_namespace(
+        &self,
+        update: &NativeRemoteUpdate,
+        receipt: &str,
+        sequence: i64,
+        payload: &str,
+    ) -> anyhow::Result<()> {
+        ensure!(
+            update.local_modified_filetime.is_some(),
+            "only local metadata may be cancelled"
+        );
+        let root: serde_json::Value = serde_json::from_str(receipt)?;
+        let event: serde_json::Value = serde_json::from_str(payload)?;
+        let p = &update.expected;
+        ensure!(
+            root["schema_version"] == 1
+                && root["file_id"].as_u64().is_some_and(|id| id != 0)
+                && root["identity"] == serde_json::to_value(p.root_binding.as_bytes())?
+                && root["volume_serial"].as_u64() == p.volume_serial.map(u64::from)
+                && event["schema_version"] == 1
+                && event["root_file_id"] == root["file_id"]
+                && event["volume_serial"] == root["volume_serial"]
+                && event["identity"] == serde_json::to_value(&p.tag)?
+                && event["file_id"].as_u64()
+                    == p.native_file_id
+                        .as_deref()
+                        .and_then(|s| u64::from_str_radix(s, 16).ok())
+                && matches!(
+                    event["kind"].as_str(),
+                    Some("rename_completed" | "delete_completed")
+                ),
+            "local metadata namespace proof changed"
+        );
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure!(tx.query_row("SELECT EXISTS(SELECT 1 FROM native_event_log WHERE binding=?1 AND sequence=?2 AND payload=?3)",params![p.root_binding,sequence,payload],|r|r.get::<_,bool>(0))?, "namespace completion no longer retained");
+        let raw:String=tx.query_row("SELECT payload FROM local_native_remote_updates WHERE sequence=?1 AND state='prepared'",[update.sequence],|r|r.get(0))?;
+        let mut stored: NativeRemoteUpdate = serde_json::from_str(&raw)?;
+        stored.sequence = update.sequence;
+        ensure!(&stored == update, "local metadata decision changed");
+        let mut expected = p.clone();
+        expected.state = "updating".into();
+        ensure!(
+            projection::get(&tx, &p.local_id)?.as_ref() == Some(&expected),
+            "local metadata publication changed"
+        );
+        tx.execute(
+            "UPDATE local_native_projections SET state='published' WHERE local_id=?1",
+            [&p.local_id],
+        )?;
+        tx.execute(
+            "UPDATE local_native_remote_updates SET state='cancelled' WHERE sequence=?1",
+            [update.sequence],
+        )?;
+        tx.execute("UPDATE local_native_source_imports SET state='isolated' WHERE local_id=?1 AND state IN ('verified','data_ready')",[&p.local_id])?;
+        tx.commit()?;
+        Ok(())
+    }
     /// Only a local timestamp transition may be cancelled on positive native
     /// edits. Preserve the newer bytes and require a fresh complete capture.
     pub fn supersede_native_migration_time(

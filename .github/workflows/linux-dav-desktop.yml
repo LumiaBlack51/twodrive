@@ -134,6 +134,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --features native-sync,native-test-hooks
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native runtime installer staging recovery (generated task only)
+        run: ./experiments/twodrive-dev/scripts/test-native-runtime-installer.ps1
       - name: Windows IPC, file transfer, backups and autostart isolation
         run: |
           python scripts/test-local-file-preflight.py --engine experiments/twodrive-dev/target/release/twodrive-dav-engine.exe

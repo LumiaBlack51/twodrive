@@ -2033,6 +2033,31 @@ mod tests {
     fn source_replica_unrelated_namespace_does_not_starve_reconciliation() {
         source_import_recovery_case(2);
     }
+    #[test]
+    #[ignore = "explicit NEW generated root; later release survives a second timestamp interruption"]
+    fn source_replica_later_release_survives_repeated_interruption() {
+        source_import_recovery_case(9);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; timestamp decision yields to target rename"]
+    fn source_replica_target_rename_cancels_timestamp() {
+        source_import_recovery_case(5);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; timestamp decision yields to target deletion"]
+    fn source_replica_target_delete_cancels_timestamp() {
+        source_import_recovery_case(6);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; confirmed target deletion retires an uninstalled replica"]
+    fn source_replica_delete_before_cache_install() {
+        source_import_recovery_case(7);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; confirmed target deletion retires a data-ready replica"]
+    fn source_replica_delete_after_cache_install() {
+        source_import_recovery_case(8);
+    }
     fn source_import_recovery_case(mode: u8) {
         use sha2::Digest;
         let root = PathBuf::from(
@@ -2153,7 +2178,69 @@ mod tests {
             crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.set(true));
         }
 
-        let interrupted = owner.resume_source_imports().unwrap();
+        let interrupted = if mode == 7 {
+            SourceImportProgress {
+                deferred: 1,
+                ..Default::default()
+            }
+        } else if mode == 8 {
+            // Only data-ready is durable; no local timestamp transition yet.
+            let import = owner
+                .bridge
+                .journal()
+                .native_source_imports(owner.binding().unwrap())
+                .unwrap()
+                .remove(0);
+            let record = db.get_by_remote_id(&item.remote_id).unwrap().unwrap();
+            let generation = owner
+                .bridge
+                .journal()
+                .begin_bound_download(&record)
+                .unwrap();
+            owner
+                .bridge
+                .journal()
+                .publish_download(
+                    &item.remote_id,
+                    generation,
+                    &import.cache_path,
+                    &import.digest,
+                    &item.etag,
+                )
+                .unwrap();
+            owner
+                .bridge
+                .journal()
+                .mark_native_source_data_ready(&import)
+                .unwrap();
+            SourceImportProgress {
+                deferred: 1,
+                ..Default::default()
+            }
+        } else {
+            owner.resume_source_imports().unwrap()
+        };
+        if matches!(mode, 5..=8) {
+            use std::os::windows::process::CommandExt;
+            let code = if mode == 5 {
+                "[IO.File]::Move($env:TD_FROM,$env:TD_TO)"
+            } else {
+                "[IO.File]::Delete($env:TD_FROM)"
+            };
+            let child = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", code])
+                .env("TD_FROM", &path)
+                .env("TD_TO", root.join("target-renamed.txt"))
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(
+                child.status.success(),
+                "{}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+            std::fs::remove_file(private.join("source-network-paused")).unwrap();
+        }
         let receipt = owner.receipt().clone();
         owner.disconnect().unwrap();
         drop(owner);
@@ -2178,7 +2265,68 @@ mod tests {
             std::fs::remove_file(private.join("source-network-paused")).unwrap();
         }
         owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        if mode == 9 {
+            twodrive_local_files::native::test_release_intent(&path).unwrap();
+            twodrive_local_files::native::interrupt_local_time_before_pin_for_test();
+            assert!(owner.resume_source_imports().unwrap().deferred > 0);
+            owner.disconnect().unwrap();
+            drop(owner);
+            owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        }
         let mut recovered = owner.resume_source_imports().unwrap();
+        if matches!(mode, 5..=8) {
+            let mut progress = owner.synchronize_once().unwrap();
+            for _ in 0..20 {
+                if (mode == 5 && progress.renamed == 1) || (mode != 5 && progress.deleted == 1) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                progress = owner.synchronize_once().unwrap();
+            }
+            assert_eq!(
+                owner
+                    .bridge
+                    .journal()
+                    .native_source_imports(owner.binding().unwrap())
+                    .unwrap()
+                    .len(),
+                0
+            );
+            assert!(
+                owner
+                    .bridge
+                    .journal()
+                    .native_remote_updates(owner.binding().unwrap())
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                std::fs::read(cache.join("generated-source-copy.bin")).unwrap(),
+                bytes
+            );
+            if mode == 5 {
+                assert_eq!(
+                    std::fs::read(root.join("target-renamed.txt")).unwrap(),
+                    bytes
+                );
+                assert!(
+                    provider
+                        .get_metadata_by_path("/target-renamed.txt")
+                        .unwrap()
+                        .is_some()
+                );
+                std::fs::remove_file(root.join("target-renamed.txt")).unwrap();
+            } else {
+                assert!(provider.get_metadata_by_path(&item.path).unwrap().is_none());
+                assert!(db.get_by_remote_id(&item.remote_id).unwrap().is_none());
+            }
+            owner.retire_empty_generated_fixture().unwrap();
+            drop(owner);
+            std::fs::remove_dir(root).unwrap();
+            std::fs::remove_file(checkpoint).unwrap();
+            state.close().unwrap();
+            return;
+        }
         let mut unrelated_progress = false;
         if mode == 2 {
             let coordinated = owner.synchronize_once();
@@ -2250,10 +2398,12 @@ mod tests {
         if mode != 1 {
             assert_eq!(native.last_write_time, source_stamp);
             let os = native.cloud.unwrap();
-            assert_eq!(os.pinned, mode != 3);
-            if mode == 3 {
+            assert_eq!(os.pinned, !matches!(mode, 3 | 9));
+            if matches!(mode, 3 | 9) {
                 assert!(os.release_requested);
-                assert!(!os.resident);
+                if mode == 3 {
+                    assert!(!os.resident);
+                }
             }
         }
         assert_eq!(pending, 0);
@@ -3549,7 +3699,19 @@ mod tests {
         relocation::INTERRUPT_AFTER_ROOT_MOVE.with(|f| f.set(true));
         let interrupted = NativeSession::relocate(&private, &relocated);
         assert!(interrupted.is_err());
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            root.join("foreign-after-move.txt"),
+            b"foreign source occupant stays",
+        )
+        .unwrap();
         let mut session = NativeSession::resume(&private).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("foreign-after-move.txt")).unwrap(),
+            b"foreign source occupant stays"
+        );
+        std::fs::remove_file(root.join("foreign-after-move.txt")).unwrap();
+        std::fs::remove_dir(&root).unwrap();
         assert_eq!(
             session.coordinator.root(),
             relocated.canonicalize().unwrap()

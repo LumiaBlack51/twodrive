@@ -174,7 +174,7 @@ impl LocalFileBridge {
                             }
                             return Err("source timestamp preserves native changes".into());
                         }
-                        let update = if let Some(update) = pending {
+                        let mut update = if let Some(update) = pending {
                             update
                         } else {
                             self.journal
@@ -205,6 +205,12 @@ impl LocalFileBridge {
                         } else {
                             update.local_pin.unwrap_or(0)
                         };
+                        if matches!(pin, 1..=2) && update.local_pin != Some(pin) {
+                            update = self
+                                .journal
+                                .refresh_native_migration_pin(&update, pin)
+                                .map_err(|e| e.to_string())?;
+                        }
                         update_time(stamp, pin)?;
                         #[cfg(all(test, feature = "native-test-hooks"))]
                         if INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.replace(false)) {

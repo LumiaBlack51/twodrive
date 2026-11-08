@@ -20,6 +20,29 @@ impl NativeCoordinator {
             .into_iter()
             .filter(|u| u.local_modified_filetime.is_some())
         {
+            let events = self
+                .bridge
+                .journal()
+                .database()
+                .pending_native_events(&binding, 1000)?;
+            let receipt = serde_json::to_string(self.receipt())?;
+            let mut cancelled = false;
+            for (sequence, payload) in events {
+                // The journal checks exact retained completion, root, tag and
+                // physical identity. Unrelated/request-only events cannot cancel.
+                if self
+                    .bridge
+                    .journal()
+                    .cancel_native_migration_namespace(&update, &receipt, sequence, &payload)
+                    .is_ok()
+                {
+                    cancelled = true;
+                    break;
+                }
+            }
+            if cancelled {
+                continue;
+            }
             if let Err(error) = self.bridge.apply_native_remote_version(
                 &self.owner,
                 &update.expected,
@@ -50,8 +73,23 @@ impl NativeCoordinator {
         let current = self
             .bridge
             .journal()
-            .native_projection_for_id(&import.expected.local_id)?
-            .context("source target publication missing")?;
+            .native_projection_for_id(&import.expected.local_id)?;
+        let Some(current) = current else {
+            if self
+                .bridge
+                .journal()
+                .native_delete(&import.expected.local_id)?
+                .is_some_and(|(intent, state)| {
+                    state == "applied" && intent.publication == import.expected
+                })
+            {
+                self.bridge
+                    .journal()
+                    .isolate_native_source_import(import.sequence)?;
+                return Ok(false);
+            }
+            anyhow::bail!("source target publication missing without verified retirement");
+        };
         let same = current.state == "published"
             && current.cloud_id == import.expected.cloud_id
             && current.etag == import.expected.etag

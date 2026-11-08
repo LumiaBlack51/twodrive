@@ -18,12 +18,9 @@ fn owned_at(path: &Path, receipt: &RootReceipt) -> anyhow::Result<bool> {
         Err(e) => return Err(e.into()),
         Ok(_) => {}
     }
-    let root = ReadOnlyRegisteredRoot::open(path).map_err(anyhow::Error::msg)?;
-    ensure!(
-        root.receipt() == receipt,
-        "relocation path is occupied by another identity"
-    );
-    Ok(true)
+    // Foreign occupants are never authority, but do not hide a positively
+    // verified owned root at the other saved location.
+    Ok(ReadOnlyRegisteredRoot::open(path).is_ok_and(|root| root.receipt() == receipt))
 }
 fn save(state: &Path, relocation: &Relocation) -> anyhow::Result<()> {
     twodrive_core::private_file::write_secret(

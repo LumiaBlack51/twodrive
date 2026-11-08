@@ -1715,3 +1715,77 @@ fn isolated_source_copy_keeps_original_bytes_when_native_capture_advances_target
     assert_eq!(fs::read(&replacement).unwrap(), EDITED);
     assert!(!db.remove_unreferenced_cache(&path).unwrap());
 }
+
+#[test]
+fn local_timestamp_namespace_cancellation_requires_retained_identity_and_keeps_source() {
+    for kind in ["rename_completed", "delete_completed"] {
+        let (_temp, j, path) = remote_fixture(b"generated-source-namespace");
+        let expected = j.native_projection_for_id(ID).unwrap().unwrap();
+        let source=j.prepare_native_source_import(twodrive_core::NativeSourceImport{sequence:0,expected:expected.clone(),source_root_receipt:serde_json::json!({"schema_version":1,"volume_serial":7,"file_id":88,"identity":b"generated-source"}).to_string(),source_file:twodrive_core::NativeFileIdentity{volume_serial:7,file_id:99},cache_path:path.clone(),digest:hash(ORIGINAL),source_filetime:116_444_736_000_000_000+123_456_789,source_pinned:false,state:"verified".into()},digest).unwrap();
+        j.mark_native_source_data_ready(&source).unwrap();
+        let update = j
+            .prepare_native_migration_time_with_pin(
+                &expected,
+                source.source_filetime,
+                Some(1),
+                |f, h| {
+                    anyhow::ensure!(digest(f)? == h, "changed");
+                    Ok(())
+                },
+            )
+            .unwrap();
+        let newer = j.refresh_native_migration_pin(&update, 2).unwrap();
+        assert!(
+            j.refresh_native_migration_pin(&update, 1).is_err(),
+            "stale pin CAS must fail"
+        );
+        let db = j.database().clone();
+        let cache = path.parent().unwrap().to_path_buf();
+        drop(j);
+        let j =
+            CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+        let replay = j.native_remote_updates("generated-root").unwrap().remove(0);
+        assert_eq!(replay.local_pin, Some(2));
+        assert_eq!(replay, newer);
+        let receipt=serde_json::json!({"schema_version":1,"identity":b"generated-root","volume_serial":7,"file_id":8}).to_string();
+        let event=serde_json::json!({"schema_version":1,"kind":kind,"identity":expected.tag,"volume_serial":7,"root_file_id":8,"file_id":9}).to_string();
+        assert!(
+            j.cancel_native_migration_namespace(&replay, &receipt, 99, &event)
+                .is_err()
+        );
+        let mut foreign: serde_json::Value = serde_json::from_str(&event).unwrap();
+        foreign["file_id"] = 10.into();
+        let foreign = foreign.to_string();
+        let bad = db.append_native_event("generated-root", &foreign).unwrap();
+        assert!(
+            j.cancel_native_migration_namespace(&replay, &receipt, bad, &foreign)
+                .is_err()
+        );
+        let seq = db.append_native_event("generated-root", &event).unwrap();
+        j.cancel_native_migration_namespace(&replay, &receipt, seq, &event)
+            .unwrap();
+        assert!(
+            j.native_remote_updates("generated-root")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            j.native_source_imports("generated-root")
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            j.native_projection_for_id(ID).unwrap().unwrap().state,
+            "published"
+        );
+        assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+        assert!(!db.remove_unreferenced_cache(&path).unwrap());
+        assert!(
+            db.pending_native_events("generated-root", 100)
+                .unwrap()
+                .iter()
+                .any(|(n, _)| *n == seq),
+            "normal namespace consumer retains authority checks"
+        );
+    }
+}

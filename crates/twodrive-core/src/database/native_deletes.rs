@@ -398,6 +398,8 @@ impl CacheJournal {
         ] {
             tx.execute(&format!("DELETE FROM {table} WHERE local_id=?1"), [id])?;
         }
+        // The source replica owns its bytes independently of the retired target.
+        tx.execute("UPDATE local_native_source_imports SET state='isolated' WHERE local_id=?1 AND state IN ('verified','data_ready')", [id])?;
         ensure!(
             tx.execute("DELETE FROM files WHERE remote_id=?1", [id])? == 1,
             "native deleted file changed"
