@@ -54,7 +54,8 @@
       "cache eviction and native in-sync status acknowledgement",
       "installed COM/ribbon and real Office cloud end-to-end validation",
       "original-folder preservation, rollback and actual cutover"
-    ]
+    ],
+    "personal_vault_scope": "user confirmed unused; excluded"
   },
   "review": {
     "maintainer_approval_claimed": false,
@@ -230,5 +231,27 @@
     "native_root_registered": false,
     "private_catalogue_retained": true,
     "host_appdata_resolved_under_package_localcache": true
+  },
+  "office_to_cloud_generated_validation": {
+    "hosts": [
+      "Word",
+      "Excel",
+      "PowerPoint"
+    ],
+    "actual_sta_timer_save": true,
+    "actual_personal_onedrive": true,
+    "initial_generated_baseline_then_conditional_final_version": true,
+    "full_cloud_readback": true,
+    "native_sync_acknowledgement": true,
+    "editors_closed_before_capture": true,
+    "generated_cloud_and_native_scopes_retired": true,
+    "registered_addin_or_whole_root_coordinator": false
+  },
+  "native_cold_replacement": {
+    "old_code_failed": true,
+    "no_old_content_download": true,
+    "dirty_generation": 1,
+    "stale_hydration_rejected": true,
+    "baseline_cache_and_delete_change_vetoes": true
   }
 }

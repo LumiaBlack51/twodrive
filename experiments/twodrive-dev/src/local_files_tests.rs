@@ -645,6 +645,87 @@ fn native_atomic_replacement_retains_bytes_and_retries_after_conversion() {
     fs::remove_file(checkpoint).unwrap();
 }
 
+#[cfg(all(windows, feature = "native-sync", feature = "native-test-hooks"))]
+#[test]
+#[ignore = "explicit NEW generated CFAPI root; complete replacement before first hydration"]
+fn native_cold_replacement_creates_a_dirty_snapshot_without_old_download() {
+    use std::sync::atomic::AtomicBool;
+    use twodrive_local_files::native::{HydrationSource, persistent::PersistentSession};
+    struct NoDownload;
+    impl HydrationSource for NoDownload {
+        fn size(&self, _: &[u8]) -> Result<usize, String> {
+            Err("cold replacement must not download".into())
+        }
+        fn read_range(
+            &self,
+            _: &[u8],
+            _: usize,
+            _: usize,
+            _: &AtomicBool,
+        ) -> Result<Vec<u8>, String> {
+            Err("no download".into())
+        }
+    }
+    let root = PathBuf::from(
+        std::env::var_os("TWODRIVE_APPROVED_COLD_REPLACEMENT_ROOT")
+            .expect("explicit new generated root"),
+    );
+    assert!(
+        root.is_absolute()
+            && !root.exists()
+            && root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("twodrive-cfapi-fixture-office-")
+    );
+    let checkpoint = root.with_extension("receipt.json");
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.db.upsert_metadata(&provider.get_metadata(OBJECT).unwrap().unwrap())
+        .unwrap();
+    let mut owner = PersistentSession::create_new(
+        &root,
+        b"twodrive-dev-native-v1:generated-office-only",
+        &checkpoint,
+        Arc::new(NoDownload),
+    )
+    .unwrap();
+    let relative = Path::new("generated-中文.txt");
+    let visible = owner
+        .publish_placeholder(relative, OBJECT.as_bytes(), INITIAL.len() as u64, false, 1)
+        .unwrap();
+    let temp = root.join("generated-complete.tmp");
+    fs::write(&temp, EDITED).unwrap();
+    fs::rename(&temp, &visible).unwrap();
+    assert!(
+        f.db.get_by_remote_id(OBJECT)
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .is_none()
+    );
+    let operation = (|| -> anyhow::Result<()> {
+        let generation = f
+            .bridge
+            .capture_native_replacement(&owner, relative, OBJECT)?;
+        assert_eq!(generation, 1);
+        assert_eq!(bytes(&f.bridge), EDITED);
+        assert!(!f.bridge.status(OBJECT)?.sync_confirmed());
+        assert!(f.bridge.upload(OBJECT, no_progress())?);
+        assert!(f.bridge.acknowledge_native(&visible, OBJECT)?);
+        assert_eq!(provider.download(OBJECT)?, EDITED);
+        Ok(())
+    })();
+    assert_eq!(fs::read(&visible).unwrap(), EDITED);
+    fs::remove_file(&visible).unwrap();
+    owner.retire_empty_office_fixture().unwrap();
+    drop(owner);
+    fs::remove_dir(&root).unwrap();
+    fs::remove_file(checkpoint).unwrap();
+    operation.unwrap();
+}
+
 #[test]
 fn accepted_write_lost_reply_restarts_and_requires_verified_download() {
     let provider = MockProvider::new();

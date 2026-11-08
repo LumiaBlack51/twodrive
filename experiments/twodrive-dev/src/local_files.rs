@@ -109,9 +109,12 @@ impl LocalFileBridge {
             .as_deref()
             .context("unbound native item")?;
         self.journal.record_native_edit(cloud_id)?;
-        let generation = self.status(id)?.generation;
+        let generation = self
+            .journal
+            .snapshot_if_owned(id)?
+            .map(|state| state.generation);
         twodrive_local_files::native::with_native_capture(path, cloud_id.as_bytes(), |locked| {
-            self.capture_locked_native(locked, id, generation)
+            self.capture_locked_native(locked, &record, generation)
         })
         .map_err(anyhow::Error::msg)
     }
@@ -120,8 +123,8 @@ impl LocalFileBridge {
     fn capture_locked_native(
         &self,
         locked: &twodrive_local_files::native::NativeCapture<'_>,
-        id: &str,
-        generation: i64,
+        record: &twodrive_core::FileRecord,
+        generation: Option<i64>,
     ) -> Result<i64, String> {
         let modified = locked.modified_time()?;
         let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
@@ -139,9 +142,18 @@ impl LocalFileBridge {
         // and must not be mistaken for a disposable download cache.
         let (file, captured) = temporary.keep().map_err(|e| e.to_string())?;
         drop(file);
-        self.journal
-            .stage_native_edit(id, generation, &captured, size)
-            .map_err(|e| e.to_string())
+        match generation {
+            Some(generation) => self.journal.stage_native_edit(
+                &record.metadata.remote_id,
+                generation,
+                &captured,
+                size,
+            ),
+            None => self
+                .journal
+                .stage_first_native_edit(record, &captured, size),
+        }
+        .map_err(|e| e.to_string())
     }
 
     #[cfg(all(windows, feature = "native-sync"))]
@@ -174,10 +186,13 @@ impl LocalFileBridge {
             "replacement does not match the bound cloud path"
         );
         self.journal.record_native_edit(cloud_id)?;
-        let generation = self.status(id)?.generation;
+        let generation = self
+            .journal
+            .snapshot_if_owned(id)?
+            .map(|state| state.generation);
         owner
             .with_replacement_capture(relative, cloud_id.as_bytes(), |locked| {
-                self.capture_locked_native(locked, id, generation)
+                self.capture_locked_native(locked, &record, generation)
             })
             .map_err(anyhow::Error::msg)
     }

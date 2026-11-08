@@ -191,3 +191,20 @@ locally; no personal names, IDs or database are committed. The host resolved its
 AppData output under the desktop package's LocalCache, so deployment must account
 for the canonical state location instead of assuming an unpackaged process sees
 the same logical AppData path.
+
+The user confirmed Personal Vault is unused; its service feature is excluded from
+the intended takeover scope. Ordinary account files still require the remaining
+persistent coordinator and migration acceptance.
+
+Actual Word/Excel/PowerPoint timer-generated OOXML subsequently passed the
+personal OneDrive pipeline: a generated initial native-save baseline was uploaded,
+then the timer's final content was captured under the owned CFAPI root, uploaded
+conditionally, read back in full and acknowledged natively. Editors were closed
+before exclusive capture. Three generated cloud files/folder, local documents,
+baselines and native registration were retired. This proves the component data
+path; it is not an installed COM/ribbon or unattended whole-root coordinator test.
+
+Complete ordinary replacements before first hydration now establish a Dirty
+initial cache journal without downloading the old version. Their observed cloud
+baseline and pending-work checks remain mandatory; stale hydration cannot publish
+over the new generation.

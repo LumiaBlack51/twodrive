@@ -67,6 +67,59 @@ fn edit(j: &CacheJournal) {
 }
 
 #[test]
+fn first_native_snapshot_is_dirty_cancels_old_hydration_and_rejects_changed_baselines() {
+    for invalidation in ["none", "etag", "cache", "delete"] {
+        let temp = tempfile::tempdir().unwrap();
+        let (db, root, path) = paths(temp.path());
+        db.init().unwrap();
+        let remote =
+            MetadataEntry::new_file(ID, "/generated.txt", ORIGINAL.len() as u64, 1, "version-1");
+        db.upsert_metadata(&remote).unwrap();
+        let original = db.get_by_remote_id(ID).unwrap().unwrap();
+        let generation = db.download_generation(ID).unwrap();
+        assert!(db.begin_hydration(ID, generation).unwrap());
+        let journal =
+            CacheJournal::open(db.clone(), &root, &hash(b"generated-cold-binding")).unwrap();
+        journal.record_native_edit(ID).unwrap();
+        fs::write(&path, EDITED).unwrap();
+        match invalidation {
+            "etag" => {
+                db.bind_cloud_identity(ID, ID, "version-2").unwrap();
+            }
+            "cache" => {
+                let other = root.join("other");
+                fs::write(&other, ORIGINAL).unwrap();
+                db.mark_cached(ID, &other).unwrap();
+            }
+            "delete" => {
+                let current = db.get_by_remote_id(ID).unwrap().unwrap();
+                db.queue_pending_delete(&current).unwrap();
+            }
+            _ => {}
+        }
+        let result = journal.stage_first_native_edit(&original, &path, EDITED.len() as u64);
+        if invalidation == "none" {
+            assert_eq!(result.unwrap(), 1);
+            let status = journal.snapshot(ID).unwrap();
+            assert!(
+                status.dirty_intent && !status.sync_confirmed() && !status.engine_release_ready()
+            );
+            let late = root.join("late");
+            fs::write(&late, ORIGINAL).unwrap();
+            assert!(
+                !db.finish_hydration(ID, generation, &late, &root.join("stale"))
+                    .unwrap()
+            );
+        } else {
+            assert!(result.is_err());
+            assert!(journal.snapshot_if_owned(ID).unwrap().is_none());
+            assert!(journal.native_dirty(ID).unwrap());
+        }
+        assert_eq!(fs::read(&path).unwrap(), EDITED);
+    }
+}
+
+#[test]
 fn pinned_acknowledgement_keeps_release_and_dirty_generation_vetoes() {
     let (_temp, j, _path) = fixture();
     j.database().mark_pinned(ID).unwrap();

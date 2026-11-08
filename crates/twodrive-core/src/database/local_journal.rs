@@ -321,6 +321,86 @@ impl CacheJournal {
         Ok(result)
     }
 
+    pub fn snapshot_if_owned(&self, id: &str) -> anyhow::Result<Option<CacheSnapshot>> {
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction()?;
+        let result = if has_journal_record(&tx, id)? {
+            Some(snapshot(&tx, id)?)
+        } else {
+            None
+        };
+        tx.commit()?;
+        Ok(result)
+    }
+
+    /// A complete local replacement can precede the first hydration. Preserve
+    /// its observed cloud baseline while creating a DIRTY initial generation;
+    /// no old content download or acknowledgement is invented.
+    pub fn stage_first_native_edit(
+        &self,
+        original: &FileRecord,
+        path: &Path,
+        size: u64,
+    ) -> anyhow::Result<i64> {
+        let _guard = self
+            .0
+            .gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache gate poisoned"))?;
+        let cloud_id = original
+            .cloud_remote_id
+            .as_deref()
+            .context("missing cloud baseline")?;
+        ensure!(
+            original.cache_path.is_none()
+                && !original.metadata.is_dir
+                && !original.metadata.etag.is_empty(),
+            "first native capture requires an unowned cloud file"
+        );
+        let mut candidate = original.clone();
+        candidate.cache_path = Some(path.to_path_buf());
+        let file = self.file(&candidate, true)?;
+        file.try_lock()?;
+        file.sync_all()?;
+        let metadata = file.metadata()?;
+        ensure!(metadata.len() == size, "incomplete first native snapshot");
+        let modified = metadata
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure!(
+            !has_journal_record(&tx, &original.metadata.remote_id)?,
+            "native cache owner appeared during capture"
+        );
+        ensure!(
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_native_dirty WHERE cloud_id=?1)",
+                [cloud_id],
+                |row| row.get::<_, bool>(0)
+            )?,
+            "first native capture has no durable edit intent"
+        );
+        let changed=tx.execute("UPDATE files SET cache_path=?2,size=?3,modified_unix=?4,state='dirty',download_generation=download_generation+1
+            WHERE remote_id=?1 AND cache_path IS NULL AND cloud_remote_id=?5 AND path=?6 AND etag=?7 AND size=?8 AND modified_unix=?9 AND state='dirty'
+            AND NOT EXISTS(SELECT 1 FROM pending_deletes d WHERE d.remote_id=?1 OR d.local_id=?1 OR d.cloud_remote_id=?5 OR d.path=?6 OR d.upload_path=?6 OR d.uploaded_path=?6)
+            AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations op JOIN files parent ON parent.remote_id=op.local_id WHERE ?6=parent.path OR substr(?6,1,length(parent.path)+1)=parent.path||'/')",
+            params![original.metadata.remote_id,path.to_string_lossy(),i64::try_from(size)?,i64::try_from(modified)?,cloud_id,original.metadata.path,original.metadata.etag,i64::try_from(original.metadata.size)?,original.metadata.modified_unix])?;
+        ensure!(
+            changed == 1,
+            "first native capture baseline or pending work changed"
+        );
+        ensure!(tx.execute("INSERT INTO local_cache_journal(local_id,generation,acknowledged_generation,dirty_intent,base_etag,acknowledged_digest,cache_path,cloud_id,cloud_path) VALUES(?1,1,0,1,?2,'',?3,?4,?5)",
+            params![original.metadata.remote_id,original.metadata.etag,path.to_string_lossy(),cloud_id,original.metadata.path])?==1,"first native journal publication rejected");
+        tx.execute(
+            "DELETE FROM local_native_dirty WHERE cloud_id=?1",
+            [cloud_id],
+        )?;
+        tx.commit()?;
+        Ok(1)
+    }
+
     /// Record a full-byte mismatch observed under a verified cache lease. Pin
     /// intent prevents eviction, not dirty/recovery recording. A later writer
     /// wins its generation CAS; this can never acknowledge any bytes.
