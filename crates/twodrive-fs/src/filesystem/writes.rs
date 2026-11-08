@@ -135,19 +135,10 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             anyhow::bail!("cache was released while opening; retry the save");
         }
         if truncate {
+            if !self.db.begin_truncated_write(&record, &cache_path)? {
+                anyhow::bail!("truncate target changed since open; reopen before writing");
+            }
             cache_guard.set_len(0)?;
-        }
-        if truncate {
-            self.db
-                .mark_cached(&record.metadata.remote_id, &cache_path)?;
-            self.db.mark_state(
-                &record.metadata.remote_id,
-                if self.db.excludes_upload(&record) {
-                    FileState::LocalOnly
-                } else {
-                    FileState::Writing
-                },
-            )?;
         }
         let updated = self
             .db

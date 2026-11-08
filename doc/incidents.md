@@ -51,6 +51,42 @@
 
 
 
+## TD-20261108-06：FUSE 非原子截断在写句柄建立前发布空代次
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：旧路径门控挂载回归实际失败，启用原子截断后的同场景通过；待最终整套检查。
+- 影响版本与环境：本轮最终挂载复核暴露的现存 FUSE O_TRUNC 机制；不能仅凭本次首次观察认定为新排除策略回归。
+- 关联历史故障：TD-20261101-07 的首次真实写入基线校验、missing-target mounted save 回归。
+
+### 症状与影响
+
+整套挂载复核一次发生正文 fs::write 的 EIO，begin_cached_write 发现检查后的状态变化。另可在应用尚持有截断写句柄时提前排队空内容，不符合关闭后发布的语义。
+
+### 触发条件与复现
+
+已有缓存正文以 O_TRUNC 打开 → 内核先发送无 fh 的 setattr(size=0) → truncate_without_handle 把零字节标 Dirty/入队 → 后台可先转 Uploading → open 的首次 write 条件领取与后台交错。原 FUSE 初始化仅用 fuser 默认 ASYNC_READ，未请求 ATOMIC_O_TRUNC，内核不会把截断交给 open 处理。
+
+### 根因与证据
+
+真实旧路径出现 write target changed while claiming its baseline。新增门控后端挂载回归在尚未写入/关闭时读取打开后的状态、传输计数，再实际写入并核对完整模拟云端字节；旧代码对照稳定读到 Dirty 而非 Writing 并失败；启用原子截断后同场景通过。不是只重新跑一次历史失败。
+
+### 解决办法与恢复操作
+
+启用 fuser abi-7-9 并在 init 请求内核支持的 ATOMIC_O_TRUNC，由 create_overwrite_upload(truncate=true) 把截断与写句柄建立一起处理，维持 Writing 到正常关闭。截断先条件领取原数据库基线，再改缓存长度；数据库同时持久记录 Writing/零长度，保证写入前 fstat 可见为零。明确的无句柄 truncate 仍保留真实文件大小变更/空文件同步语义。无生产操作。老旧内核若不支持该 capability，仍走原兼容路径，本轮不能宣称该兼容路径所有竞争都已解决。
+
+### 验证结果与边界
+
+原 fuser 路径在门控断言中实际失败（打开后 Dirty），请求原子截断后的同场景通过，补充核对写前 fstat=0。最终工作区 249 项通过、14 项默认忽略，严格 Clippy/fmt/build 通过；网络隔离、非 root 容器中 13 项显式 FUSE 全部通过，含此前失败的 missing-target 保存。无真实 OneDrive 写入或 Office 保存重放。
+
+### 防复发措施与后续
+
+将 mounted_truncate_open_keeps_empty_prefix_local_until_writer_closes 加入 Linux CI 的显式 FUSE 门控；覆盖写入前状态、写入前无上传、关闭后完整字节。
+
+### 交付记录
+
+随 PR #61；最终 Dot/CI/Release 和本机更新待补。
+
+
 ## TD-20261108-05：备份身份交接误拒绝已打开的本地写句柄
 
 - 日期：2026-11-08（Asia/Shanghai）

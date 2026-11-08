@@ -1054,3 +1054,67 @@ fn startup_retirement_preserves_unknown_create_claim_and_its_delete_uncertainty(
     );
     assert_eq!(fs::read(cache).unwrap(), b"uncertain create bytes");
 }
+
+#[test]
+#[ignore = "requires /dev/fuse; isolated mock mount only"]
+fn mounted_truncate_open_keeps_empty_prefix_local_until_writer_closes() {
+    let root = test_root("mounted-truncate-publish");
+    let mount = root.join("mount");
+    fs::create_dir_all(&mount).unwrap();
+    let db = Database::new(root.join("db"));
+    db.init().unwrap();
+    let (backend, release) = ConcurrentBackend::with_blocked_first_upload();
+    sync_metadata(&db, &backend).unwrap();
+    let filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    let backend = Arc::clone(&filesystem.backend);
+    let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+    // Hydrate before truncation; the test concerns only local save publication.
+    fs::read(mount.join("README-cloud.txt")).unwrap();
+    let mut writer = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(mount.join("README-cloud.txt"))
+        .unwrap();
+    let opened_size = writer.metadata().unwrap().len();
+    let opened_state = db.get_by_path("/README-cloud.txt").unwrap().unwrap().state;
+    let active_before_write = backend.active_uploads.load(Ordering::SeqCst);
+    let written = writer.write_all(b"complete save after truncate");
+    // Always unblock the backend even if the old implementation rejects write.
+    release.send(()).unwrap();
+    drop(writer);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut uploaded_bytes = None;
+    if written.is_ok() {
+        loop {
+            let saved = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
+            if saved.state == FileState::Cached
+                && let Some(id) = saved.cloud_remote_id.as_deref()
+            {
+                let bytes = backend.download(id).unwrap();
+                if bytes == b"complete save after truncate" {
+                    uploaded_bytes = Some(bytes);
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    session.join();
+    fs::remove_dir_all(root).unwrap();
+    assert_eq!(
+        opened_size, 0,
+        "O_TRUNC must be visible through fstat before write"
+    );
+    assert_eq!(
+        opened_state,
+        FileState::Writing,
+        "O_TRUNC must belong to the live writable handle"
+    );
+    assert_eq!(
+        active_before_write, 0,
+        "an empty truncate prefix must not upload before close"
+    );
+    written.unwrap();
+    assert_eq!(uploaded_bytes.unwrap(), b"complete save after truncate");
+}

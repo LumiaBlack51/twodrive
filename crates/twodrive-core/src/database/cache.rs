@@ -35,6 +35,33 @@ impl Database {
         )? == 1)
     }
 
+    /// Claim a truncating open before touching cache bytes. Publish its zero
+    /// size as Writing, never as an uploadable handle-less generation.
+    pub fn begin_truncated_write(&self, record: &FileRecord, cache: &Path) -> anyhow::Result<bool> {
+        Ok(self.connect()?.execute(
+            "UPDATE files SET state = ?1, size = 0,
+            cache_path = ?2, cache_accessed_unix = ?3, modified_unix = ?3
+            WHERE remote_id = ?4 AND state = ?5 AND cache_path IS ?6
+                AND cloud_remote_id IS ?7 AND etag = ?8 AND size = ?9 AND modified_unix = ?10",
+            params![
+                if self.excludes_upload(record) {
+                    "local_only"
+                } else {
+                    "writing"
+                },
+                cache.to_string_lossy(),
+                now_unix(),
+                record.metadata.remote_id,
+                record.state.as_str(),
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
+                record.cloud_remote_id,
+                record.metadata.etag,
+                record.metadata.size as i64,
+                record.metadata.modified_unix
+            ],
+        )? == 1)
+    }
+
     /// Do not let a failed, older upload turn a reopened/new generation into a
     /// conflict. The successful claim must still describe the same snapshot.
     pub fn mark_upload_conflict(&self, record: &FileRecord) -> anyhow::Result<bool> {
