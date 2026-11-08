@@ -242,7 +242,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
                 } else {
                     FileState::Dirty
                 };
-                db.mark_state(&record.metadata.remote_id, state)?;
+                db.finish_failed_upload(&record, state)?;
             }
             eprintln!(
                 "twodrive: dirty upload remains queued for {}: {err:#}",

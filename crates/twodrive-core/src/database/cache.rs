@@ -55,6 +55,26 @@ impl Database {
         )? == 1)
     }
 
+    pub fn finish_failed_upload(
+        &self,
+        record: &FileRecord,
+        state: FileState,
+    ) -> anyhow::Result<()> {
+        self.connect()?.execute(
+            "UPDATE files SET state = ?1
+            WHERE remote_id = ?2 AND state = 'uploading' AND path = ?3
+                AND cache_path IS ?4 AND etag = ?5",
+            params![
+                state.as_str(),
+                record.metadata.remote_id,
+                record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
+                record.metadata.etag
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn mark_state(&self, remote_id: &str, state: FileState) -> anyhow::Result<()> {
         let conn = self.connect()?;
         conn.execute(

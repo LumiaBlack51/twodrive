@@ -532,3 +532,65 @@ fn missing_local_only_cache_never_falls_back_to_old_cloud_bytes() {
     );
     assert!(active(&test.root).is_empty());
 }
+
+#[test]
+fn in_flight_upload_renamed_to_excluded_then_unlinked_keeps_its_tombstone() {
+    let root = test_root("exclude-during-upload");
+    fs::create_dir_all(&root).unwrap();
+    let db = Database::new(root.join("db"));
+    db.init().unwrap();
+    let (backend, release) = ConcurrentBackend::with_blocked_first_upload();
+    let mut filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    let (ino, fh, _) = filesystem
+        .create_upload(ROOT_INO, OsStr::new("normal.txt"), libc::O_RDWR)
+        .unwrap();
+    write_slice(
+        &filesystem.write_handles[&fh].cache_path,
+        0,
+        b"in flight bytes",
+    )
+    .unwrap();
+    filesystem.queue_upload_handle(fh).unwrap();
+    filesystem.write_handles.remove(&fh);
+    filesystem.backend.wait_for_upload();
+    filesystem
+        .rename_record(
+            ROOT_INO,
+            OsStr::new("normal.txt"),
+            ROOT_INO,
+            OsStr::new("~$owner.docx"),
+        )
+        .unwrap();
+    let record = db.get_by_path("/~$owner.docx").unwrap().unwrap();
+    let deleted = filesystem.delete_record(ino, &record);
+    // Always release the gated worker before evaluating assertions.
+    release.send(()).unwrap();
+    deleted.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        recover_pending_deletes(&db, filesystem.backend.as_ref()).unwrap();
+        if db.pending_deletes().unwrap().is_empty()
+            && filesystem.backend.active_uploads.load(Ordering::SeqCst) == 0
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        filesystem
+            .backend
+            .get_metadata_by_path("/normal.txt")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        filesystem
+            .backend
+            .get_metadata_by_path("/~$owner.docx")
+            .unwrap()
+            .is_none()
+    );
+    drop(filesystem);
+    fs::remove_dir_all(root).unwrap();
+}

@@ -37,8 +37,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn delete_record(&mut self, ino: u64, record: &FileRecord) -> anyhow::Result<()> {
-        if record.state == FileState::LocalOnly {
-            self.db.remove_local_only_file(&record.metadata.remote_id)?;
+        if record.state == FileState::LocalOnly
+            && self.db.remove_local_only_file(&record.metadata.remote_id)?
+        {
             self.inodes.remove_ino(ino);
             if let Some(cache) = &record.cache_path {
                 self.cleanup_unlinked_cache(cache)?;

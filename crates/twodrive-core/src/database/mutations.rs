@@ -411,11 +411,20 @@ impl Database {
         self.recompute_pin_inheritance()
     }
 
-    pub fn remove_local_only_file(&self, local_id: &str) -> anyhow::Result<()> {
+    /// Return false when a cloud identity or transfer claim requires a tombstone.
+    pub fn remove_local_only_file(&self, local_id: &str) -> anyhow::Result<bool> {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("INSERT OR IGNORE INTO retired_cache(cache_path)
-            SELECT cache_path FROM files WHERE remote_id = ?1 AND state = 'local_only' AND cache_path IS NOT NULL", params![local_id])?;
+        let safe: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM files
+            WHERE remote_id = ?1 AND state = 'local_only' AND cloud_remote_id IS NULL AND upload_path IS NULL)", params![local_id], |row| row.get(0))?;
+        if !safe {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO retired_cache(cache_path)
+            SELECT cache_path FROM files WHERE remote_id = ?1 AND cache_path IS NOT NULL",
+            params![local_id],
+        )?;
         let changed = tx.execute(
             "DELETE FROM files WHERE remote_id = ?1 AND state = 'local_only'",
             params![local_id],
@@ -426,7 +435,7 @@ impl Database {
             params![local_id],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(true)
     }
 
     pub fn queue_pending_delete(&self, record: &FileRecord) -> anyhow::Result<PendingDelete> {
