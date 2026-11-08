@@ -1,0 +1,215 @@
+{
+  "source_commit": "70a5380f6189976752a00f25e6a1a1caccd893a6",
+  "version": "0.2.24-1",
+  "artifact_zip_sha256": "sha256:a489856f2c89fa2f81ba4598bc31fb7abcc864ef1048a7a1b64112f2d565c715",
+  "artifact_zip_bytes": 88964496,
+  "upstream_files_match": 314,
+  "debian_tracked_files_match": 17,
+  "all_dsc_changes_buildinfo_references_verified": true,
+  "vendor_checksums_verified": true,
+  "offline_locked_metadata_empty_cargo_home": true,
+  "local_default_rust_passed": 249,
+  "local_default_ignored": 14,
+  "explicit_nonroot_container_fuse_passed": 13,
+  "live_onedrive_round_trip_performed": false,
+  "host_fuse_mount_denied": true,
+  "package_unsigned": true,
+  "lintian_log": "W: twodrive source: newer-standards-version 4.7.4 (current is 4.6.2)\n",
+  "date": "2026-11-08",
+  "timezone": "Asia/Shanghai",
+  "source_tag": "v0.2.24-1",
+  "merge_commit": "de31eafa108f87056bf70861bdab61d5a024b3f5",
+  "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/61",
+  "final_dot_review": "https://github.com/LumiaBlack51/twodrive/pull/61#issuecomment-6719540125",
+  "dot_review_static_only": true,
+  "prior_stable_0_2_23_upgrade_remove_reinstall_purge_passed": true,
+  "final_package_isolated_mock_daemon_passed": true,
+  "manifest_sha256_references_checked": 13,
+  "vendor_files_checked": 16294,
+  "local_source_package_rebuilt_again": false,
+  "atomic_truncate_fallback_without_kernel_capability_fixed": false,
+  "checks": [
+    {
+      "name": "Debian package",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908246/job/128684158263"
+    },
+    {
+      "name": "Debian packaging policy",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908265/job/128682044055"
+    },
+    {
+      "name": "Native checks (Linux)",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908258/job/128682044224"
+    },
+    {
+      "name": "Native checks (Windows)",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908258/job/128682044245"
+    },
+    {
+      "name": "linux",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908257/job/128682044130"
+    },
+    {
+      "name": "test (ubuntu-latest, --features mount, target/release/twodrive-dev)",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908261/job/128682044209"
+    },
+    {
+      "name": "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908261/job/128682044066"
+    },
+    {
+      "name": "windows",
+      "conclusion": "success",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/42464908257/job/128682044265"
+    }
+  ],
+  "binary_sha256": {
+    "twodrive": "34b3e0bdfa1714be17e48823053f883f446b4803aea2817fad4ba253e1687d75",
+    "twodrive-daemon": "909cb4b44c2e964e5fd48c4234541d483ff16cdeaa8d0bdbfa578786a5bdf128"
+  },
+  "publication": {
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.24-1",
+    "published_at": "2026-11-08T09:35:43Z",
+    "latest_verified": true,
+    "draft": false,
+    "prerelease": false,
+    "assets_verified_before_and_after_publication": true,
+    "assets": [
+      {
+        "name": "SHA256SUMS",
+        "size": 960,
+        "digest": "sha256:7b1f4b1060bac296b55c401e033826244a02c738cf942bc70bae4e157be79e6a",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive-dbgsym_0.2.24-1_amd64.ddeb",
+        "size": 49321308,
+        "digest": "sha256:efee9544818a4f61fc1ba81ac8a0dcbaa7f1586e393f05d3a39518c2909ee173",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24-1.debian.tar.xz",
+        "size": 48380,
+        "digest": "sha256:c1ee4ecbca4604eb80a9b9848016da87298a12596b630b69ef0d200c75c58b9c",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24-1.dsc",
+        "size": 1428,
+        "digest": "sha256:aa1d5a19bf3f4ff9d614994c9cc1214ff37dfe648e6b634e51e1d100506063d6",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24-1_amd64.buildinfo",
+        "size": 13173,
+        "digest": "sha256:561b197fc90d57337b8f3e579688688720af9dce3d5afe299c964db149cbbad3",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24-1_amd64.changes",
+        "size": 2783,
+        "digest": "sha256:57d8b6e081b72887d8721dd9d3c4fcab899c4dbd0def872d5587a37939b3b40d",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24-1_amd64.deb",
+        "size": 3491828,
+        "digest": "sha256:340159599bd018c136edc2b9b079510c015f4facc63510fc7619abc93054eea7",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24-1_amd64.deb.sha256",
+        "size": 94,
+        "digest": "sha256:0d89993f00bc38b8744bfa0b61638e7bd9baabd1fbaff31941ef3338705d5d02",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24.orig-vendor.tar.xz",
+        "size": 34379364,
+        "digest": "sha256:528e6131941e86101d3635bd10c2914c58865e44e31725e6481697ed9087d138",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.24.orig.tar.xz",
+        "size": 1689808,
+        "digest": "sha256:8b35bf97d90fe5a7204fd45981c82cfde92702a67d1f040406d842437d62d7b9",
+        "state": "uploaded"
+      },
+      {
+        "name": "verification.json",
+        "size": 3159,
+        "digest": "sha256:c77b7dc79abe109a2ed42e7666458f15aecc281c1eaa0087b3506a03e0d9a81e",
+        "state": "uploaded"
+      }
+    ]
+  },
+  "local_upgrade": {
+    "version": "0.2.24",
+    "running_daemon_sha256": "909cb4b44c2e964e5fd48c4234541d483ff16cdeaa8d0bdbfa578786a5bdf128",
+    "cli_sha256": "34b3e0bdfa1714be17e48823053f883f446b4803aea2817fad4ba253e1687d75",
+    "configuration_and_custom_unit_preserved": true,
+    "old_queue_identities_preserved": true,
+    "unsynced_cache_files_backed_up": 0,
+    "unsynced_cache_bytes_backed_up": 0,
+    "database_integrity": "ok",
+    "rollback_version": "0.2.23"
+  },
+  "local_owner_validation": {
+    "version": "0.2.24",
+    "production_mount_synthetic_owner_tests": [
+      {
+        "type": "docx",
+        "create_read_write_fsync_exclusive_create_flock_open_unlink": true,
+        "local_only_without_cloud_binding": true,
+        "no_upload_activity_or_persistent_cloud_queue": true,
+        "unlinked_cache_reclaimed": true
+      },
+      {
+        "type": "xlsx",
+        "create_read_write_fsync_exclusive_create_flock_open_unlink": true,
+        "local_only_without_cloud_binding": true,
+        "no_upload_activity_or_persistent_cloud_queue": true,
+        "unlinked_cache_reclaimed": true
+      },
+      {
+        "type": "pptx",
+        "create_read_write_fsync_exclusive_create_flock_open_unlink": true,
+        "local_only_without_cloud_binding": true,
+        "no_upload_activity_or_persistent_cloud_queue": true,
+        "unlinked_cache_reclaimed": true
+      }
+    ],
+    "database_integrity": "ok",
+    "final_activity_count": 0,
+    "final_state_counts": {
+      "cached": 304,
+      "online_only": 19818,
+      "pinned": 45
+    },
+    "real_office_application_replayed": false,
+    "real_document_cloud_edit_save_round_trip": false,
+    "new_cloud_objects_deliberately_created": false
+  },
+  "boundaries": [
+    "Mock cloud round trips are not real OneDrive/Wine Office edit/save tests.",
+    "Production-mount tests created only synthetic local owner files, then removed them.",
+    "Kernels without FUSE_ATOMIC_O_TRUNC retain the previous compatibility path.",
+    "The direct host FUSE test was permission denied; all explicit FUSE tests ran in a network-isolated non-root container."
+  ],
+  "cleanup": {
+    "comparison_worktrees_removed": true,
+    "cargo_build_cache_removed": true,
+    "validation_containers_removed": true,
+    "shared_cargo_registry_and_other_tasks_untouched": true,
+    "private_minimal_state_and_verified_0_2_23_rollback_retained": true,
+    "release_staging_and_one_off_scripts": "removed during final documentation preparation",
+    "documentation_worktree": "remove after this documentation PR merges"
+  }
+}
