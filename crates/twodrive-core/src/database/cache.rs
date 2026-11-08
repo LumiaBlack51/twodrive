@@ -55,6 +55,39 @@ impl Database {
         )? == 1)
     }
 
+    /// The backend call has returned an error. A known target cannot become an
+    /// orphan; keep its old ETag so an uncertain server commit still conflicts.
+    /// Unknown create claims and deletion tombstones retain their uncertainty.
+    pub fn retire_failed_known_upload_claim(&self, record: &FileRecord) -> anyhow::Result<()> {
+        if record.cloud_remote_id.is_none() {
+            return Ok(());
+        }
+        self.connect()?.execute(
+            "UPDATE files SET upload_path = NULL, upload_target_id = NULL,
+            upload_cache_path = NULL WHERE remote_id = ?1 AND cloud_remote_id IS ?2
+                AND upload_target_id IS ?2 AND upload_path = ?3 AND upload_cache_path IS ?4",
+            params![
+                record.metadata.remote_id,
+                record.cloud_remote_id,
+                record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy())
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Startup only, before workers exist. Preserve unbound/unknown create
+    /// claims and all tombstones; known targets retain their version baseline.
+    pub fn retire_interrupted_known_upload_claims(&self) -> anyhow::Result<()> {
+        self.connect()?.execute(
+            "UPDATE files SET upload_path = NULL, upload_target_id = NULL,
+            upload_cache_path = NULL WHERE upload_target_id IS NOT NULL
+                AND cloud_remote_id = upload_target_id",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub fn finish_failed_upload(
         &self,
         record: &FileRecord,

@@ -622,6 +622,15 @@ fn excluded_backup_does_not_block_new_original_save_across_retries_and_restart()
             OsStr::new("README-cloud.txt.bak"),
         )
         .unwrap();
+    let backup_before = db.get_by_path("/README-cloud.txt.bak").unwrap().unwrap();
+    let (_, backup_fh, _) = test
+        .fs
+        .create_overwrite_upload(backup_before.clone(), false)
+        .unwrap();
+    let (_, backup_promote_fh, _) = test
+        .fs
+        .create_overwrite_upload(backup_before, false)
+        .unwrap();
     let (_, fh, _) = test
         .fs
         .create_upload(ROOT_INO, OsStr::new("README-cloud.txt"), libc::O_RDWR)
@@ -674,6 +683,47 @@ fn excluded_backup_does_not_block_new_original_save_across_retries_and_restart()
             .unwrap()
             .is_none()
     );
+    // Detaching the cloud binding must not revoke an already opened backup's
+    // local write permission or send its later bytes to the new document.
+    test.fs.begin_handle_write(backup_fh).unwrap();
+    write_slice(
+        &test.fs.write_handles[&backup_fh].cache_path,
+        0,
+        b"edited backup",
+    )
+    .unwrap();
+    test.fs.queue_upload_handle(backup_fh).unwrap();
+    test.fs.write_handles.remove(&backup_fh);
+    assert_eq!(backend.download(&uploaded.remote_id).unwrap(), saved);
+    test.fs
+        .rename_record(
+            ROOT_INO,
+            OsStr::new("README-cloud.txt.bak"),
+            ROOT_INO,
+            OsStr::new("promoted-backup.txt"),
+        )
+        .unwrap();
+    test.fs.begin_handle_write(backup_promote_fh).unwrap();
+    write_slice(
+        &test.fs.write_handles[&backup_promote_fh].cache_path,
+        0,
+        b"new promoted backup",
+    )
+    .unwrap();
+    test.fs.queue_upload_handle(backup_promote_fh).unwrap();
+    test.fs.write_handles.remove(&backup_promote_fh);
+    let promoted_bytes = fs::read(
+        test.fs
+            .db
+            .get_by_path("/promoted-backup.txt")
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .unwrap(),
+    )
+    .unwrap();
+    wait_saved(&test, "/promoted-backup.txt", &promoted_bytes);
+    assert_eq!(backend.download(&uploaded.remote_id).unwrap(), saved);
     assert_eq!(
         reopened
             .get_by_path("/README-cloud.txt")
@@ -688,6 +738,9 @@ struct BackupVersionBackend {
     inner: MockBackend,
     external_change: std::sync::atomic::AtomicBool,
     attempted_etags: Mutex<Vec<String>>,
+    fail_next: std::sync::atomic::AtomicBool,
+    fail_entered: std::sync::atomic::AtomicBool,
+    failure_gate: Mutex<Option<mpsc::Receiver<()>>>,
 }
 impl CloudBackend for BackupVersionBackend {
     fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
@@ -713,6 +766,13 @@ impl CloudBackend for BackupVersionBackend {
         bytes: Vec<u8>,
         etag: Option<&str>,
     ) -> anyhow::Result<MetadataEntry> {
+        if path == "/report.txt" && self.fail_next.swap(false, Ordering::SeqCst) {
+            self.fail_entered.store(true, Ordering::SeqCst);
+            if let Some(gate) = self.failure_gate.lock().unwrap().take() {
+                gate.recv_timeout(Duration::from_secs(15))?;
+            }
+            anyhow::bail!("Graph request failed with HTTP 503 Service Unavailable");
+        }
         if path == "/report.txt"
             && self.external_change.load(Ordering::SeqCst)
             && let Some(etag) = etag
@@ -746,6 +806,9 @@ fn excluded_backup_handoff_retains_old_etag_and_preserves_external_edit_as_confl
         inner: MockBackend::new(),
         external_change: std::sync::atomic::AtomicBool::new(false),
         attempted_etags: Mutex::new(Vec::new()),
+        fail_next: std::sync::atomic::AtomicBool::new(false),
+        fail_entered: std::sync::atomic::AtomicBool::new(false),
+        failure_gate: Mutex::new(None),
     };
     backend
         .inner
@@ -831,4 +894,163 @@ fn excluded_backup_handoff_retains_old_etag_and_preserves_external_edit_as_confl
     );
     drop(filesystem);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failed_known_upload_before_or_during_excluded_backup_rename_does_not_block_save() {
+    for scenario in ["before", "during", "legacy_restart"] {
+        let rename_during_failure = scenario == "during";
+        let root = test_root("excluded-failed-backup");
+        fs::create_dir_all(&root).unwrap();
+        let rules = NameExclusions::new(vec![r"\.bak$".into()]).unwrap();
+        let db = Database::new(root.join("db")).with_name_exclusions(rules.clone());
+        db.init().unwrap();
+        let (release, gate) = mpsc::channel();
+        let backend = BackupVersionBackend {
+            inner: MockBackend::new(),
+            external_change: std::sync::atomic::AtomicBool::new(false),
+            attempted_etags: Mutex::new(Vec::new()),
+            fail_next: std::sync::atomic::AtomicBool::new(true),
+            fail_entered: std::sync::atomic::AtomicBool::new(false),
+            failure_gate: Mutex::new(if rename_during_failure {
+                Some(gate)
+            } else {
+                None
+            }),
+        };
+        backend
+            .inner
+            .upload("/report.txt", b"original cloud bytes".to_vec())
+            .unwrap();
+        sync_metadata(&db, &backend).unwrap();
+        let mut filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+        let original = db.get_by_path("/report.txt").unwrap().unwrap();
+        let (_, fh, _) = filesystem.create_overwrite_upload(original, true).unwrap();
+        write_slice(
+            &filesystem.write_handles[&fh].cache_path,
+            0,
+            b"unsynced earlier edit in backup",
+        )
+        .unwrap();
+        filesystem.queue_upload_handle(fh).unwrap();
+        filesystem.write_handles.remove(&fh);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        if rename_during_failure {
+            while !filesystem.backend.fail_entered.load(Ordering::SeqCst) {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(10));
+            }
+        } else {
+            while !filesystem
+                .upload_pool
+                .sender
+                .pending
+                .lock()
+                .unwrap()
+                .is_empty()
+            {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        if scenario == "legacy_restart" {
+            // Old versions kept this exact known-target claim after an error.
+            let dirty = db.get_by_path("/report.txt").unwrap().unwrap();
+            assert!(db.begin_upload(&dirty).unwrap());
+            db.mark_state(&dirty.metadata.remote_id, FileState::Dirty)
+                .unwrap();
+        }
+        filesystem
+            .rename_record(
+                ROOT_INO,
+                OsStr::new("report.txt"),
+                ROOT_INO,
+                OsStr::new("report.txt.bak"),
+            )
+            .unwrap();
+        let (_, new_fh, _) = filesystem
+            .create_upload(ROOT_INO, OsStr::new("report.txt"), libc::O_RDWR)
+            .unwrap();
+        write_slice(
+            &filesystem.write_handles[&new_fh].cache_path,
+            0,
+            b"new complete saved document",
+        )
+        .unwrap();
+        filesystem.queue_upload_handle(new_fh).unwrap();
+        filesystem.write_handles.remove(&new_fh);
+        if rename_during_failure {
+            release.send(()).unwrap();
+        }
+        while !filesystem
+            .upload_pool
+            .sender
+            .pending
+            .lock()
+            .unwrap()
+            .is_empty()
+        {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        recover_dirty_uploads(&db, filesystem.backend.as_ref()).unwrap();
+        let reopened = Database::new(root.join("db")).with_name_exclusions(rules);
+        reopened.init().unwrap();
+        recover_interrupted_writes(&reopened).unwrap();
+        recover_dirty_uploads(&reopened, filesystem.backend.as_ref()).unwrap();
+        let remote = filesystem
+            .backend
+            .get_metadata_by_path("/report.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            filesystem.backend.download(&remote.remote_id).unwrap(),
+            b"new complete saved document"
+        );
+        let backup = reopened.get_by_path("/report.txt.bak").unwrap().unwrap();
+        assert_eq!(backup.state, FileState::LocalOnly);
+        assert!(backup.cloud_remote_id.is_none());
+        assert_eq!(
+            fs::read(backup.cache_path.unwrap()).unwrap(),
+            b"unsynced earlier edit in backup"
+        );
+        assert!(
+            filesystem
+                .backend
+                .get_metadata_by_path("/report.txt.bak")
+                .unwrap()
+                .is_none()
+        );
+        drop(filesystem);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn startup_retirement_preserves_unknown_create_claim_and_its_delete_uncertainty() {
+    let mut test = TestFs::new("unknown-create-claim");
+    let (_, fh, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("unbound.txt"), libc::O_RDWR)
+        .unwrap();
+    let cache = test.fs.write_handles[&fh].cache_path.clone();
+    write_slice(&cache, 0, b"uncertain create bytes").unwrap();
+    let record = test.fs.db.get_by_path("/unbound.txt").unwrap().unwrap();
+    test.fs
+        .db
+        .mark_dirty_with_size(&record.metadata.remote_id, 22)
+        .unwrap();
+    let dirty = test.fs.db.get_by_path("/unbound.txt").unwrap().unwrap();
+    assert!(test.fs.db.begin_upload(&dirty).unwrap());
+    test.fs.write_handles.remove(&fh);
+    recover_interrupted_writes(&test.fs.db).unwrap();
+    let current = test.fs.db.get_by_path("/unbound.txt").unwrap().unwrap();
+    let tombstone = test.fs.db.queue_pending_delete(&current).unwrap();
+    assert_eq!(tombstone.cloud_remote_id, None);
+    assert_eq!(tombstone.upload_path.as_deref(), Some("/unbound.txt"));
+    assert_eq!(
+        tombstone.upload_cache_path.as_deref(),
+        Some(cache.as_path())
+    );
+    assert_eq!(fs::read(cache).unwrap(), b"uncertain create bytes");
 }

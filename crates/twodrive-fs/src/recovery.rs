@@ -205,6 +205,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
             Ok(true)
         }
         Err(err) => {
+            db.retire_failed_known_upload_claim(&record)?;
             if db
                 .pending_delete_for_local_id(&record.metadata.remote_id)?
                 .is_some()
@@ -475,6 +476,7 @@ pub(crate) fn recover_pending_metadata_record<B: CloudBackend>(
 
 pub(crate) fn recover_interrupted_writes(db: &Database) -> anyhow::Result<()> {
     // Only at startup: there are no live writers. Keep every cached byte.
+    db.retire_interrupted_known_upload_claims()?;
     for record in db.all_records()? {
         if record.metadata.is_dir {
             continue;

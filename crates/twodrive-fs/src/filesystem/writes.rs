@@ -190,7 +190,8 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .get_by_remote_id(&handle.record_remote_id)?
             .ok_or_else(|| anyhow::anyhow!("write target disappeared"))?;
         if record.cache_path.as_ref() != Some(&handle.cache_path)
-            || record_upload_etag(&record) != handle.base_etag
+            || (record.state != FileState::LocalOnly
+                && record_upload_etag(&record) != handle.base_etag)
         {
             anyhow::bail!("write target changed since open; reopen before writing");
         }

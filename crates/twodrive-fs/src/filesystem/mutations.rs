@@ -229,6 +229,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             handle.record_remote_id == record.metadata.remote_id && !handle.unlinked
         }) {
             handle.path = new_path.clone();
+            if record.state == FileState::LocalOnly {
+                handle.base_etag = record_upload_etag(&record);
+            }
         }
         for updated in std::iter::once(
             self.db
