@@ -241,7 +241,7 @@ fn skip_name(name: &str, config: &Config) -> bool {
     if name.starts_with(".") && name != "." {
         return true;
     }
-    if name.starts_with("~$")
+    if config.sync.exclude_name_regexes.matches(name)
         || name.ends_with('~')
         || name.ends_with(".swp")
         || name.ends_with(".swo")

@@ -91,13 +91,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 path,
                 record_remote_id: temporary_remote_id,
                 cache_path,
-                activity: Some(ActivityGuard::start(
-                    &self.cache_dir,
-                    "upload",
-                    &record.metadata.path,
-                    &record.metadata.name,
-                    None,
-                )),
+                activity: None,
                 uploaded: false,
                 changed: true,
                 created_new_record: true,
@@ -146,8 +140,14 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         if truncate {
             self.db
                 .mark_cached(&record.metadata.remote_id, &cache_path)?;
-            self.db
-                .mark_state(&record.metadata.remote_id, FileState::Writing)?;
+            self.db.mark_state(
+                &record.metadata.remote_id,
+                if self.db.excludes_upload(&record) {
+                    FileState::LocalOnly
+                } else {
+                    FileState::Writing
+                },
+            )?;
         }
         let updated = self
             .db
@@ -166,15 +166,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 path: record.metadata.path,
                 record_remote_id: record.metadata.remote_id,
                 cache_path,
-                activity: truncate.then(|| {
-                    ActivityGuard::start(
-                        &self.cache_dir,
-                        "upload",
-                        &updated.metadata.path,
-                        &updated.metadata.name,
-                        None,
-                    )
-                }),
+                activity: None,
                 uploaded: false,
                 changed: truncate,
                 created_new_record: false,
@@ -208,13 +200,6 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             );
         }
         handle.changed = true;
-        handle.activity = Some(ActivityGuard::start(
-            &self.cache_dir,
-            "upload",
-            &record.metadata.path,
-            &record.metadata.name,
-            None,
-        ));
         Ok(())
     }
 
@@ -234,6 +219,25 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             handle.activity.take();
             return Ok(());
         }
+
+        if self
+            .db
+            .get_by_remote_id(&handle.record_remote_id)?
+            .as_ref()
+            .is_some_and(|record| self.db.excludes_upload(record))
+        {
+            return self.queue_upload_handle(fh);
+        }
+        handle.activity = Some(ActivityGuard::start(
+            &self.cache_dir,
+            "upload",
+            &handle.path,
+            Path::new(&handle.path)
+                .file_name()
+                .and_then(OsStr::to_str)
+                .unwrap_or(""),
+            None,
+        ));
 
         if let Ok(Some(record)) = self.db.get_by_remote_id(&handle.record_remote_id) {
             let _ = self
@@ -327,6 +331,21 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn queue_upload_handle(&mut self, fh: u64) -> anyhow::Result<()> {
+        if let Some(current) = self.write_handles.get(&fh)
+            && current.changed
+            && !current.unlinked
+            && self.write_handles.iter().any(|(other_fh, other)| {
+                *other_fh != fh
+                    && other.record_remote_id == current.record_remote_id
+                    && other.changed
+                    && !other.uploaded
+                    && !other.unlinked
+            })
+        {
+            current._cache_guard.sync_all()?;
+            self.write_handles.get_mut(&fh).unwrap().uploaded = true;
+            return Ok(());
+        }
         let Some(handle) = self.write_handles.get_mut(&fh) else {
             return Ok(());
         };
@@ -355,8 +374,11 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .db
             .get_by_remote_id(&handle.record_remote_id)?
             .ok_or_else(|| anyhow::anyhow!("closed upload record disappeared"))?;
+        let excluded = self.db.excludes_upload(&record);
         self.inodes.replace_ino_record(handle.ino, record);
-        self.upload_pool.enqueue(handle.record_remote_id.clone())?;
+        if !excluded {
+            self.upload_pool.enqueue(handle.record_remote_id.clone())?;
+        }
         handle.uploaded = true;
         handle.activity.take();
         Ok(())
@@ -423,11 +445,22 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         file.sync_all()?;
         self.db
             .mark_cached(&record.metadata.remote_id, &cache_path)?;
+        if self.db.excludes_file_name(&record.metadata.name) {
+            self.db
+                .mark_state(&record.metadata.remote_id, FileState::LocalOnly)?;
+        }
         self.db
             .mark_dirty_with_size(&record.metadata.remote_id, size)?;
         self.inodes.replace_size(ino, size);
-        self.upload_pool
-            .enqueue(record.metadata.remote_id.clone())?;
+        if !self.db.excludes_upload(
+            &self
+                .db
+                .get_by_remote_id(&record.metadata.remote_id)?
+                .unwrap(),
+        ) {
+            self.upload_pool
+                .enqueue(record.metadata.remote_id.clone())?;
+        }
         Ok(())
     }
 }

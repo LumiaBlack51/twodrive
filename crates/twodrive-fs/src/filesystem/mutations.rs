@@ -37,6 +37,14 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn delete_record(&mut self, ino: u64, record: &FileRecord) -> anyhow::Result<()> {
+        if record.state == FileState::LocalOnly {
+            self.db.remove_local_only_file(&record.metadata.remote_id)?;
+            self.inodes.remove_ino(ino);
+            if let Some(cache) = &record.cache_path {
+                self.cleanup_unlinked_cache(cache)?;
+            }
+            return Ok(());
+        }
         // Only acknowledgement publication is serialized here, never network I/O.
         let delete = {
             let _guard = crate::recovery::upload_commit_lock()
@@ -121,10 +129,22 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .record_for_ino(ino)
             .map(|record| self.refresh_record(&record))
             .ok_or_else(|| anyhow::anyhow!("source record does not exist"))?;
-        let active_fh = self.write_handles.iter().find_map(|(fh, handle)| {
-            (handle.record_remote_id == record.metadata.remote_id && !handle.uploaded)
-                .then_some(*fh)
-        });
+        // Keep remote-backed bytes locally before suppressing a rename/upload.
+        if !record.metadata.is_dir && self.db.excludes_file_name(newname) {
+            self.ensure_cached(&record)?;
+        }
+        if record.state == FileState::LocalOnly
+            && !self.db.excludes_file_name(newname)
+            && self.write_handles.values().any(|handle| {
+                handle.record_remote_id == record.metadata.remote_id
+                    && handle.changed
+                    && !handle.uploaded
+                    && !handle.unlinked
+            })
+        {
+            self.db
+                .mark_state(&record.metadata.remote_id, FileState::Writing)?;
+        }
         if let Some(target) = self.db.get_by_path(&new_path)? {
             if target.metadata.remote_id == record.metadata.remote_id {
                 // A cloud refresh may already have moved this identity while
@@ -181,13 +201,16 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                     handle.base_etag = record_upload_etag(&target);
                 }
             }
-            if let Some(source_cloud_id) = source_cloud_id
+            if !self.db.excludes_file_name(newname)
+                && let Some(source_cloud_id) = source_cloud_id
                 && Some(source_cloud_id.as_str()) != target_cloud_id.as_deref()
             {
                 self.upload_pool.enqueue_delete(source_cloud_id)?;
             }
-            self.upload_pool
-                .enqueue(updated.metadata.remote_id.clone())?;
+            if !self.db.excludes_upload(&updated) {
+                self.upload_pool
+                    .enqueue(updated.metadata.remote_id.clone())?;
+            }
             if target.cache_path != updated.cache_path
                 && let Some(cache) = &target.cache_path
                 && let Err(err) = self.cleanup_unlinked_cache(cache)
@@ -201,9 +224,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
 
         self.db
             .move_subtree_and_queue(&record.metadata.remote_id, &new_path)?;
-        if let Some(fh) = active_fh
-            && let Some(handle) = self.write_handles.get_mut(&fh)
-        {
+        for handle in self.write_handles.values_mut().filter(|handle| {
+            handle.record_remote_id == record.metadata.remote_id && !handle.unlinked
+        }) {
             handle.path = new_path.clone();
         }
         for updated in std::iter::once(
@@ -217,8 +240,14 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 self.inodes.replace_ino_record(updated_ino, updated);
             }
         }
-        self.upload_pool
-            .enqueue(record.metadata.remote_id.clone())?;
+        let renamed = self
+            .db
+            .get_by_remote_id(&record.metadata.remote_id)?
+            .unwrap();
+        if !self.db.excludes_upload(&renamed) {
+            self.upload_pool
+                .enqueue(record.metadata.remote_id.clone())?;
+        }
         Ok(())
     }
 }

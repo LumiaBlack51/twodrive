@@ -105,7 +105,7 @@ impl Database {
                 SET pin_origin_remote_id = ?1,
                     release_pending = CASE WHEN ?2 = 1 THEN 0 ELSE release_pending END,
                     state = CASE
-                        WHEN state IN ('writing', 'dirty', 'uploading', 'conflict', 'error') THEN state
+                        WHEN state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict', 'error') THEN state
                         WHEN ?2 = 1 AND is_dir = 1 THEN 'pinned'
                         WHEN ?2 = 1 AND cache_path IS NOT NULL THEN 'pinned'
                         WHEN ?2 = 1 THEN 'hydrating'

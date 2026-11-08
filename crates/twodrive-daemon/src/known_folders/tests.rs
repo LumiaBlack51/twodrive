@@ -749,3 +749,62 @@ fn watcher_ingress_drops_exclusions_and_marks_both_overflow_kinds() {
         &mut HashSet::new()
     ));
 }
+
+#[test]
+fn regex_filename_is_excluded_from_scan_events_and_old_queue() {
+    let (root, paths) = test_paths("excluded-regex");
+    paths.ensure().unwrap();
+    let source = root.join("source");
+    let dependency = source.join("app/notes.SCRATCH");
+    fs::create_dir_all(dependency.parent().unwrap()).unwrap();
+    fs::write(&dependency, b"dependency").unwrap();
+    let source_file = source.join("app/index.js");
+    fs::write(&source_file, b"source").unwrap();
+    let mut config = Config::default();
+    config.sync.exclude_name_regexes =
+        twodrive_core::NameExclusions::new(vec![r"(?i)\.scratch$".into()]).unwrap();
+    let mapping = KnownFolderRoot {
+        local: source,
+        remote: "/Code".into(),
+    };
+    let mut state = KnownFolderState::default();
+    let mut jobs = Vec::new();
+    super::scan::collect_local_path(&config, &mapping, &mapping.local, &state, &mut jobs).unwrap();
+    assert_eq!(
+        jobs.len(),
+        1,
+        "recursive scan must prune dependency subtrees"
+    );
+    assert_eq!(jobs[0].local_path, source_file);
+    let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+        .add_path(dependency.clone());
+    let mut pending = HashSet::new();
+    assert!(!queue_addition_event(
+        &event,
+        &[mapping],
+        &config,
+        &mut pending
+    ));
+    let snapshot = FileSnapshot::from_metadata(&fs::metadata(&dependency).unwrap());
+    state.pending.insert(
+        dependency.to_string_lossy().into_owned(),
+        PendingKnownFolderUpload {
+            remote_path: "/Code/app/notes.SCRATCH".into(),
+            snapshot,
+        },
+    );
+    state.save(&paths.data_dir).unwrap();
+    let db = Database::new(paths.db_path.clone());
+    db.init().unwrap();
+    let backend = MockBackend::new();
+    retry_known_folder_uploads(&paths, &backend, &db, &config, &mut state).unwrap();
+    assert!(
+        backend
+            .get_metadata_by_path("/Code/app/notes.SCRATCH")
+            .unwrap()
+            .is_none(),
+        "legacy queued exclusions must not upload"
+    );
+    assert!(dependency.exists());
+    fs::remove_dir_all(root).unwrap();
+}

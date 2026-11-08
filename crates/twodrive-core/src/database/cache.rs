@@ -12,7 +12,7 @@ impl Database {
     /// for bytes that were opened from an older cached version.
     pub fn begin_cached_write(&self, record: &FileRecord) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
-            "UPDATE files SET state = 'writing'
+            "UPDATE files SET state = ?8
              WHERE remote_id = ?1 AND cache_path IS ?2 AND cloud_remote_id IS ?3
                AND etag = ?4 AND state = ?5 AND size = ?6 AND modified_unix = ?7",
             params![
@@ -25,7 +25,12 @@ impl Database {
                 record.metadata.etag,
                 record.state.as_str(),
                 record.metadata.size as i64,
-                record.metadata.modified_unix
+                record.metadata.modified_unix,
+                if self.excludes_upload(record) {
+                    "local_only"
+                } else {
+                    "writing"
+                }
             ],
         )? == 1)
     }
@@ -62,7 +67,9 @@ impl Database {
     /// Claim only the snapshot inspected by the worker. Network preflight can
     /// overlap a rename/replacement or a reopen on the FUSE thread.
     pub fn begin_upload(&self, record: &FileRecord) -> anyhow::Result<bool> {
-        if !matches!(record.state, FileState::Dirty | FileState::Uploading) {
+        if self.excludes_upload(record)
+            || !matches!(record.state, FileState::Dirty | FileState::Uploading)
+        {
             return Ok(false);
         }
         let changed = self.connect()?.execute(
@@ -96,7 +103,7 @@ impl Database {
     pub fn mark_dirty_with_size(&self, remote_id: &str, size: u64) -> anyhow::Result<()> {
         let conn = self.connect()?;
         let changed = conn.execute(
-            "UPDATE files SET state = ?1, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            "UPDATE files SET state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
             params![
                 FileState::Dirty.as_str(),
                 i64::try_from(size).unwrap_or(i64::MAX),
@@ -256,6 +263,7 @@ impl Database {
             r#"
             UPDATE files
             SET state = CASE
+                    WHEN state = 'local_only' THEN state
                     WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned'
                     ELSE ?1
                 END,
@@ -422,7 +430,7 @@ impl Database {
             params![record.metadata.path], |row| row.get(0))?;
         tx.execute(
             "UPDATE files SET download_generation = download_generation + 1,
-             release_pending = CASE WHEN state = 'online_only' OR (state = 'hydrating' AND cache_path IS NULL) THEN 0 ELSE 1 END,
+             release_pending = CASE WHEN state = 'local_only' OR state = 'online_only' OR (state = 'hydrating' AND cache_path IS NULL) THEN 0 ELSE 1 END,
              state = CASE WHEN state = 'hydrating' AND cache_path IS NULL THEN 'online_only' ELSE state END
              WHERE is_dir = 0 AND pin_explicit = 0 AND pin_origin_remote_id IS NULL
              AND (path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/')",

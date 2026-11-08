@@ -1,3 +1,13 @@
+twodrive (0.2.24-1) unstable; urgency=medium
+
+  * Keep Office owner and regex-excluded files durable and local in FUSE.
+  * Preserve reads, exclusive creates, unlink and temporary-save promotion.
+  * Show upload activity only at cloud transfer calls, with network progress.
+  * Share validated filename regex exclusions with known-folder uploads.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 08 Nov 2026 20:00:00 +0800
+
 twodrive (0.2.23-1) unstable; urgency=medium
 
   * Apply known-folder exclusions to descendants, events and persisted uploads.

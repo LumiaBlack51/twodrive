@@ -21,7 +21,9 @@ pub(crate) fn init_mock(paths: &AppPaths) -> anyhow::Result<()> {
 
 pub(crate) fn sync(paths: &AppPaths) -> anyhow::Result<()> {
     paths.ensure()?;
-    let db = Database::new(paths.db_path.clone());
+    let config = Config::load_or_create(paths)?;
+    let db =
+        Database::new(paths.db_path.clone()).with_name_exclusions(config.sync.exclude_name_regexes);
     db.init()?;
     if use_mock_backend() {
         let backend = MockBackend::new();

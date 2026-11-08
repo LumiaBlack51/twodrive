@@ -51,6 +51,85 @@
 
 
 
+## TD-20261108-01：Office 锁文件在 FUSE 路径被当作上传活动，托盘持续显示同步
+
+- 日期：2026-11-08（Asia/Shanghai）
+- 状态：已定位待 TwoDrive 团队修复；按用户要求仅诊断和交接，未修改产品代码或发布 TwoDrive。
+- 影响版本与环境：本机 TwoDrive CLI/daemon 0.2.23（--version 已核对，运行 daemon 与已安装文件 SHA-256 一致）、Linux FUSE 挂载、Wine 中的 PowerPoint。
+- 关联历史故障：上传在 release 后执行的既有机制；本条不等同于历史 403 删除待办。
+
+### 症状与影响
+
+用户报告 Office 打开文档时托盘一直显示正在同步。不能据此推断文稿在持续重复上传或内容被修改。
+
+### 触发条件与复现
+
+现场操作与只读快照：
+
+1. Office 退出后，观察到活动列表为空。
+2. 通过当前 FUSE 挂载以可写方式打开已经缓存的 PPT，无需编辑或保存正文。
+3. Office 创建并保持 `~$<文稿>.pptx` 锁文件；活动列表唯一项目为该锁文件，kind=upload、bytes_done=0、bytes_total=null；数据库中锁文件为 writing、记录大小 0，原文稿仍为 cached。
+4. 再次核对正式放映复核后的快照，仍是同一个锁文件活动；原文稿摘要未变。
+
+本轮未额外构造云端写入，也未捕获网络上传请求；“原文稿反复上传”没有证据支持。0 字节是活动字段和元数据快照，不等同于对网络传输总量的测量。
+
+### 根因与证据
+
+确认属于 TwoDrive 的状态语义和挂载路径策略问题。Office 创建/持有 owner 锁文件是正常文档互斥行为，不应通过禁用 Office 锁文件来消除同步标志。
+
+- `crates/twodrive-fs/src/filesystem/fuse.rs::open`（约 184–205 行）将非 O_RDONLY 打开交给 `create_overwrite_upload`。
+- `crates/twodrive-fs/src/filesystem/writes.rs::create_upload_with_mode`（约 86–105 行）在创建 WriteHandle 时立即创建 kind=upload 的 ActivityGuard；`create_overwrite_upload`（约 145–177 行）在实际 write 前标为 Writing 并做同样操作。
+- `crates/twodrive-fs/src/activity.rs::start` 立即写入 0 字节活动，句柄持有 guard 期间活动存在。`fuse.rs::write`（约 399–406 行）甚至以本地缓存写入偏移推进该活动，不能把它直接解释成实际网络已上传字节。
+- `scripts/twodrive-tray::read_activity` / `activity_label` / `refresh_status`（约 65、100、257 行）接受该 upload 活动并显示 Uploading/Syncing，没有区分本地打开、写入、排队和实际网络传输。
+- `crates/twodrive-daemon/src/known_folders/scan.rs::should_skip`（约 200 行）已经排除 `~$` 前缀；当前 FUSE create/open 路径没有同等的锁文件本地处理策略，因此普通目录同步和挂载写入的行为不一致。
+
+微软官方 [OneDrive 文件限制](https://support.microsoft.com/en-us/onedrive/restrictions-and-limitations-in-onedrive-and-sharepoint) 将以 `~$` 开头的名称列为不接受的名称；[文件路径说明](https://support.microsoft.com/en-us/onedrive/what-are-file-path-length-limits) 也明确说明 Office 会创建这种临时锁文件。因此不能只把托盘活动隐藏后继续把此类 owner 文件当作普通云端上传任务。
+
+### 解决办法与恢复操作
+
+本次只诊断并记录，由用户交给 TwoDrive 团队。建议修复分为两部分：
+
+1. 为 FUSE 挂载建立 Office owner 锁文件的本地存在/读写/关闭/删除策略，使其不进入云端上传活动和持久重试队列，同时保留应用可观察到的文件及互斥语义。不要仅禁止创建、伪造写入成功或删除正在使用的锁。
+2. 区分可写句柄、本地脏数据、待上传和实际网络传输。仅有可写句柄不能宣称正在上传；网络字节进度应由真实传输路径报告。正常正文保存仍须可靠持久化并进入同步流程。
+
+没有清空队列、修改数据库、重启挂载或额外制造云端写入。另有既存的元数据移动待办和权限拒绝删除待办，未将其归因于当前 Office 文件，也未替用户删除这些任务。没有为隐藏此状态而改动 Office 锁文件行为。
+
+### 验证结果与边界
+
+只读检查源码、活动快照、目标文件状态和既存队列分类。未实现 UI/状态机修复，未执行新的真实云端 Office 编辑保存往返。
+
+### 防复发措施与后续
+
+交给团队的回归验收项（本轮尚未实现/运行）：
+
+- 已缓存普通文件 O_RDWR 打开但不写，不产生网络上传显示；真实写入、截断及新建空文件的变更语义分别覆盖。
+- 新建/保持/关闭/删除 `~$` owner 文件，不进入网络上传或持久失败重试；应用仍能查询、读写它，多句柄与锁文件互斥行为正常。
+- 正文编辑保存仍能同步；Office 的同目录临时文件加原子重命名/替换不能被排除策略破坏。尤其覆盖本地临时文件重命名为最终应同步名称。
+- 普通文件夹同步与 FUSE 挂载对 Office owner 文件的策略一致；Word、Excel、PowerPoint 三种 owner 文件分别覆盖。
+- 离线、异常退出、重启恢复和未关闭句柄下不丢真实待同步内容，不把旧活动永久保留为正在传输。不得靠清队列或关闭持久化通过测试。
+
+### 交付记录
+
+仅本机故障记录；未创建提交、PR 或 Release。PowerPoint 演示模式缺失 DLL 的兼容修复在独立 Office 工作目录处理。
+
+### 2026-11-08 修复调查补记
+
+用户已授权修复、PR/审查/CI、完整 Release 及本机替换。状态：调查中。最新 main 已包含 TD-20261101-07 的普通文件空开修复；原诊断所列 open 行为来自旧工作目录，不能据此声称 0.2.23 仍未修复普通文件空开。本轮确认需处理 owner 文件的本地存在语义，以及本地写入活动被当作网络上传；具体实现和验证待补。用户同时要求加入文件名正则排除；现有特殊目录只支持精确名称/后缀，无正则或 FUSE 对等策略。
+
+
+### 2026-11-08 候选修复与实际验证
+
+- 新增持久 `local_only` 状态：FUSE 的 `~$` owner 文件真实落盘并保持正常句柄/目录项语义，创建/关闭/删除不排云端上传或删除重试。缓存释放、固定策略重算和 delta 不能丢弃这些本地字节。现有云端正文及排除前已上传副本不因排除而删除；仅本地缓存丢失时报错保留恢复元数据，不回退下载旧云端内容。
+- `[sync].exclude_name_regexes` 新增 Rust 文件名正则（默认空，内置 owner 规则始终开启），配置读取时编译并验证；共享给特殊目录的扫描、事件和已持久队列，以及 FUSE 创建/写入/改名路径。只配置上传排除，不声称选择性下载。FUSE 只匹配文件；特殊目录仍检查来源内祖先名称。默认大小写敏感，可用 `(?i)`；无效表达式拒绝加载，具体示例见双语 usage/config.example。
+- 临时文件改名/替换为非排除正文时恢复正常同步；仍有真实修改写句柄时保持 Writing，最后一个修改句柄关闭才发布。自定义规则移除后，重启会恢复被保全字节的 Dirty 上传，云端身份对应的本地改名也重新排队。升级启动会保全旧 Writing/Dirty owner 缓存并归入 local_only，未通过清空所有队列隐藏症状。
+- 移除本地 create/write/truncate 的 upload ActivityGuard 和本地偏移进度；真实上传/冲突副本在传输调用前创建活动，只由后端网络进度回调推进。等待父项移动/创建等预检不会常驻“上传中”。托盘消费格式保持一致。
+
+旧 main a64ce65 携带最小 owner 创建回归，实际失败于“owner creation falsely reports a network upload”；候选对应生命周期回归通过。当前完整默认 Rust workspace 244 项通过、13 项环境依赖忽略，严格 Clippy、fmt、25 项 Nautilus、12 项脚本测试及双 lock/打包策略检查通过。新增覆盖 Word/Excel/PowerPoint owner 创建/读取/写入/独占创建、关闭/删除后旧句柄可读、缓存保护、旧重试迁移、真实传输活动、正则跨重启及解除规则、临时文件双写句柄/原子替换与既有云端文件重命名。
+
+宿主显式 FUSE 尝试因 fusermount3 Operation not permitted 失败。无用户目录或真实账号映射的容器中，新增真实 FUSE owner/正则/互斥 flock/打开后 unlink/正文原子保存回归已通过；首次扩大运行的旧挂载测试因缺 python3/gcc/git/gio/CLI 环境有 7 项未通过，补齐后整套结果待补。未主动制造真实 OneDrive 上传、编辑、改名、删除或重放 Wine Office；模拟云端不等同真实 OneDrive 端到端。
+
+发布候选版本 0.2.24-1；PR、最终 Dot/CI、正式制品、本机更新及清理结果待实际产生后补充。原用户工作目录内未提交内容未改动。
+
 ## TD-20261101-13：候选交付中 GitHub 运行详情只读查询 TCP 超时
 
 - 日期：2026-11-01（Asia/Shanghai）

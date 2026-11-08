@@ -6,7 +6,6 @@ use std::thread::{self, JoinHandle};
 use twodrive_backend::CloudBackend;
 use twodrive_core::{Database, FileState};
 
-use crate::activity::ActivityGuard;
 use crate::hydration::hydrate_record;
 use crate::locks::item_sync_lock;
 use crate::recovery::{
@@ -184,6 +183,15 @@ pub(crate) fn run_upload_worker<B: CloudBackend>(
             }
             UploadCommand::Shutdown => return,
         };
+        if db
+            .get_by_remote_id(&remote_id)
+            .ok()
+            .flatten()
+            .as_ref()
+            .is_some_and(|record| db.excludes_upload(record))
+        {
+            continue;
+        }
         {
             let item_lock = item_sync_lock(&remote_id);
             let Ok(_item_guard) = item_lock.lock() else {
@@ -222,20 +230,9 @@ pub(crate) fn run_upload_worker<B: CloudBackend>(
                 continue;
             }
         };
-        let mut activity = ActivityGuard::start(
-            &cache_dir,
-            "upload",
-            &record.metadata.path,
-            &record.metadata.name,
-            Some(record.metadata.size),
-        );
-        if let Err(err) = recover_dirty_record(&db, backend.as_ref(), record, &mut |done, total| {
-            activity.set_progress(done, Some(total));
-            Ok(())
-        }) {
+        if let Err(err) = recover_dirty_record(&db, backend.as_ref(), record, &mut |_, _| Ok(())) {
             eprintln!("twodrive: queued upload failed for {remote_id}: {err:#}");
         }
-        activity.finish();
         if let Ok(Some(delete)) = db.pending_delete_for_local_id(&remote_id) {
             let _ = queue.send(UploadCommand::Delete(delete.remote_id));
         }

@@ -80,6 +80,7 @@ jobs:
           sudo apt-get install -y fuse3
           sudo modprobe fuse
           cargo test -p twodrive-fs --locked mounted_untouched_writable_close -- --ignored --nocapture
+          cargo test -p twodrive-fs --locked mounted_office_owner_and_regex -- --ignored --nocapture
       - run: cargo build -p twodrive-peer --features test-fixture --bin peer-health-fixture --locked
       - run: TWODRIVE_TEST_UPDATE_EXE="$PWD/target/debug/peer-health-fixture" cargo test -p twodrive-peer --locked native_process_install_health_and_start_failure_rollback -- --ignored
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
