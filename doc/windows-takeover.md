@@ -420,9 +420,20 @@ twodrive-native-dev verify --native-state <private-state>
 twodrive-native-dev observe --native-state <private-state> --seconds 30
 ```
 
-A complete-account side root is being staged independently of the running
-Microsoft client. Its counts/evidence will be recorded after full native inventory
-and restart verification; it must not be mistaken for an actual source cutover.
+A complete-account side root was staged independently of the running Microsoft
+client: 12,735 files and 7,425 directories, 20,160 published entries and
+105,679,168,641 logical bytes. Initial/full independent-process inventories passed,
+as did an actual limited, unpackaged Task Scheduler launch (package query 15700)
+using the canonical protected state. The one-shot task was removed. Bounded
+observation and a subsequent full inventory passed with zero durable work/native
+events and zero private content-cache files. No user file contents were downloaded
+for these staging checks. This is not an actual source cutover.
 Only untracked ordinary Office lock/TMP/system artifacts are excluded from new
 creation; existing cloud publications are retained and all underlying root/reparse
 checks still run. The files are preserved locally. See TD-20261108-37.
+
+Artifact exclusion preserves existing same-root creation claims, including an
+interruption before conversion/metadata. A native upgrade regression failed the
+previous early rejection; converted/paused and prepared-only creation restarts now
+recover with a mock provider. See TD-20261108-38. This does not promise every
+service accepts every historically claimed reserved filename.

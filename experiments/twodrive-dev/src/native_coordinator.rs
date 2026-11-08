@@ -269,6 +269,7 @@ impl NativeCoordinator {
         &self,
     ) -> anyhow::Result<Vec<twodrive_local_files::native::persistent::NativeEntry>> {
         let mut entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let receipt = serde_json::to_string(self.receipt())?;
         let mut kept = Vec::with_capacity(entries.len());
         for entry in entries.drain(..) {
             if entry.identity.is_none()
@@ -278,6 +279,11 @@ impl NativeCoordinator {
                     .journal()
                     .database()
                     .get_by_path(&Self::cloud_path(&entry.relative_path)?)?
+                    .is_none()
+                && self
+                    .bridge
+                    .journal()
+                    .native_creation_for_path(&receipt, &Self::cloud_path(&entry.relative_path)?)?
                     .is_none()
             {
                 continue;
@@ -480,10 +486,6 @@ impl NativeCoordinator {
     /// Create-only transfer for a named ordinary file beneath an already owned
     /// directory. The physical creation claim and immutable bytes precede I/O.
     pub fn synchronize_new_file(&mut self, relative: &Path) -> anyhow::Result<bool> {
-        ensure!(
-            !Self::is_untracked_artifact(relative, false),
-            "local temporary/system file is outside new-file synchronization"
-        );
         let cloud_path = format!(
             "/{}",
             relative
@@ -499,9 +501,18 @@ impl NativeCoordinator {
         crate::provider::valid_path(&cloud_path)?;
         let root_receipt = serde_json::to_string(self.receipt())?;
         let existing = self.bridge.journal().database().get_by_path(&cloud_path)?;
+        let claim = self
+            .bridge
+            .journal()
+            .native_creation_for_path(&root_receipt, &cloud_path)?;
+        ensure!(
+            !Self::is_untracked_artifact(relative, false) || existing.is_some() || claim.is_some(),
+            "unowned temporary/system file is outside new-file synchronization"
+        );
         let id = if let Some(record) = existing {
             ensure!(
-                record.metadata.remote_id.starts_with("local-upload-")
+                !record.metadata.is_dir
+                    && record.metadata.remote_id.starts_with("local-upload-")
                     && self
                         .bridge
                         .journal()
@@ -510,27 +521,23 @@ impl NativeCoordinator {
                         .all(|p| p.local_id != record.metadata.remote_id),
                 "new file already has a published owner"
             );
-            let claims = self.bridge.journal().native_creations()?;
             ensure!(
-                claims
-                    .iter()
-                    .any(|claim| claim.local_id == record.metadata.remote_id
-                        && claim.root_binding == root_receipt
-                        && claim.path == cloud_path),
+                claim
+                    .as_ref()
+                    .is_some_and(|claim| claim.local_id == record.metadata.remote_id),
                 "native creation claim changed"
             );
             record.metadata.remote_id
         } else {
-            let claims = self.bridge.journal().native_creations()?;
-            let id = claims
-                .iter()
-                .find(|claim| {
-                    claim.path == cloud_path
-                        && claim.root_binding == root_receipt
-                        && claim.state == "preparing"
-                })
-                .map(|claim| claim.local_id.clone())
-                .unwrap_or_else(|| format!("local-upload-{:032x}", rand::random::<u128>()));
+            let id = if let Some(claim) = claim {
+                ensure!(
+                    claim.state == "preparing",
+                    "native creation has a staged owner without metadata"
+                );
+                claim.local_id
+            } else {
+                format!("local-upload-{:032x}", rand::random::<u128>())
+            };
             self.bridge.create_native_file(&self.owner, relative, &id)?;
             id
         };
@@ -1264,6 +1271,150 @@ mod tests {
     use crate::{model::CloudBackend, native_local_fixture::GeneratedProvider, provider::Backend};
     use twodrive_core::{Database, IndexedItem};
     use twodrive_local_files::fixtures::{Dataset, DownloadCounters};
+    #[test]
+    #[ignore = "explicit NEW generated root; resume a legacy-owned TMP creation after a definite paused upload"]
+    fn owned_artifact_creation_resumes_after_restart() {
+        artifact_creation_recovery(true);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; prepared artifact claim survives before native conversion/metadata"]
+    fn prepared_artifact_claim_resumes_before_conversion() {
+        artifact_creation_recovery(false);
+    }
+    fn artifact_creation_recovery(captured: bool) {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_OWNED_ARTIFACT_ROOT")
+                .expect("explicit generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let checkpoint = root.with_extension("receipt.json");
+        let state = tempfile::tempdir().unwrap();
+        let private = state.path().canonicalize().unwrap();
+        let cache = private.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let pause = private.join("pause");
+        std::fs::write(&pause, b"generated pause").unwrap();
+        let provider = crate::local_files::tests::MockProvider::empty_at("/legacy.tmp");
+        let plan = NamespacePlan::build(
+            &[IndexedItem {
+                id: "root".into(),
+                parent: None,
+                name: "root".into(),
+                kind: "folder".into(),
+                size: 0,
+                etag: "root-v1".into(),
+                modified: None,
+                deleted: false,
+            }],
+            "root",
+            100,
+            twodrive_local_files::names::ordinal_ignorecase_cmp,
+        )
+        .unwrap();
+        let db = Database::new(private.join("native.sqlite3"));
+        let open = || {
+            LocalFileBridge::open_bound(
+                db.clone(),
+                &cache,
+                Backend::new(provider.clone()).with_pause_file(pause.clone()),
+                "generated-owned-artifact",
+            )
+            .unwrap()
+        };
+        let mut coordinator = NativeCoordinator::create_new(
+            open(),
+            &plan,
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+        )
+        .unwrap();
+        let relative = Path::new("legacy.tmp");
+        let file = coordinator.root().join(relative);
+        let bytes = b"generated legacy creation is owned and must remain recoverable";
+        std::fs::write(&file, bytes).unwrap();
+        let id = "local-upload-legacy-artifact";
+        // Model a previous version which captured the file before this policy.
+        if captured {
+            coordinator
+                .bridge
+                .create_native_file(&coordinator.owner, relative, id)
+                .unwrap();
+            assert!(
+                coordinator
+                    .bridge
+                    .upload(id, crate::local_files::no_progress())
+                    .unwrap_err()
+                    .is::<crate::provider::TransferNotStarted>()
+            );
+            assert!(!coordinator.bridge.status(id).unwrap().uncertain_upload);
+        } else {
+            let receipt = serde_json::to_string(coordinator.receipt()).unwrap();
+            let result = coordinator.owner.with_replacement_capture_staged(
+                relative,
+                id.as_bytes(),
+                |volume, file_id| {
+                    coordinator
+                        .bridge
+                        .journal()
+                        .begin_native_creation(
+                            id,
+                            "/legacy.tmp",
+                            &receipt,
+                            &format!("{volume:08x}:{file_id:016x}"),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    Err("generated interruption before conversion".into())
+                },
+                |_| Ok(()),
+            );
+            assert!(result.is_err());
+            assert!(
+                coordinator
+                    .bridge
+                    .journal()
+                    .database()
+                    .get_by_path("/legacy.tmp")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let receipt = coordinator.receipt().clone();
+        coordinator.disconnect().unwrap();
+        drop(coordinator);
+        std::fs::remove_file(&pause).unwrap();
+        let mut coordinator = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        let progress = coordinator.synchronize_once().unwrap();
+        let recovered = coordinator.bridge.status(id).unwrap().sync_confirmed();
+        let published = coordinator
+            .bridge
+            .journal()
+            .native_projection_for_id(id)
+            .unwrap()
+            .is_some();
+        let retained = std::fs::read(&file).unwrap();
+        std::fs::remove_file(file).unwrap();
+        coordinator.retire_empty_generated_fixture().unwrap();
+        drop(coordinator);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        state.close().unwrap();
+        assert_eq!(retained, bytes);
+        assert_eq!(
+            progress.created, 1,
+            "legacy owned claim was stranded: {progress:?}"
+        );
+        assert_eq!(progress.deferred, 0, "{progress:?}");
+        assert!(recovered && published);
+    }
     #[test]
     #[ignore = "explicit NEW generated CFAPI root; new ordinary file through create-only receipt and published binding"]
     fn new_native_file_becomes_a_published_cloud_object_without_an_old_download() {

@@ -173,6 +173,7 @@ impl CacheJournal {
             "CREATE TABLE IF NOT EXISTS local_native_dirty (cloud_id TEXT PRIMARY KEY);",
         )?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS local_native_creations(local_id TEXT PRIMARY KEY,path TEXT NOT NULL,root_binding TEXT NOT NULL,native_binding TEXT NOT NULL,state TEXT NOT NULL,cloud_id TEXT);")?;
+        tx.execute_batch("CREATE INDEX IF NOT EXISTS idx_native_creation_path ON local_native_creations(root_binding,path);")?;
         projection::init(&tx)?;
         tx.execute("INSERT INTO app_state(key,value) VALUES('local_cache_schema','4') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[])?;
         let old: Option<String> = tx
@@ -857,6 +858,31 @@ impl CacheJournal {
                 })
             })?
             .collect::<Result<_, _>>()?)
+    }
+    pub fn native_creation_for_path(
+        &self,
+        root: &str,
+        path: &str,
+    ) -> anyhow::Result<Option<NativeCreation>> {
+        let conn = journal_connection(&self.0.db)?;
+        let mut stmt=conn.prepare("SELECT local_id,path,root_binding,native_binding,state,cloud_id FROM local_native_creations WHERE root_binding=?1 AND path=?2 LIMIT 2")?;
+        let rows = stmt
+            .query_map(params![root, path], |row| {
+                Ok(NativeCreation {
+                    local_id: row.get(0)?,
+                    path: row.get(1)?,
+                    root_binding: row.get(2)?,
+                    native_binding: row.get(3)?,
+                    state: row.get(4)?,
+                    cloud_id: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        ensure!(
+            rows.len() <= 1,
+            "ambiguous native creation path requires recovery"
+        );
+        Ok(rows.into_iter().next())
     }
 
     /// `digest` is computed by the engine while no writer can exist. The lease

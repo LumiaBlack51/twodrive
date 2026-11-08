@@ -472,5 +472,30 @@
     "generation_preserved": true,
     "no_extra_capture_files": true,
     "backend": "mock"
+  },
+  "complete_account_staging": {
+    "production_cutover": false,
+    "original_personal_client_running": true,
+    "catalogue_files": 12735,
+    "catalogue_directories": 7425,
+    "published": 20160,
+    "logical_bytes": 105679168641,
+    "private_content_cache_files": 0,
+    "initial_full_native_inventory": true,
+    "independent_process_resume_inventory": true,
+    "limited_unpacked_process_resume_inventory": true,
+    "unpacked_launcher_package_query_status": 15700,
+    "temporary_scheduler_task_removed": true,
+    "bounded_observation_without_mutation_consumers": true,
+    "post_observation_full_inventory": true,
+    "durable_work_items": 0,
+    "pending_native_event_batch": 0
+  },
+  "owned_artifact_creation_recovery": {
+    "old_native_regression_failed": true,
+    "converted_paused_creation_resumes_after_restart": true,
+    "prepared_only_claim_resumes_after_restart": true,
+    "fresh_artifacts_remain_ordinary": true,
+    "backend": "mock"
   }
 }
