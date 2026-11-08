@@ -43,6 +43,19 @@ impl NativeAccount {
     }
 }
 impl Provider for NativeAccount {
+    fn empty_directory_version_bound(
+        &self,
+        entry: &MetadataEntry,
+        parent_id: &str,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.verified()?.graph.empty_directory_version_bound(
+            &self.expected,
+            &entry.remote_id,
+            parent_id,
+            &entry.path,
+            &mut || Ok(()),
+        )
+    }
     fn create_directory_bound(
         &self,
         parent: &MetadataEntry,

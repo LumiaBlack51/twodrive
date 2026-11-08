@@ -42,8 +42,11 @@ pub(super) fn init(conn: &rusqlite::Connection) -> anyhow::Result<()> {
         CREATE TABLE IF NOT EXISTS local_native_moves(local_id TEXT PRIMARY KEY,root_binding TEXT NOT NULL,source_path TEXT NOT NULL,intent TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);
         CREATE TABLE IF NOT EXISTS local_native_deletes(local_id TEXT PRIMARY KEY,root_binding TEXT NOT NULL,intent TEXT NOT NULL,state TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_native_pending_delete ON local_native_deletes(local_id) WHERE state NOT IN ('applied','cancelled');
+        CREATE INDEX IF NOT EXISTS idx_native_delete_tag ON local_native_deletes(root_binding,json_extract(intent,'$.publication.tag'));
         CREATE TABLE IF NOT EXISTS local_native_deleted_archives(archive_id TEXT PRIMARY KEY,local_id TEXT NOT NULL,root_binding TEXT NOT NULL,record_json TEXT NOT NULL,cache_path TEXT,deleted_unix INTEGER NOT NULL);",
     )?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS local_native_backup_copies(sequence INTEGER PRIMARY KEY AUTOINCREMENT,root_binding TEXT NOT NULL,volume_serial INTEGER NOT NULL,file_id TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS idx_native_pending_backup ON local_native_backup_copies(root_binding,volume_serial,file_id) WHERE state='prepared';")?;
     Ok(())
 }
 pub(super) fn record_capture(
@@ -148,6 +151,7 @@ impl CacheJournal {
             return Ok(true);
         }
         Ok(journal_connection(&self.0.db)?.query_row("SELECT EXISTS(SELECT 1 FROM local_native_moves WHERE state<>'applied')
+            OR EXISTS(SELECT 1 FROM local_native_backup_copies WHERE state='prepared')
             OR EXISTS(SELECT 1 FROM local_native_deletes WHERE state NOT IN ('applied','cancelled'))
             OR EXISTS(SELECT 1 FROM pending_metadata_operations) OR EXISTS(SELECT 1 FROM pending_deletes)
             OR EXISTS(SELECT 1 FROM local_native_projections WHERE state<>'published')

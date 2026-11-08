@@ -4,6 +4,36 @@ use twodrive_core::NativeMoveIntent;
 use twodrive_local_files::native::persistent::{NativeEvent, NativeEventKind};
 
 impl NativeCoordinator {
+    fn acknowledge_backup_transition(
+        &self,
+        source: &NativeProjection,
+        physical: twodrive_core::NativeFileIdentity,
+    ) -> anyhow::Result<()> {
+        let mut decisions = Vec::new();
+        for (sequence, payload) in self
+            .bridge
+            .journal()
+            .database()
+            .pending_native_events(&source.root_binding, 1000)?
+        {
+            let event: NativeEvent = serde_json::from_str(&payload)?;
+            if event.identity == source.tag
+                && event.volume_serial == physical.volume_serial
+                && event.file_id == physical.file_id
+            {
+                ensure!(
+                    event.root_file_id == self.receipt().file_id && event.schema_version == 1,
+                    "backup transition event root changed"
+                );
+                decisions.push((sequence, payload));
+            }
+        }
+        self.bridge
+            .journal()
+            .database()
+            .acknowledge_native_event_decisions(&source.root_binding, &decisions)
+    }
+
     pub(super) fn synchronize_renames(&mut self) -> anyhow::Result<usize> {
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
@@ -32,9 +62,40 @@ impl NativeCoordinator {
             if recovered {
                 continue;
             }
+            let pending_backups = self.bridge.journal().native_backup_copies(&binding)?;
+            if !pending_backups.is_empty() {
+                let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+                for copy in pending_backups {
+                    let backup = entries
+                        .iter()
+                        .find(|e| {
+                            e.volume_serial == copy.physical.volume_serial
+                                && e.file_id == copy.physical.file_id
+                        })
+                        .context("prepared native backup is missing")?;
+                    let target = entries
+                        .iter()
+                        .find(|e| {
+                            e.volume_serial == copy.target.volume_serial
+                                && e.file_id == copy.target.file_id
+                        })
+                        .map(|e| e.relative_path.clone())
+                        .unwrap_or(Self::relative(&copy.source.path)?);
+                    self.bridge.split_native_backup(
+                        &self.owner,
+                        &backup.relative_path,
+                        &target,
+                        &copy.source,
+                        copy.physical,
+                    )?;
+                    self.acknowledge_backup_transition(&copy.source, copy.physical)?;
+                }
+                continue;
+            }
             let mut entries = self.observed_entries()?;
             entries.sort_by_key(|e| e.relative_path.components().count());
             let mut candidate = None;
+            let mut split = false;
             for entry in &entries {
                 let Some(p) = entry
                     .identity
@@ -62,6 +123,35 @@ impl NativeCoordinator {
                 {
                     continue;
                 }
+                if !p.directory
+                    && let Some(target) = entries.iter().find(|target| {
+                        target.relative_path == Self::relative(&p.path).unwrap_or_default()
+                            && !target.directory
+                            && (target.volume_serial != entry.volume_serial
+                                || target.file_id != entry.file_id)
+                            && target.identity.as_deref().is_none_or(|tag| tag == p.tag)
+                    })
+                {
+                    self.bridge.split_native_backup(
+                        &self.owner,
+                        &entry.relative_path,
+                        &target.relative_path,
+                        p,
+                        twodrive_core::NativeFileIdentity {
+                            volume_serial: entry.volume_serial,
+                            file_id: entry.file_id,
+                        },
+                    )?;
+                    self.acknowledge_backup_transition(
+                        p,
+                        twodrive_core::NativeFileIdentity {
+                            volume_serial: entry.volume_serial,
+                            file_id: entry.file_id,
+                        },
+                    )?;
+                    split = true;
+                    break;
+                }
                 ensure!(
                     entries
                         .iter()
@@ -73,6 +163,9 @@ impl NativeCoordinator {
                 );
                 candidate = Some((p.clone(), entry.clone()));
                 break;
+            }
+            if split {
+                continue;
             }
             let Some((publication, entry)) = candidate else {
                 break;

@@ -24,6 +24,8 @@ struct Remote {
 }
 #[derive(Clone)]
 pub(crate) struct MockProvider {
+    extras: Arc<Mutex<std::collections::HashMap<String, Remote>>>,
+    allow_extras: bool,
     folders: Arc<Mutex<Vec<MetadataEntry>>>,
     remote: Arc<Mutex<Remote>>,
     mode: Arc<AtomicU8>,
@@ -33,6 +35,8 @@ pub(crate) struct MockProvider {
 impl MockProvider {
     pub(crate) fn new() -> Self {
         Self {
+            extras: Arc::default(),
+            allow_extras: false,
             folders: Arc::default(),
             remote: Arc::new(Mutex::new(Remote {
                 path: REMOTE_PATH.into(),
@@ -56,9 +60,17 @@ impl MockProvider {
         value.remote.lock().unwrap().path = path.into();
         value
     }
+    #[cfg(all(windows, feature = "native-test-hooks"))]
+    pub(crate) fn with_auxiliary_files(mut self) -> Self {
+        self.allow_extras = true;
+        self
+    }
     fn metadata(remote: &Remote) -> MetadataEntry {
+        Self::metadata_id(OBJECT, remote)
+    }
+    fn metadata_id(id: &str, remote: &Remote) -> MetadataEntry {
         MetadataEntry::new_file(
-            OBJECT,
+            id,
             &remote.path,
             remote.bytes.len() as u64,
             remote.version as i64,
@@ -91,6 +103,9 @@ impl CloudBackend for MockProvider {
         })
     }
     fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        if let Some(remote) = self.extras.lock().unwrap().get(id) {
+            return Ok(remote.present.then(|| Self::metadata_id(id, remote)));
+        }
         if let Some(folder) = self
             .folders
             .lock()
@@ -105,6 +120,15 @@ impl CloudBackend for MockProvider {
         Ok(remote.present.then(|| Self::metadata(&remote)))
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        if self.allow_extras && path != self.remote.lock().unwrap().path {
+            return Ok(self
+                .extras
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(_, r)| r.present && r.path == path)
+                .map(|(id, r)| Self::metadata_id(id, r)));
+        }
         ensure!(
             path == self.remote.lock().unwrap().path,
             "unexpected fixture path"
@@ -112,6 +136,10 @@ impl CloudBackend for MockProvider {
         self.get_metadata(OBJECT)
     }
     fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+        if let Some(remote) = self.extras.lock().unwrap().get(id) {
+            ensure!(remote.present, "fixture auxiliary missing");
+            return Ok(remote.bytes.clone());
+        }
         ensure!(id == OBJECT, "opaque download ID required");
         Ok(self.remote.lock().unwrap().bytes.clone())
     }
@@ -217,7 +245,67 @@ impl Provider for MockProvider {
         }
         Ok(result)
     }
+    fn empty_directory_version_bound(
+        &self,
+        entry: &MetadataEntry,
+        parent_id: &str,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        let folders = self.folders.lock().unwrap();
+        let folder = folders
+            .iter()
+            .find(|f| f.remote_id == entry.remote_id && f.path == entry.path)
+            .context("fixture folder missing")?;
+        ensure!(
+            (entry.parent_path == "/" && parent_id == "root")
+                || folders
+                    .iter()
+                    .any(|p| p.remote_id == parent_id && p.path == entry.parent_path),
+            "fixture directory parent mismatch"
+        );
+        let child = |path: &str| {
+            path.rsplit_once('/')
+                .is_some_and(|(parent, _)| parent == entry.path)
+        };
+        if folders.iter().any(|f| child(&f.path))
+            || {
+                let r = self.remote.lock().unwrap();
+                r.present && child(&r.path)
+            }
+            || self
+                .extras
+                .lock()
+                .unwrap()
+                .values()
+                .any(|r| r.present && child(&r.path))
+        {
+            return Ok(None);
+        }
+        Ok(Some(folder.clone()))
+    }
     fn delete_bound(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
+        if entry.is_dir {
+            let mut folders = self.folders.lock().unwrap();
+            let position = folders
+                .iter()
+                .position(|f| {
+                    f.remote_id == entry.remote_id && f.etag == entry.etag && f.path == entry.path
+                })
+                .context("fixture directory conflict")?;
+            ensure!(
+                folders.iter().all(|f| f.parent_path != entry.path),
+                "fixture directory not empty"
+            );
+            {
+                let r = self.remote.lock().unwrap();
+                ensure!(
+                    !r.present || !r.path.starts_with(&format!("{}/", entry.path)),
+                    "fixture directory not empty"
+                );
+            }
+            folders.remove(position);
+            return Ok(());
+        }
+
         ensure!(entry.remote_id == OBJECT, "opaque fixture file ID required");
         let mut remote = self.remote.lock().unwrap();
         ensure!(
@@ -279,6 +367,40 @@ impl Provider for MockProvider {
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
         self.upload_calls.fetch_add(1, Ordering::SeqCst);
+        if self.allow_extras && path != self.remote.lock().unwrap().path {
+            let bytes = fs::read(source)?;
+            progress(0, bytes.len() as u64)?;
+            let mut extras = self.extras.lock().unwrap();
+            let key = if let Some(id) = id {
+                let current = extras.get(id).context("fixture auxiliary missing")?;
+                ensure!(
+                    current.present
+                        && current.path == path
+                        && version == Some(Self::metadata_id(id, current).etag.as_str()),
+                    "fixture conflict"
+                );
+                id.to_string()
+            } else {
+                ensure!(
+                    version.is_none() && extras.values().all(|r| !r.present || r.path != path),
+                    "fixture conflict"
+                );
+                format!("generated-auxiliary-{}", extras.len())
+            };
+            let generation = extras.get(&key).map_or(1, |r| r.version + 1);
+            let remote = Remote {
+                path: path.into(),
+                present: true,
+                bytes,
+                version: generation,
+            };
+            let result = Self::metadata_id(&key, &remote);
+            extras.insert(key, remote);
+            drop(extras);
+            progress(result.size, result.size)?;
+            return Ok(result);
+        }
+
         ensure!(
             path == self.remote.lock().unwrap().path && (id == Some(OBJECT) || id.is_none()),
             "identity/path boundary violated"

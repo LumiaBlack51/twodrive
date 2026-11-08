@@ -19,6 +19,8 @@ pub struct LocalFileBridge {
     journal: CacheJournal,
     backend: Backend,
 }
+#[cfg(all(test, windows, feature = "native-test-hooks"))]
+thread_local! {pub(crate) static INTERRUPT_BACKUP_AFTER_REVERT:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
 impl LocalFileBridge {
     #[cfg(all(windows, feature = "native-local-fixture"))]
     #[cfg(test)]
@@ -89,6 +91,121 @@ impl LocalFileBridge {
     }
     pub fn journal(&self) -> &CacheJournal {
         &self.journal
+    }
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub(crate) fn split_native_backup(
+        &self,
+        owner: &twodrive_local_files::native::persistent::PersistentSession,
+        backup: &Path,
+        target: &Path,
+        source: &twodrive_core::NativeProjection,
+        physical: twodrive_core::NativeFileIdentity,
+    ) -> anyhow::Result<()> {
+        let id = &source.local_id;
+        if self
+            .journal
+            .snapshot_if_owned(id)?
+            .as_ref()
+            .is_some_and(|s| s.uncertain_upload)
+        {
+            self.reconcile(id)?;
+        }
+        let record = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("backup logical source missing")?;
+        let existing = self
+            .journal
+            .native_backup_copies(&source.root_binding)?
+            .into_iter()
+            .find(|copy| copy.physical == physical && copy.source.local_id == *id);
+        let backup_path = format!(
+            "/{}",
+            backup
+                .components()
+                .map(|p| p.as_os_str().to_str().context("invalid backup path"))
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join("/")
+        );
+        self.journal.record_native_edit(&source.cloud_id)?;
+        owner
+            .with_backup_capture(backup, &source.tag, physical, |backup_capture| {
+                let Some(backup_capture) = backup_capture else {
+                    return self
+                        .journal
+                        .complete_native_backup_copy(
+                            existing
+                                .as_ref()
+                                .ok_or("ordinary backup has no prepared owner")?
+                                .sequence,
+                        )
+                        .map_err(|e| e.to_string());
+                };
+                self.check_native_projection(backup_capture, source, false)?;
+                let modified = backup_capture.modified_time()?;
+                let mut snapshot = tempfile::NamedTempFile::new_in(self.journal.cache_root())
+                    .map_err(|e| e.to_string())?;
+                let size = backup_capture.copy_resident_to(snapshot.as_file_mut())?;
+                snapshot
+                    .as_file()
+                    .set_times(std::fs::FileTimes::new().set_modified(modified))
+                    .map_err(|e| e.to_string())?;
+                snapshot.as_file().sync_all().map_err(|e| e.to_string())?;
+                let digest = digest_file(snapshot.as_file_mut()).map_err(|e| e.to_string())?;
+                owner.with_replacement_capture(target, &source.tag, |target_capture| {
+                    let generation = self
+                        .journal
+                        .snapshot_if_owned(id)
+                        .map_err(|e| e.to_string())?
+                        .map(|s| s.generation);
+                    self.capture_locked_native(target_capture, &record, generation)?;
+                    let (volume_serial, file_id) = target_capture.physical_identity()?;
+                    let target = twodrive_core::NativeFileIdentity {
+                        volume_serial,
+                        file_id,
+                    };
+                    let prepared = if let Some(copy) = existing.filter(|copy| {
+                        copy.digest == digest && copy.size == size && copy.target == target
+                    }) {
+                        drop(snapshot);
+                        copy
+                    } else {
+                        let (file, cache_path) = snapshot.keep().map_err(|e| e.to_string())?;
+                        drop(file);
+                        self.journal
+                            .prepare_native_backup_copy(
+                                twodrive_core::NativeBackupCopy {
+                                    sequence: 0,
+                                    source: source.clone(),
+                                    path: backup_path,
+                                    physical,
+                                    target,
+                                    cache_path,
+                                    digest,
+                                    size,
+                                    modified_unix: modified
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map_err(|e| e.to_string())?
+                                        .as_secs()
+                                        as i64,
+                                    state: "prepared".into(),
+                                },
+                                digest_file,
+                            )
+                            .map_err(|e| e.to_string())?
+                    };
+                    backup_capture.revert_after_verified_backup()?;
+                    #[cfg(all(test, feature = "native-test-hooks"))]
+                    if INTERRUPT_BACKUP_AFTER_REVERT.with(|flag| flag.replace(false)) {
+                        return Err("generated interruption after backup revert".into());
+                    }
+                    self.journal
+                        .complete_native_backup_copy(prepared.sequence)
+                        .map_err(|e| e.to_string())
+                })
+            })
+            .map_err(anyhow::Error::msg)
     }
     #[cfg(all(windows, feature = "native-sync"))]
     pub(crate) fn backend(&self) -> &Backend {

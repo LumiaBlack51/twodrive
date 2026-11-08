@@ -1984,6 +1984,43 @@ pub fn with_exclusive_placeholder<T>(
 /// edits. Busy files are deferred instead of reading a writer's partial save.
 pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
 impl NativeCapture<'_> {
+    /// Only after a complete fsynced backup has an independent engine owner.
+    /// The same no-write/no-delete lease retains all native bytes throughout.
+    #[cfg(feature = "native-sync")]
+    pub fn revert_after_verified_backup(&self) -> Result<()> {
+        let before = self.0.inspect()?;
+        if !before.resident || before.partial {
+            return Err("backup revert requires complete resident bytes".into());
+        }
+        hr(
+            unsafe { CfRevertPlaceholder(self.0.handle.0, CF_REVERT_FLAG_NONE, ptr::null_mut()) },
+            "revert durably copied native backup",
+        )?;
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        let mut size = 0;
+        if unsafe {
+            GetFileInformationByHandleEx(
+                self.0.handle.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                size_of_val(&tag) as u32,
+            )
+        } == 0
+            || tag.FileAttributes
+                & (FILE_ATTRIBUTE_REPARSE_POINT
+                    | FILE_ATTRIBUTE_OFFLINE
+                    | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                    | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+                != 0
+            || tag.ReparseTag != 0
+            || unsafe { GetFileSizeEx(self.0.handle.0, &mut size) } == 0
+            || size < 0
+            || size as u64 != before.logical_size
+        {
+            return Err("native backup revert was not observed as complete ordinary data".into());
+        }
+        Ok(())
+    }
     #[cfg(feature = "native-sync")]
     pub fn physical_identity(&self) -> Result<(u32, u64)> {
         let mut info = BY_HANDLE_FILE_INFORMATION::default();

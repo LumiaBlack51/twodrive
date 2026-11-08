@@ -511,5 +511,33 @@
     "no_op_waits_for_delete_capable_handle": true,
     "generated_scopes_retired": true,
     "directory_delete_not_implemented": true
+  },
+  "native_directory_delete": {
+    "actual_cfapi": true,
+    "actual_personal_onedrive": true,
+    "bottom_up_known_descendants": true,
+    "observed_nonempty_not_recycled": true,
+    "bound_parent_identity": true,
+    "personal_directory_ctag_missing_even_explicit_select": true,
+    "etag_fallback_directory_object_only": true,
+    "atomic_subtree_compare_not_claimed": true,
+    "generated_scopes_retired": true
+  },
+  "retained_backup_replacefile": {
+    "old_native_cloud_path_regression_failed": true,
+    "both_complete_snapshots_before_revert": true,
+    "private_backup_independent_owner": true,
+    "new_physical_publication_after_full_ack": true,
+    "restart_after_native_revert": true,
+    "original_cloud_id_and_path_kept": true,
+    "separate_backup_id_and_full_bytes": true,
+    "actual_personal_onedrive": true,
+    "cache_schema": 5
+  },
+  "delete_history_recovery": {
+    "preparation_and_history_ack_one_transaction": true,
+    "retained_intent_ack_replay": true,
+    "same_object_prior_rename_consumed": true,
+    "native_rename_delete_prepare_restart_passed": true
   }
 }

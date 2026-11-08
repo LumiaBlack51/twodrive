@@ -609,7 +609,13 @@ impl NativeCoordinator {
             .collect::<HashMap<_, _>>();
         let physical = entries
             .iter()
-            .map(|entry| (entry.volume_serial, entry.file_id))
+            .map(|entry| {
+                (
+                    entry.volume_serial,
+                    entry.file_id,
+                    entry.identity.as_deref(),
+                )
+            })
             .collect::<HashSet<_>>();
         let mut candidates = HashMap::new();
         for projection in projections
@@ -624,19 +630,18 @@ impl NativeCoordinator {
             else {
                 continue;
             };
-            let old_physical = (
-                projection
-                    .volume_serial
-                    .context("published volume missing")?,
-                u64::from_str_radix(
-                    projection
-                        .native_file_id
-                        .as_deref()
-                        .context("published physical identity missing")?,
-                    16,
-                )?,
-            );
-            let old_is_present = physical.contains(&old_physical);
+            let old_physical = projection
+                .native_file_id
+                .as_deref()
+                .map(|id| u64::from_str_radix(id, 16))
+                .transpose()?;
+            let old_is_present = old_physical.is_some_and(|id| {
+                physical.contains(&(
+                    projection.volume_serial.unwrap_or(0),
+                    id,
+                    Some(projection.tag.as_slice()),
+                ))
+            });
             if !old_is_present
                 && entry.volume_serial == self.owner.receipt().volume_serial
                 && entry
@@ -1436,6 +1441,14 @@ mod tests {
     #[test]
     #[ignore = "explicit NEW generated CFAPI root; new ordinary file through create-only receipt and published binding"]
     fn new_native_file_becomes_a_published_cloud_object_without_an_old_download() {
+        new_file_namespace_case(false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; rename/delete batch, prepare interruption, restart and unrelated progress"]
+    fn deletion_prepare_restart_retires_prior_rename_history() {
+        new_file_namespace_case(true);
+    }
+    fn new_file_namespace_case(interrupt_delete: bool) {
         let root = PathBuf::from(
             std::env::var_os("TWODRIVE_APPROVED_COORDINATOR_NEW_FILE_ROOT")
                 .expect("explicit generated root"),
@@ -1651,11 +1664,41 @@ mod tests {
                 "--nocapture",
             ])
             .env("TWODRIVE_NAMESPACE_CHILD_ROOT", coordinator.root())
-            .env("TWODRIVE_NAMESPACE_CHILD_ACTION", "delete")
+            .env(
+                "TWODRIVE_NAMESPACE_CHILD_ACTION",
+                if interrupt_delete {
+                    "rename_then_delete"
+                } else {
+                    "delete"
+                },
+            )
             .creation_flags(0x08000000)
             .output()
             .unwrap();
         assert!(output.status.success(), "generated deletion child failed");
+        let mut raw_after_prepare = 0;
+        if interrupt_delete {
+            deletions::INTERRUPT_AFTER_DELETE_PREPARE.with(|flag| flag.set(true));
+            assert!(coordinator.synchronize_once().is_err());
+            raw_after_prepare = coordinator
+                .bridge
+                .journal()
+                .database()
+                .pending_native_events(coordinator.binding().unwrap(), 1000)
+                .unwrap()
+                .len();
+            let receipt = coordinator.receipt().clone();
+            coordinator.disconnect().unwrap();
+            drop(coordinator);
+            let bridge = LocalFileBridge::open_bound(
+                Database::new(private.join("native.sqlite3")),
+                &cache,
+                Backend::new(provider.clone()),
+                "generated-new-native-file",
+            )
+            .unwrap();
+            coordinator = NativeCoordinator::resume(bridge, &root, &receipt).unwrap();
+        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         let deleted = loop {
             let progress = coordinator.synchronize_once().unwrap();
@@ -1664,6 +1707,14 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         };
+        let subsequent = coordinator.synchronize_once().unwrap();
+        let raw_remaining = coordinator
+            .bridge
+            .journal()
+            .database()
+            .pending_native_events(coordinator.binding().unwrap(), 1000)
+            .unwrap()
+            .len();
         let archive_count = coordinator
             .bridge
             .journal()
@@ -1673,8 +1724,33 @@ mod tests {
             .get_metadata(&projection.cloud_id)
             .unwrap()
             .is_none();
-        std::fs::remove_dir(coordinator.root().join("renamed-dir/sub")).unwrap();
-        std::fs::remove_dir(coordinator.root().join("renamed-dir")).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_coordinator::tests::namespace_rename_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("TWODRIVE_NAMESPACE_CHILD_ROOT", coordinator.root())
+            .env("TWODRIVE_NAMESPACE_CHILD_ACTION", "delete_dirs")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "generated directory deletion child failed"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        let mut directory_deletes = 0;
+        loop {
+            let progress = coordinator.synchronize_once().unwrap();
+            directory_deletes += progress.deleted;
+            if directory_deletes == 2 || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
         for name in artifacts {
             let path = coordinator.root().join(name);
             assert_eq!(
@@ -1692,6 +1768,10 @@ mod tests {
         assert_eq!(deleted.deferred, 0, "{deleted:?}");
         assert!(remote_missing);
         assert_eq!(archive_count, 1);
+        assert_eq!(directory_deletes, 2, "directory consumer did not finish");
+        assert_eq!(raw_after_prepare, 0, "prepare transaction left raw events");
+        assert_eq!(raw_remaining, 0, "deletion left covered history");
+        assert!(!subsequent.needs_namespace, "{subsequent:?}");
     }
     #[test]
     #[ignore = "child helper for explicit generated namespace tests"]
@@ -1715,6 +1795,16 @@ mod tests {
                 std::fs::rename(root.join("generated-dir"), root.join("renamed-dir")).unwrap()
             }
             "delete" => std::fs::remove_file(root.join("renamed-dir/sub/renamed.txt")).unwrap(),
+            "delete_dirs" => {
+                std::fs::remove_dir(root.join("renamed-dir/sub")).unwrap();
+                std::fs::remove_dir(root.join("renamed-dir")).unwrap();
+            }
+            "rename_then_delete" => {
+                let from = root.join("renamed-dir/sub/renamed.txt");
+                let to = root.join("renamed-dir/sub/deleted-after-rename.txt");
+                std::fs::rename(from, &to).unwrap();
+                std::fs::remove_file(to).unwrap();
+            }
             "file" => std::fs::rename(
                 root.join("renamed-dir/sub/generated-中文.txt"),
                 root.join("renamed-dir/sub/renamed.txt"),
@@ -1745,7 +1835,213 @@ mod tests {
             b"generated atomic replacement with a new physical identity",
         )
         .unwrap();
-        std::fs::rename(temporary, root.join(leaf)).unwrap();
+        if std::env::var_os("TWODRIVE_ATOMIC_CHILD_REPLACEFILE").is_some() {
+            use std::os::windows::ffi::OsStrExt;
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn ReplaceFileW(
+                    target: *const u16,
+                    replacement: *const u16,
+                    backup: *const u16,
+                    flags: u32,
+                    exclude: *mut core::ffi::c_void,
+                    reserved: *mut core::ffi::c_void,
+                ) -> i32;
+            }
+            let wide = |path: PathBuf| {
+                path.as_os_str()
+                    .encode_wide()
+                    .chain(Some(0))
+                    .collect::<Vec<_>>()
+            };
+            let target = wide(root.join(leaf));
+            let replacement = wide(temporary);
+            let backup = wide(root.join("generated-backup.wbk"));
+            assert_ne!(
+                unsafe {
+                    ReplaceFileW(
+                        target.as_ptr(),
+                        replacement.as_ptr(),
+                        backup.as_ptr(),
+                        0,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                0,
+                "{}",
+                std::io::Error::last_os_error()
+            );
+        } else {
+            std::fs::rename(temporary, root.join(leaf)).unwrap();
+        }
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; inspect actual ReplaceFileW target/backup identities"]
+    fn replacefile_backup_identity_probe() {
+        replacefile_backup_case(false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; restart after backup revert before durable completion"]
+    fn replacefile_backup_restarts_after_native_revert() {
+        replacefile_backup_case(true);
+    }
+    fn replacefile_backup_case(interrupt: bool) {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_REPLACEFILE_ROOT")
+                .expect("explicit generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let state = tempfile::tempdir().unwrap();
+        let private = state.path().canonicalize().unwrap();
+        let cache = private.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let provider = crate::local_files::tests::MockProvider::new().with_auxiliary_files();
+        let metadata = provider.list_all().unwrap().remove(0);
+        let plan = NamespacePlan::build(
+            &[
+                IndexedItem {
+                    id: "root".into(),
+                    parent: None,
+                    name: "root".into(),
+                    kind: "folder".into(),
+                    size: 0,
+                    etag: "v1".into(),
+                    modified: None,
+                    deleted: false,
+                },
+                IndexedItem {
+                    id: metadata.remote_id.clone(),
+                    parent: Some("root".into()),
+                    name: metadata.name.clone(),
+                    kind: "file".into(),
+                    size: metadata.size,
+                    etag: metadata.etag.clone(),
+                    modified: Some("1970-01-01T00:00:01Z".into()),
+                    deleted: false,
+                },
+            ],
+            "root",
+            100,
+            twodrive_local_files::names::ordinal_ignorecase_cmp,
+        )
+        .unwrap();
+        let bridge = LocalFileBridge::open_bound(
+            Database::new(private.join("native.sqlite3")),
+            &cache,
+            Backend::new(provider.clone()),
+            "generated-replacefile",
+        )
+        .unwrap();
+        let checkpoint = root.with_extension("receipt.json");
+        let mut coordinator = NativeCoordinator::create_new(
+            bridge,
+            &plan,
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+        )
+        .unwrap();
+        let path = coordinator.root().join(&metadata.name);
+        let original = std::fs::read(&path).unwrap();
+        let published = coordinator
+            .bridge
+            .journal()
+            .native_projection_for_id(&metadata.remote_id)
+            .unwrap()
+            .unwrap();
+        use std::os::windows::process::CommandExt;
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_coordinator::tests::atomic_replacement_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("TWODRIVE_ATOMIC_CHILD_ROOT", coordinator.root())
+            .env("TWODRIVE_ATOMIC_CHILD_LEAF", &metadata.name)
+            .env("TWODRIVE_ATOMIC_CHILD_REPLACEFILE", "1")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let entries = coordinator.owner.inventory().unwrap();
+        for entry in &entries {
+            println!(
+                "generated ReplaceFileW: target={} backup={} old_physical={} original_tag={} ordinary={}",
+                entry.relative_path == Path::new(&metadata.name),
+                entry.relative_path == Path::new("generated-backup.wbk"),
+                published.native_file_id.as_deref()
+                    == Some(format!("{:016x}", entry.file_id).as_str()),
+                entry.identity.as_deref() == Some(published.tag.as_slice()),
+                entry.identity.is_none()
+            );
+        }
+        if interrupt {
+            crate::local_files::INTERRUPT_BACKUP_AFTER_REVERT.with(|flag| flag.set(true));
+        }
+        let mut coordination = coordinator.synchronize_once();
+        if interrupt {
+            assert!(coordination.is_err());
+            let receipt = coordinator.receipt().clone();
+            coordinator.disconnect().unwrap();
+            drop(coordinator);
+            let bridge = LocalFileBridge::open_bound(
+                Database::new(private.join("native.sqlite3")),
+                &cache,
+                Backend::new(provider.clone()),
+                "generated-replacefile",
+            )
+            .unwrap();
+            coordinator = NativeCoordinator::resume(bridge, &root, &receipt).unwrap();
+            coordination = coordinator.synchronize_once();
+        }
+        let current_bytes = provider.download(&metadata.remote_id).unwrap();
+        let backup_remote = provider
+            .get_metadata_by_path("/generated-backup.wbk")
+            .unwrap();
+        let backup_cloud_bytes = backup_remote
+            .as_ref()
+            .map(|remote| provider.download(&remote.remote_id).unwrap());
+        let cloud = provider.get_metadata(&metadata.remote_id).unwrap().unwrap();
+        let target = std::fs::read(&path);
+        let backup = std::fs::read(coordinator.root().join("generated-backup.wbk"));
+        for entry in entries {
+            std::fs::remove_file(coordinator.root().join(entry.relative_path)).unwrap();
+        }
+        coordinator.retire_empty_generated_fixture().unwrap();
+        drop(coordinator);
+        std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(checkpoint).unwrap();
+        state.close().unwrap();
+        assert_eq!(
+            target.unwrap(),
+            b"generated atomic replacement with a new physical identity"
+        );
+        assert_eq!(backup.unwrap(), original);
+        assert_ne!(backup_remote.unwrap().remote_id, metadata.remote_id);
+        assert_eq!(backup_cloud_bytes.unwrap(), original);
+        assert_eq!(
+            current_bytes, b"generated atomic replacement with a new physical identity",
+            "{coordination:?}"
+        );
+        assert_eq!(
+            cloud.path, metadata.path,
+            "retained backup changed the logical cloud name; coordination={coordination:?}"
+        );
     }
     #[test]
     #[ignore = "explicit NEW generated CFAPI root; projected in-place edit, upload and updated native acknowledgement"]

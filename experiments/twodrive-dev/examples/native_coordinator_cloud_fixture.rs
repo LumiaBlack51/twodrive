@@ -104,7 +104,8 @@ fn run() -> anyhow::Result<()> {
             .join("generated.txt");
         let mut path = coordinator.root().join(&relative);
         fs::create_dir_all(path.parent().unwrap())?;
-        let bytes = b"generated coordinator complete bytes through native directory ordering";
+        let mut bytes: &[u8] =
+            b"generated coordinator complete bytes through native directory ordering";
         fs::write(&path, bytes)?;
         let progress = coordinator.synchronize_once()?;
         ensure!(
@@ -125,6 +126,51 @@ fn run() -> anyhow::Result<()> {
             "generated full-byte readback mismatch"
         );
         let original_id = file.remote_id;
+        let old_bytes = bytes;
+        let temporary = path.with_file_name("generated-update.tmp");
+        let backup_path = path.with_file_name("generated-backup.wbk");
+        let script=r#"
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class GeneratedReplaceFile { [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] public static extern bool ReplaceFileW(string target,string replacement,string backup,uint flags,IntPtr exclude,IntPtr reserved); }'
+[IO.File]::WriteAllText('__TEMP__','generated retained backup replacement target')
+if(![GeneratedReplaceFile]::ReplaceFileW('__TARGET__','__TEMP__','__BACKUP__',0,[IntPtr]::Zero,[IntPtr]::Zero)){exit 17}
+"#.replace("__TEMP__",&temporary.to_string_lossy().replace('\'',"''")).replace("__TARGET__",&path.to_string_lossy().replace('\'',"''")).replace("__BACKUP__",&backup_path.to_string_lossy().replace('\'',"''"));
+        use base64::Engine;
+        use std::os::windows::process::CommandExt;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        let child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+            .creation_flags(0x08000000)
+            .output()?;
+        ensure!(
+            child.status.success(),
+            "generated ReplaceFileW child failed"
+        );
+        let replaced = coordinator.synchronize_once()?;
+        ensure!(
+            replaced.deferred == 0 && !replaced.needs_namespace,
+            "generated backup replacement deferred: {replaced:?}"
+        );
+        bytes = b"generated retained backup replacement target";
+        let after = provider
+            .get_metadata(&original_id)?
+            .context("generated logical target missing")?;
+        ensure!(
+            after.path == file_path && provider.download(&original_id)? == bytes,
+            "retained backup changed logical target ID/path/bytes"
+        );
+        let backup = provider
+            .get_metadata_by_path(&format!("/{scope}/generated-child/generated-backup.wbk"))?
+            .context("generated backup missing")?;
+        ensure!(
+            backup.remote_id != original_id && provider.download(&backup.remote_id)? == old_bytes,
+            "generated backup identity/bytes differ"
+        );
+
         fs::rename(
             coordinator.root().join(&scope).join("generated-child"),
             coordinator.root().join(&scope).join("renamed-child"),
@@ -157,8 +203,6 @@ fn run() -> anyhow::Result<()> {
             "generated rename did not preserve ID/full bytes"
         );
         // A different process produces actual kernel delete notifications.
-        use base64::Engine;
-        use std::os::windows::process::CommandExt;
         let script = format!(
             "[IO.File]::Delete('{}')",
             path.to_string_lossy().replace('\'', "''")
@@ -188,29 +232,128 @@ fn run() -> anyhow::Result<()> {
                 && provider.get_metadata(&original_id)?.is_none(),
             "generated native conditional recycle deferred: {deleted:?}"
         );
-        for relative_dir in [
-            PathBuf::from(&scope).join("renamed-child"),
-            PathBuf::from(&scope),
-        ] {
-            let cloud_path = format!("/{}", relative_dir.to_string_lossy().replace('\\', "/"));
-            ensure!(
-                provider
-                    .graph
-                    .desktop_directory(&cloud_path, &mut || Ok(()))?
-                    .is_empty(),
-                "unexpected cloud child; cleanup stopped"
+        let backup = provider
+            .get_metadata(&backup.remote_id)?
+            .context("generated moved backup missing")?;
+        ensure!(
+            backup.path == format!("/{scope}/renamed-child/generated-backup.wbk")
+                && provider.download(&backup.remote_id)? == old_bytes,
+            "generated moved backup changed"
+        );
+
+        let external = |script: String| -> anyhow::Result<()> {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(
+                script
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>(),
             );
-            let directory = provider
-                .get_metadata_by_path(&cloud_path)?
-                .context("generated directory disappeared")?;
-            ensure!(directory.is_dir, "generated directory kind changed");
-            provider.graph.delete_item_bound(
+            let child = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+                .creation_flags(0x08000000)
+                .output()?;
+            ensure!(child.status.success(), "generated namespace child failed");
+            Ok(())
+        };
+        let backup_native = coordinator
+            .root()
+            .join(&scope)
+            .join("renamed-child/generated-backup.wbk");
+        external(format!(
+            "[IO.File]::Delete('{}')",
+            backup_native.to_string_lossy().replace('\'', "''")
+        ))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let progress = coordinator.synchronize_once()?;
+            if progress.deleted == 1 {
+                break;
+            }
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "generated backup recycle timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let child_cloud = format!("/{scope}/renamed-child");
+        let child = provider
+            .get_metadata_by_path(&child_cloud)?
+            .context("generated child missing")?;
+        let parent = provider
+            .get_metadata_by_path(&child.parent_path)?
+            .context("generated parent missing")?;
+        ensure!(
+            provider
+                .graph
+                .empty_directory_version_bound(
+                    &identity,
+                    &child.remote_id,
+                    &parent.remote_id,
+                    &child_cloud,
+                    &mut || Ok(())
+                )?
+                .is_some(),
+            "generated child not empty"
+        );
+        let late = provider.graph.create_directory_bound(
+            &identity,
+            &child.remote_id,
+            &format!("{child_cloud}/generated-late-child"),
+            &mut || Ok(()),
+        )?;
+        ensure!(
+            provider
+                .graph
+                .empty_directory_version_bound(
+                    &identity,
+                    &child.remote_id,
+                    &parent.remote_id,
+                    &child_cloud,
+                    &mut || Ok(())
+                )?
+                .is_none()
+                && provider.get_metadata(&late.remote_id)?.is_some(),
+            "observed nonempty directory was not preserved"
+        );
+        let late = provider
+            .get_metadata(&late.remote_id)?
+            .context("generated late child disappeared")?;
+        let late_stamp = provider
+            .graph
+            .empty_directory_version_bound(
                 &identity,
-                &directory.remote_id,
-                &directory.etag,
+                &late.remote_id,
+                &child.remote_id,
+                &late.path,
                 &mut || Ok(()),
-            )?;
-            fs::remove_dir(coordinator.root().join(relative_dir))?;
+            )?
+            .context("generated late child not empty")?;
+        provider.graph.delete_item_bound(
+            &identity,
+            &late.remote_id,
+            &late_stamp.etag,
+            &mut || Ok(()),
+        )?;
+        let child_native = coordinator.root().join(&scope).join("renamed-child");
+        let scope_native = coordinator.root().join(&scope);
+        external(format!(
+            "[IO.Directory]::Delete('{}');[IO.Directory]::Delete('{}')",
+            child_native.to_string_lossy().replace('\'', "''"),
+            scope_native.to_string_lossy().replace('\'', "''")
+        ))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let mut directory_deletes = 0;
+        loop {
+            let progress = coordinator.synchronize_once()?;
+            directory_deletes += progress.deleted;
+            if directory_deletes == 2 {
+                break;
+            }
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "generated directory recycle timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
         ensure!(
             provider
@@ -223,7 +366,7 @@ fn run() -> anyhow::Result<()> {
         fs::remove_dir(&root)?;
         println!(
             "{}",
-            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"native_file_delete_conditional_recycle":true,"generated_scopes_retired":true,"production_takeover":false})
+            serde_json::json!({"actual_cfapi":true,"actual_personal_onedrive":true,"automatic_parent_first_directories":2,"automatic_create_only_file":true,"native_and_cloud_full_byte_readback":true,"directory_and_file_moves_preserve_id_and_bytes":true,"native_file_delete_conditional_recycle":true,"native_directory_delete_object_version_recycle":true,"retained_backup_keeps_original_target_id_and_backup_bytes":true,"observed_nonempty_directory_is_not_recycled":true,"generated_scopes_retired":true,"production_takeover":false})
         );
         Ok(())
     })();

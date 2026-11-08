@@ -5,6 +5,8 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NativeDeleteIntent {
+    #[serde(default)]
+    pub directory_parent_id: Option<String>,
     pub publication: NativeProjection,
     pub version: MetadataEntry,
     pub root_receipt: String,
@@ -53,7 +55,74 @@ fn proof(intent: &NativeDeleteIntent) -> anyhow::Result<()> {
     );
     Ok(())
 }
+fn consume_history(conn: &rusqlite::Connection, intent: &NativeDeleteIntent) -> anyhow::Result<()> {
+    proof(intent)?;
+    let root: serde_json::Value = serde_json::from_str(&intent.root_receipt)?;
+    let mut stmt = conn.prepare(
+        "SELECT sequence,payload FROM native_event_log WHERE binding=?1 AND sequence<=?2",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![intent.publication.root_binding, intent.completion_sequence],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    for (sequence, payload) in rows {
+        let event: serde_json::Value = serde_json::from_str(&payload)?;
+        if event["schema_version"] == 1
+            && event["root_file_id"] == root["file_id"]
+            && event["volume_serial"].as_u64() == Some(intent.physical.volume_serial as u64)
+            && event["file_id"].as_u64() == Some(intent.physical.file_id)
+            && event["identity"] == serde_json::to_value(&intent.publication.tag)?
+            && event["kind"].as_str().is_some_and(|kind| {
+                matches!(
+                    kind,
+                    "rename_requested"
+                        | "rename_completed"
+                        | "delete_requested"
+                        | "delete_completed"
+                )
+            })
+        {
+            conn.execute(
+                "DELETE FROM native_event_log WHERE binding=?1 AND sequence=?2 AND payload=?3",
+                params![intent.publication.root_binding, sequence, payload],
+            )?;
+        }
+    }
+    Ok(())
+}
 impl CacheJournal {
+    pub fn native_delete_for_tag(
+        &self,
+        root: &str,
+        tag: &[u8],
+    ) -> anyhow::Result<Option<(NativeDeleteIntent, String)>> {
+        let conn = journal_connection(&self.0.db)?;
+        let row=conn.query_row("SELECT intent,state FROM local_native_deletes WHERE root_binding=?1 AND json_extract(intent,'$.publication.tag')=?2",params![root,serde_json::to_string(tag)?],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).optional()?;
+        row.map(|(intent, state)| Ok((serde_json::from_str(&intent)?, state)))
+            .transpose()
+    }
+    pub fn acknowledge_native_delete_history(
+        &self,
+        intent: &NativeDeleteIntent,
+    ) -> anyhow::Result<()> {
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure!(
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_native_deletes WHERE local_id=?1 AND intent=?2)",
+                params![intent.publication.local_id, serde_json::to_string(intent)?],
+                |r| r.get::<_, bool>(0)
+            )?,
+            "retained delete decision changed"
+        );
+        consume_history(&tx, intent)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn native_delete(&self, id: &str) -> anyhow::Result<Option<(NativeDeleteIntent, String)>> {
         let raw = journal_connection(&self.0.db)?
             .query_row(
@@ -90,12 +159,16 @@ impl CacheJournal {
         let p = &intent.publication;
         let v = &intent.version;
         ensure!(
-            !p.directory
-                && p.state == "published"
+            p.state == "published"
                 && p.path != "/"
                 && v.remote_id == p.cloud_id
                 && v.path == p.path
-                && !v.is_dir
+                && v.is_dir == p.directory
+                && (!p.directory
+                    || intent
+                        .directory_parent_id
+                        .as_ref()
+                        .is_some_and(|id| !id.is_empty()))
                 && !v.etag.is_empty()
                 && intent.physical.file_id != 0,
             "invalid native file delete intent"
@@ -121,6 +194,8 @@ impl CacheJournal {
                 serde_json::from_str::<NativeDeleteIntent>(&old)? == *intent,
                 "another native delete needs recovery"
             );
+            consume_history(&tx, intent)?;
+            tx.commit()?;
             return Ok(());
         }
         ensure!(
@@ -135,7 +210,17 @@ impl CacheJournal {
             physical || captured.is_some_and(|c| c.physical == intent.physical),
             "native delete physical identity changed"
         );
-        ensure!(tx.query_row("SELECT EXISTS(SELECT 1 FROM files WHERE remote_id=?1 AND cloud_remote_id=?2 AND path=?3 AND etag=?4 AND is_dir=0)",params![p.local_id,p.cloud_id,p.path,v.etag],|r|r.get::<_,bool>(0))?,"native delete cloud version changed");
+        ensure!(tx.query_row("SELECT EXISTS(SELECT 1 FROM files WHERE remote_id=?1 AND cloud_remote_id=?2 AND path=?3 AND (is_dir=1 OR etag=?4) AND is_dir=?5)",params![p.local_id,p.cloud_id,p.path,v.etag,p.directory],|r|r.get::<_,bool>(0))?,"native delete cloud version changed");
+        if p.directory {
+            ensure!(
+                !tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM files WHERE substr(path,1,length(?1)+1)=?1||'/')",
+                    [&p.path],
+                    |r| r.get::<_, bool>(0)
+                )?,
+                "directory delete waits for owned descendants"
+            );
+        }
         if has_journal_record(&tx, &p.local_id)? {
             let state = snapshot(&tx, &p.local_id)?;
             ensure!(
@@ -159,6 +244,7 @@ impl CacheJournal {
             ensure!(tx.query_row("SELECT EXISTS(SELECT 1 FROM native_event_log WHERE sequence=?1 AND binding=?2 AND payload=?3)",params![sequence,p.root_binding,payload],|r|r.get::<_,bool>(0))?,"native delete kernel proof no longer durable");
         }
         tx.execute("INSERT INTO local_native_deletes(local_id,root_binding,intent,state) VALUES(?1,?2,?3,'prepared') ON CONFLICT(local_id) DO UPDATE SET root_binding=excluded.root_binding,intent=excluded.intent,state='prepared'",params![p.local_id,p.root_binding,serde_json::to_string(intent)?])?;
+        consume_history(&tx, intent)?;
         tx.commit()?;
         Ok(())
     }
@@ -207,6 +293,30 @@ impl CacheJournal {
         ensure!(journal_connection(&self.0.db)?.execute("UPDATE local_native_deletes SET state='prepared' WHERE local_id=?1 AND state='dispatched' AND intent=?2",params![id,serde_json::to_string(&intent)?])?==1,"native delete reconciliation fence changed");
         Ok(())
     }
+    /// The adapter has re-observed the same owned directory as empty, including
+    /// its original parent identity. Refresh only this collection's recycle CAS.
+    pub fn retry_native_empty_directory(
+        &self,
+        id: &str,
+        current: &MetadataEntry,
+    ) -> anyhow::Result<()> {
+        let (mut intent, state) = self
+            .native_delete(id)?
+            .context("native directory delete missing")?;
+        ensure!(
+            state == "dispatched"
+                && intent.publication.directory
+                && current.is_dir
+                && current.remote_id == intent.version.remote_id
+                && current.path == intent.version.path
+                && !current.etag.is_empty(),
+            "native directory recycle readback changed scope"
+        );
+        let old = serde_json::to_string(&intent)?;
+        intent.version = current.clone();
+        ensure!(journal_connection(&self.0.db)?.execute("UPDATE local_native_deletes SET intent=?2,state='prepared' WHERE local_id=?1 AND state='dispatched' AND intent=?3",params![id,serde_json::to_string(&intent)?,old])?==1,"native directory reconciliation fence changed");
+        Ok(())
+    }
     pub fn apply_native_delete(&self, id: &str) -> anyhow::Result<()> {
         let (intent, state) = self.native_delete(id)?.context("native delete missing")?;
         if state == "applied" {
@@ -232,7 +342,7 @@ impl CacheJournal {
             projection::get(&tx, id)?.as_ref() == Some(&intent.publication)
                 && record.metadata.path == intent.version.path
                 && record.cloud_remote_id.as_deref() == Some(intent.version.remote_id.as_str())
-                && record.metadata.etag == intent.version.etag,
+                && (record.metadata.is_dir || record.metadata.etag == intent.version.etag),
             "native delete owner changed before retirement"
         );
         if has_journal_record(&tx, id)? {

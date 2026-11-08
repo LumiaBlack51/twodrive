@@ -38,6 +38,13 @@ impl Capabilities {
 }
 
 pub trait Provider: CloudBackend {
+    fn empty_directory_version_bound(
+        &self,
+        _entry: &MetadataEntry,
+        _parent_id: &str,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        anyhow::bail!("content-conditional empty-directory recycle unavailable")
+    }
     fn create_directory_bound(
         &self,
         _parent: &MetadataEntry,
@@ -89,6 +96,18 @@ pub struct Backend {
     paused: Option<PathBuf>,
 }
 impl Backend {
+    pub fn empty_directory_version_bound(
+        &self,
+        entry: &MetadataEntry,
+        parent_id: &str,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.check_pause()?;
+        ensure!(
+            entry.is_dir && entry.path != "/" && !parent_id.is_empty(),
+            "invalid directory recycle scope"
+        );
+        self.inner.empty_directory_version_bound(entry, parent_id)
+    }
     pub fn create_directory_bound(
         &self,
         parent: &MetadataEntry,

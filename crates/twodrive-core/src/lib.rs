@@ -16,9 +16,9 @@ pub use database::Database;
 pub use database::NativeWatchState;
 pub use database::cloud::{CloudIdentity, DownloadTask, IndexedItem};
 pub use database::local_journal::{
-    CacheJournal, CacheReadLease, CacheSnapshot, CacheWriteLease, NativeCaptureBinding,
-    NativeCreation, NativeDeleteIntent, NativeFileIdentity, NativeMoveIntent, NativeProjection,
-    UploadLease,
+    CacheJournal, CacheReadLease, CacheSnapshot, CacheWriteLease, NativeBackupCopy,
+    NativeCaptureBinding, NativeCreation, NativeDeleteIntent, NativeFileIdentity, NativeMoveIntent,
+    NativeProjection, UploadLease,
 };
 pub use domain::{
     CoreError, DeleteFailureKind, FileRecord, FileState, MetadataEntry, PendingDelete,

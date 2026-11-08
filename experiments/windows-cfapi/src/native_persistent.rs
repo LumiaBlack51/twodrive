@@ -575,6 +575,60 @@ impl PersistentSession {
     ) -> Result<T> {
         self.with_replacement_capture_staged(relative, identity, |_, _| Ok(()), action)
     }
+    /// Resume a prepared backup conversion even if the prior process already
+    /// removed its cloud tag. Ordinary data is never converted back on resume.
+    pub fn with_backup_capture<T>(
+        &self,
+        relative: &Path,
+        identity: &[u8],
+        physical: twodrive_core::NativeFileIdentity,
+        action: impl FnOnce(Option<&NativeCapture<'_>>) -> Result<T>,
+    ) -> Result<T> {
+        let (parent, _guards) = self.guard_relative_parent(relative)?;
+        let path = parent.join(relative.file_name().ok_or("backup leaf missing")?);
+        let mut lease = RetainedPlaceholder::open_node(&path, identity, 0, false)?;
+        let (volume, id, directory) = file_binding(lease.handle.0)?;
+        let (root_id, root_identity) = root_identity(lease.handle.0)?;
+        if directory
+            || volume != physical.volume_serial
+            || id != physical.file_id
+            || root_id != self.receipt.file_id
+            || root_identity != self.receipt.identity
+        {
+            return Err("native backup ownership changed".into());
+        }
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                lease.handle.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                size_of_val(&tag) as u32,
+            )
+        } == 0
+        {
+            return Err("backup attributes unavailable".into());
+        }
+        if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+            if tag.ReparseTag != 0
+                || tag.FileAttributes
+                    & (FILE_ATTRIBUTE_OFFLINE
+                        | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                        | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+                    != 0
+            {
+                return Err("ordinary backup is not resident".into());
+            }
+            return action(None);
+        }
+        let mut size = 0;
+        if unsafe { GetFileSizeEx(lease.handle.0, &mut size) } == 0 || size < 0 {
+            return Err("backup size unavailable".into());
+        }
+        lease.size = usize::try_from(size).map_err(|_| "backup size overflow")?;
+        lease.inspect()?;
+        action(Some(&NativeCapture(&lease)))
+    }
 
     pub fn with_replacement_capture_staged<T>(
         &self,

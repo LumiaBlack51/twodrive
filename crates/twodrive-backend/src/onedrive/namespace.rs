@@ -85,6 +85,72 @@ impl GraphBackend {
         let drive_verified = self.verify_namespace_drive(&value, identity, check)?;
         namespace_receipt(value, None, parent_id, target_path, true, drive_verified)
     }
+    /// Observe an empty bound directory before conditional service recycling.
+    /// Prefer cTag; some personal accounts omit it even with explicit $select.
+    /// The eTag fallback guards the directory object, not a subtree snapshot.
+    pub fn empty_directory_version_bound(
+        &self,
+        identity: &CloudIdentity,
+        item_id: &str,
+        parent_id: &str,
+        path: &str,
+        check: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        ensure!(
+            path != "/" && !parent_id.is_empty(),
+            "directory root cannot be recycled"
+        );
+        self.namespace_authority(identity, check)?;
+        let url = format!(
+            "{}?$select=id,name,folder,eTag,cTag,parentReference,lastModifiedDateTime,deleted,remoteItem,package",
+            endpoint(&["drives", &identity.drive, "items", item_id])?
+        );
+        let validate = |value: &Value| -> anyhow::Result<String> {
+            ensure!(
+                value["id"].as_str() == Some(item_id)
+                    && value["name"].as_str() == path.rsplit('/').next()
+                    && value.pointer("/parentReference/id").and_then(Value::as_str)
+                        == Some(parent_id)
+                    && value.get("folder").is_some()
+                    && value.get("deleted").is_none()
+                    && value.get("remoteItem").is_none()
+                    && value.get("package").is_none()
+                    && value["eTag"].as_str().is_some_and(|tag| !tag.is_empty()),
+                "bound empty-directory metadata changed"
+            );
+            Ok(value["cTag"]
+                .as_str()
+                .filter(|tag| !tag.is_empty())
+                .or_else(|| value["eTag"].as_str())
+                .context("directory has no object-version precondition")?
+                .to_string())
+        };
+        let before = self.browse_json(&url, check)?;
+        let content = validate(&before)?;
+        let children = format!(
+            "{}?$top=1&$select=id",
+            endpoint(&["drives", &identity.drive, "items", item_id, "children"])?
+        );
+        let page = self.browse_json(&children, check)?;
+        if !page["value"]
+            .as_array()
+            .context("invalid empty-directory page")?
+            .is_empty()
+            || page.get("@odata.nextLink").is_some()
+        {
+            return Ok(None);
+        }
+        let after = self.browse_json(&url, check)?;
+        ensure!(
+            validate(&after)? == content && after["eTag"] == before["eTag"],
+            "directory changed during empty-content check"
+        );
+        let mut metadata = serde_json::from_value::<GraphDriveItem>(after)?
+            .into_metadata_at_path(path)
+            .context("invalid empty-directory metadata")?;
+        metadata.etag = content;
+        Ok(Some(metadata))
+    }
 
     pub fn move_item_bound(
         &self,
@@ -360,6 +426,69 @@ mod tests {
                     receipt.etag, "v1",
                     "authority readback must not acknowledge a later version"
                 );
+            }
+            worker.join().unwrap();
+        }
+    }
+    #[test]
+    fn directory_recycle_version_requires_stable_content_and_an_empty_bound_id() {
+        for scenario in 0..4 {
+            let server = Server::http("127.0.0.1:0").unwrap();
+            let (_sandbox, graph) = super::super::desktop::tests::backend(&server);
+            let worker = std::thread::spawn(move || {
+                identity(&server);
+                let metadata = |tag: &str| {
+                    let mut value = json!({"id":"directory","name":"empty","folder":{},"eTag":"metadata-tag","cTag":tag,"parentReference":{"id":"parent","driveId":"DRIVE-A"}});
+                    if scenario == 3 {
+                        value.as_object_mut().unwrap().remove("cTag");
+                    }
+                    value.to_string()
+                };
+                let request = server.recv().unwrap();
+                assert!(
+                    request
+                        .url()
+                        .starts_with("/v1.0/drives/drive-a/items/directory?")
+                );
+                request
+                    .respond(Response::from_string(metadata("content-1")))
+                    .unwrap();
+                let request = server.recv().unwrap();
+                assert!(
+                    request
+                        .url()
+                        .starts_with("/v1.0/drives/drive-a/items/directory/children?")
+                );
+                request
+                    .respond(Response::from_string(if scenario == 1 {
+                        r#"{"value":[{"id":"new-child"}]}"#
+                    } else {
+                        r#"{"value":[]}"#
+                    }))
+                    .unwrap();
+                if scenario != 1 {
+                    let request = server.recv().unwrap();
+                    request
+                        .respond(Response::from_string(metadata(if scenario == 2 {
+                            "content-2"
+                        } else {
+                            "content-1"
+                        })))
+                        .unwrap();
+                }
+            });
+            let result = graph.empty_directory_version_bound(
+                &authority(),
+                "directory",
+                "parent",
+                "/generated/empty",
+                &mut || Ok(()),
+            );
+            match scenario {
+                0 => assert_eq!(result.unwrap().unwrap().etag, "content-1"),
+                3 => assert_eq!(result.unwrap().unwrap().etag, "metadata-tag"),
+                1 => assert!(result.unwrap().is_none()),
+                _ => assert!(result.is_err()),
             }
             worker.join().unwrap();
         }

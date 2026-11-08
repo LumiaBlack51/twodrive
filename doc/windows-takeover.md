@@ -397,7 +397,13 @@ phase can coalesce replacements or cancel a restored object before dispatch.
 Conditional recycle receipts retire visible metadata but retain private revisions
 under an independent archive journal key, protected from retired-cache pruning.
 Generated actual native and actual personal OneDrive file-delete runs passed.
-Directory delete, remote delta and pin/eviction consumers remain incomplete;
+Directory deletion now waits for known descendants, verifies the bound parent
+and an observed empty directory, and uses its service version for recycling.
+This personal account omits directory cTag even with explicit selection: eTag
+fallback protects the directory object and does not claim an atomic subtree
+snapshot. Already observed nonempty directories are retained. Generated actual
+Windows and personal-cloud two-level directory recycling passed.
+Remote delta and pin/eviction consumers remain incomplete;
 production takeover is not enabled by these tests.
 
 The coordinator integration exposed a shutdown tail: native disconnect returned
@@ -451,3 +457,16 @@ and rejects different nonzero keys. Failed/present-object request histories need
 a held no-delete-sharing namespace lease for no-op consumption. The generated
 regression holds DELETE access to prove the decision waits for that handle to
 close. See TD-20261108-39. A file-ID lookup failure is never deletion authority.
+
+ReplaceFileW with a retained backup previously moved the cloud target's name to
+the backup; the old native regression failed. The target is now captured under
+its logical identity, both complete revisions are independently owned before
+reverting the old backup's cloud tag, and the obsolete physical binding is cleared
+until final target acknowledgement. An interruption after native revert is
+recoverable; independent backup bytes remain protected from pruning. Actual
+personal-cloud generated validation preserves target ID/path and backup bytes.
+Private cache schema 5 prevents older owners from bypassing these decisions.
+Deletion preparation consumes its covered same-object history in the same FULL
+transaction; retained decisions can replay legacy ACK boundaries. A rename/delete
+batch with a prepare interruption passed actual native restart validation. See
+TD-20261108-40 through -42 for evidence and service limits.

@@ -338,7 +338,7 @@ fn native_creation_claim_survives_restart_and_new_edits_veto_the_first_receipt()
     let j = CacheJournal::open(db.clone(), &root, &binding).unwrap();
     assert_eq!(
         db.get_state_value("local_cache_schema").unwrap().as_deref(),
-        Some("4")
+        Some("5")
     );
     assert_eq!(j.native_creations().unwrap()[0].state, "preparing");
     fs::write(&path, EDITED).unwrap();
@@ -1075,7 +1075,8 @@ fn native_delete_requires_kernel_proof_and_keeps_private_revisions_owned() {
     let complete = event("delete_completed");
     let request_sequence = db.append_native_event("generated-root", &request).unwrap();
     let completion_sequence = db.append_native_event("generated-root", &complete).unwrap();
-    let intent = twodrive_core::NativeDeleteIntent {
+    let mut intent = twodrive_core::NativeDeleteIntent {
+        directory_parent_id: None,
         publication: journal.native_projection_for_id(ID).unwrap().unwrap(),
         version,
         root_receipt: root,
@@ -1101,9 +1102,21 @@ fn native_delete_requires_kernel_proof_and_keeps_private_revisions_owned() {
     bad.completion_payload = mismatched.to_string();
     assert!(journal.prepare_native_delete(&bad).is_err());
     journal.prepare_native_delete(&intent).unwrap();
+    assert!(
+        db.pending_native_events("generated-root", 100)
+            .unwrap()
+            .is_empty(),
+        "preparation must atomically consume its history"
+    );
     assert!(journal.snapshot(ID).unwrap().pending_operations);
     assert!(journal.cancel_prepared_native_delete(ID).unwrap());
     assert!(!journal.snapshot(ID).unwrap().pending_operations);
+    intent.request_sequence = db
+        .append_native_event("generated-root", &intent.request_payload)
+        .unwrap();
+    intent.completion_sequence = db
+        .append_native_event("generated-root", &intent.completion_payload)
+        .unwrap();
     journal.prepare_native_delete(&intent).unwrap();
     // Once copied into the durable decision, raw hints can be consumed exactly.
     db.acknowledge_native_event_decisions(
@@ -1133,4 +1146,138 @@ fn native_delete_requires_kernel_proof_and_keeps_private_revisions_owned() {
     assert!(!journal.native_work_pending().unwrap());
     journal.apply_native_delete(ID).unwrap();
     assert_eq!(journal.native_deleted_archive_count().unwrap(), 1);
+}
+
+#[test]
+fn retained_backup_split_requires_target_snapshot_and_retains_both_revisions() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, original) = paths(temp.path());
+    db.init().unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(
+        ID,
+        "/generated.txt",
+        ORIGINAL.len() as u64,
+        1,
+        "version-1",
+    ))
+    .unwrap();
+    let binding = hash(b"generated-provider-binding");
+    let journal = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    let tag = b"generated-backup-original-tag";
+    journal
+        .prepare_native_projection(ID, "generated-root", tag)
+        .unwrap();
+    journal
+        .complete_native_projection(ID, "generated-root", tag, 7, 9)
+        .unwrap();
+    let source = journal.native_projection_for_id(ID).unwrap().unwrap();
+    fs::write(&original, ORIGINAL).unwrap();
+    journal
+        .publish_download(ID, 0, &original, &hash(ORIGINAL), "version-1")
+        .unwrap();
+    let target = cache.join("replacement.bin");
+    fs::write(&target, EDITED).unwrap();
+    let backup = cache.join("retained-backup.bin");
+    fs::write(&backup, ORIGINAL).unwrap();
+    let copy = twodrive_core::NativeBackupCopy {
+        sequence: 0,
+        source: source.clone(),
+        path: "/generated.wbk".into(),
+        physical: twodrive_core::NativeFileIdentity {
+            volume_serial: 7,
+            file_id: 9,
+        },
+        target: twodrive_core::NativeFileIdentity {
+            volume_serial: 7,
+            file_id: 10,
+        },
+        cache_path: backup.clone(),
+        digest: hash(ORIGINAL),
+        size: ORIGINAL.len() as u64,
+        modified_unix: 1,
+        state: "prepared".into(),
+    };
+    assert!(
+        journal
+            .prepare_native_backup_copy(copy.clone(), digest)
+            .is_err(),
+        "backup conversion must wait for target bytes"
+    );
+    journal.record_native_edit(ID).unwrap();
+    journal
+        .stage_projected_native_edit(
+            ID,
+            journal.snapshot(ID).unwrap().generation,
+            &target,
+            EDITED.len() as u64,
+            &source,
+            copy.target,
+        )
+        .unwrap();
+    let mut wrong = copy.clone();
+    wrong.digest = hash(EDITED);
+    assert!(
+        journal.prepare_native_backup_copy(wrong, digest).is_err(),
+        "digest must be verified under the final private lease"
+    );
+    let prepared = journal.prepare_native_backup_copy(copy, digest).unwrap();
+    assert!(
+        journal.begin_upload(ID, digest).is_err(),
+        "prepared identity conversion fences new uploads"
+    );
+    assert!(!db.remove_unreferenced_cache(&backup).unwrap());
+    drop(journal);
+    let journal = CacheJournal::open(db.clone(), &cache, &binding).unwrap();
+    assert_eq!(
+        journal
+            .native_backup_copies("generated-root")
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        journal
+            .native_projection_for_id(ID)
+            .unwrap()
+            .unwrap()
+            .native_file_id
+            .as_deref(),
+        Some("0000000000000009")
+    );
+    journal
+        .complete_native_backup_copy(prepared.sequence)
+        .unwrap();
+    assert!(
+        journal
+            .native_projection_for_id(ID)
+            .unwrap()
+            .unwrap()
+            .native_file_id
+            .is_none(),
+        "obsolete native identity must not be reassigned to the backup"
+    );
+    assert_eq!(
+        journal
+            .native_capture_binding(ID)
+            .unwrap()
+            .unwrap()
+            .physical
+            .file_id,
+        10
+    );
+    let lease = journal.begin_upload(ID, digest).unwrap();
+    assert!(
+        lease
+            .acknowledge(
+                &MetadataEntry::new_file(ID, "/generated.txt", EDITED.len() as u64, 2, "version-2"),
+                &hash(EDITED)
+            )
+            .unwrap()
+    );
+    assert_eq!(fs::read(&target).unwrap(), EDITED);
+    assert_eq!(fs::read(&backup).unwrap(), ORIGINAL);
+    assert!(
+        !db.remove_unreferenced_cache(&backup).unwrap(),
+        "backup remains independent recovery material"
+    );
 }

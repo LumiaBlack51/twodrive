@@ -9,6 +9,8 @@ pub(super) struct DeletionProgress {
     pub waiting: usize,
     pub error: Option<String>,
 }
+#[cfg(all(test, feature = "native-test-hooks"))]
+thread_local! {pub(super) static INTERRUPT_AFTER_DELETE_PREPARE:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 impl NativeCoordinator {
     fn supersedes_delete(
         entries: &[NativeEntry],
@@ -18,7 +20,8 @@ impl NativeCoordinator {
         Ok(entries.iter().any(|e| {
             (e.volume_serial == intent.physical.volume_serial
                 && e.file_id == intent.physical.file_id)
-                || (e.relative_path == relative
+                || (!intent.publication.directory
+                    && e.relative_path == relative
                     && !e.directory
                     && e.identity
                         .as_deref()
@@ -28,6 +31,26 @@ impl NativeCoordinator {
     pub(super) fn synchronize_deletions(&mut self) -> anyhow::Result<DeletionProgress> {
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
+        let mut replayed = HashSet::new();
+        for (_, payload) in db.pending_native_events(&binding, 1000)? {
+            let event: NativeEvent = serde_json::from_str(&payload)?;
+            ensure!(
+                event.schema_version == 1
+                    && event.root_file_id == self.receipt().file_id
+                    && event.volume_serial == self.receipt().volume_serial,
+                "retained delete event root changed"
+            );
+            if replayed.insert(event.identity.clone())
+                && let Some((intent, _)) = self
+                    .bridge
+                    .journal()
+                    .native_delete_for_tag(&binding, &event.identity)?
+            {
+                self.bridge
+                    .journal()
+                    .acknowledge_native_delete_history(&intent)?;
+            }
+        }
         let events = db
             .pending_native_events(&binding, 1000)?
             .into_iter()
@@ -122,9 +145,11 @@ impl NativeCoordinator {
             })
             .map(|(_, _, e)| e.identity.as_slice())
             .collect::<HashSet<_>>();
+        let mut projections = projections.iter().collect::<Vec<_>>();
+        projections.sort_by_key(|p| std::cmp::Reverse(p.path.matches('/').count()));
         for p in projections
-            .iter()
-            .filter(|p| !p.directory && completed_tags.contains(p.tag.as_slice()))
+            .into_iter()
+            .filter(|p| completed_tags.contains(p.tag.as_slice()))
         {
             if existing.iter().any(|(i, s)| {
                 i.publication.local_id == p.local_id
@@ -134,9 +159,10 @@ impl NativeCoordinator {
             }
             let relative = Self::relative(&p.path)?;
             // A complete same-path replacement belongs to the data consumer.
-            if entries
-                .iter()
-                .any(|e| e.relative_path == relative && !e.directory)
+            if !p.directory
+                && entries
+                    .iter()
+                    .any(|e| e.relative_path == relative && !e.directory)
             {
                 continue;
             }
@@ -186,16 +212,45 @@ impl NativeCoordinator {
                 let record = db
                     .get_by_remote_id(&p.local_id)?
                     .context("native deleted record missing")?;
-                let version = self
-                    .bridge
-                    .backend()
-                    .get_metadata(&p.cloud_id)?
-                    .unwrap_or_else(|| {
-                        let mut version = record.metadata.clone();
-                        version.remote_id = p.cloud_id.clone();
-                        version
-                    });
+                if p.directory && !db.list_descendants(&p.path)?.is_empty() {
+                    continue;
+                }
+                let directory_parent_id = if p.directory {
+                    Some(if record.metadata.parent_path == "/" {
+                        db.get_state_value("native_cloud_root_id")?
+                            .context("directory parent root missing")?
+                    } else {
+                        db.get_by_path(&record.metadata.parent_path)?
+                            .and_then(|r| r.cloud_remote_id)
+                            .context("directory parent cloud identity missing")?
+                    })
+                } else {
+                    None
+                };
+                let version = if p.directory {
+                    let mut entry = record.metadata.clone();
+                    entry.remote_id = p.cloud_id.clone();
+                    let Some(stamp) = self.bridge.backend().empty_directory_version_bound(
+                        &entry,
+                        directory_parent_id.as_deref().unwrap(),
+                    )?
+                    else {
+                        progress.waiting += 1;
+                        continue;
+                    };
+                    stamp
+                } else {
+                    self.bridge
+                        .backend()
+                        .get_metadata(&p.cloud_id)?
+                        .unwrap_or_else(|| {
+                            let mut version = record.metadata.clone();
+                            version.remote_id = p.cloud_id.clone();
+                            version
+                        })
+                };
                 let intent = NativeDeleteIntent {
+                    directory_parent_id,
                     publication: p.clone(),
                     version,
                     root_receipt: serde_json::to_string(self.receipt())?,
@@ -207,6 +262,11 @@ impl NativeCoordinator {
                     not_before_unix: twodrive_core::now_unix() + 2,
                 };
                 self.bridge.journal().prepare_native_delete(&intent)?;
+                #[cfg(all(test, feature = "native-test-hooks"))]
+                if INTERRUPT_AFTER_DELETE_PREPARE.with(|flag| flag.replace(false)) {
+                    anyhow::bail!("generated interruption after delete prepare");
+                }
+
                 db.acknowledge_native_event_decisions(
                     &binding,
                     &[
@@ -235,9 +295,33 @@ impl NativeCoordinator {
                     {
                         None => self.bridge.journal().receive_native_delete(id)?,
                         Some(current) => {
-                            self.bridge
-                                .journal()
-                                .retry_native_delete_unchanged(id, &current)?;
+                            let current = if intent.publication.directory {
+                                ensure!(
+                                    current.path == intent.version.path,
+                                    "deleted directory moved remotely"
+                                );
+                                self.bridge
+                                    .backend()
+                                    .empty_directory_version_bound(
+                                        &current,
+                                        intent
+                                            .directory_parent_id
+                                            .as_deref()
+                                            .context("directory parent receipt missing")?,
+                                    )?
+                                    .context("directory gained remote children")?
+                            } else {
+                                current
+                            };
+                            if intent.publication.directory {
+                                self.bridge
+                                    .journal()
+                                    .retry_native_empty_directory(id, &current)?;
+                            } else {
+                                self.bridge
+                                    .journal()
+                                    .retry_native_delete_unchanged(id, &current)?;
+                            }
                             if Self::supersedes_delete(&entries, &intent)? {
                                 self.bridge.journal().cancel_prepared_native_delete(id)?;
                                 return Ok(false);
@@ -245,18 +329,17 @@ impl NativeCoordinator {
                         }
                     }
                 }
-                let current = self
+                let (active, current) = self
                     .bridge
                     .journal()
                     .native_delete(id)?
-                    .context("native delete recovery missing")?
-                    .1;
+                    .context("native delete recovery missing")?;
                 if current == "prepared" {
                     if twodrive_core::now_unix() < intent.not_before_unix {
                         return Ok(true);
                     }
                     if self.bridge.journal().dispatch_native_delete(id)? {
-                        match self.bridge.backend().delete_bound(&intent.version) {
+                        match self.bridge.backend().delete_bound(&active.version) {
                             Ok(()) => self.bridge.journal().receive_native_delete(id)?,
                             Err(error) => {
                                 if error
