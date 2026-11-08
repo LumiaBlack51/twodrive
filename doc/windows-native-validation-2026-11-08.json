@@ -679,5 +679,31 @@
     "runtime_copied_outside_build_cache": true,
     "microsoft_client_changed": false,
     "school_account_stop_authorization_pending": true
+  },
+  "staged_refresh_before_personal_only_handoff": {
+    "captured_date": "2026-11-08",
+    "original_client_running": true,
+    "school_sync_must_remain_running": true,
+    "actual_cutover_performed": false,
+    "catalogue_files": 12746,
+    "catalogue_directories": 7425,
+    "publications": 20171,
+    "logical_bytes": 105690027207,
+    "durable_work_items": 0,
+    "source_files": 12749,
+    "source_directories": 7425,
+    "all_cloud_paths_types_sizes_match_source": true,
+    "source_only_auxiliary_or_unused_vault_items": 3,
+    "verified_source_replicas": 2071,
+    "verified_replica_bytes": 759185275,
+    "new_replica_files": 1,
+    "new_replica_bytes": 25016405,
+    "source_mutations": false,
+    "source_copy_cloud_content_uploads": false,
+    "bounded_runtime_local_uploads": 0,
+    "bounded_runtime_transient_deferred": 1,
+    "later_refresh_recovered": true,
+    "transient_cause": "unconfirmed",
+    "logon_startup_enabled": false
   }
 }

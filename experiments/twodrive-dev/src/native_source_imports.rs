@@ -28,14 +28,77 @@ impl NativeCoordinator {
             let receipt = serde_json::to_string(self.receipt())?;
             let mut cancelled = false;
             for (sequence, payload) in events {
-                // The journal checks exact retained completion, root, tag and
-                // physical identity. Unrelated/request-only events cannot cancel.
-                if self
-                    .bridge
-                    .journal()
-                    .cancel_native_migration_namespace(&update, &receipt, sequence, &payload)
-                    .is_ok()
+                let event: twodrive_local_files::native::persistent::NativeEvent =
+                    serde_json::from_str(&payload)?;
+                if event.schema_version != 1
+                    || event.root_file_id != self.receipt().file_id
+                    || event.volume_serial != self.receipt().volume_serial
+                    || event.identity != update.expected.tag
+                    || update.expected.native_file_id.as_deref()
+                        != Some(format!("{:016x}", event.file_id).as_str())
                 {
+                    continue;
+                }
+                use twodrive_local_files::native::persistent::NativeEventKind;
+                let result = match event.kind {
+                    NativeEventKind::RenameCompleted | NativeEventKind::DeleteCompleted => {
+                        let physical = twodrive_core::NativeFileIdentity {
+                            volume_serial: event.volume_serial,
+                            file_id: event.file_id,
+                        };
+                        if let Some(path) = self
+                            .owner
+                            .locate_file_id(physical.volume_serial, physical.file_id)
+                            .map_err(anyhow::Error::msg)?
+                        {
+                            let relative = path
+                                .strip_prefix(self.owner.root())
+                                .context("renamed pin left owned root")?;
+                            self.owner
+                                .with_owned_pin_update(
+                                    relative,
+                                    &update.expected.tag,
+                                    physical,
+                                    update.expected.size,
+                                    |os, set_pin| {
+                                        let pin = if os.release_requested {
+                                            2
+                                        } else if os.pinned {
+                                            1
+                                        } else {
+                                            update.local_pin.unwrap_or(0)
+                                        };
+                                        let current = if matches!(pin, 1..=2)
+                                            && update.local_pin != Some(pin)
+                                        {
+                                            self.bridge
+                                                .journal()
+                                                .refresh_native_migration_pin(&update, pin)
+                                                .map_err(|e| e.to_string())?
+                                        } else {
+                                            update.clone()
+                                        };
+                                        set_pin(pin)?;
+                                        self.bridge
+                                            .journal()
+                                            .cancel_native_migration_namespace(
+                                                &current, &receipt, sequence, &payload,
+                                            )
+                                            .map_err(|e| e.to_string())
+                                    },
+                                )
+                                .map_err(anyhow::Error::msg)
+                        } else if event.kind == NativeEventKind::DeleteCompleted {
+                            self.bridge.journal().cancel_native_migration_namespace(
+                                &update, &receipt, sequence, &payload,
+                            )
+                        } else {
+                            continue;
+                        }
+                    }
+                    _ => continue,
+                };
+                if result.is_ok() {
                     cancelled = true;
                     break;
                 }

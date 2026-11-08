@@ -580,6 +580,32 @@ impl PersistentSession {
         size: u64,
         action: impl FnOnce(&NativeObservation, &dyn Fn(u64, i32) -> Result<()>) -> Result<T>,
     ) -> Result<T> {
+        self.with_owned_metadata_update(relative, tag, physical, size, |os, mutate| {
+            action(os, &|stamp, pin| mutate(Some(stamp), pin))
+        })
+    }
+    /// Restore only policy on a surviving renamed identity, without touching
+    /// content or modification time and without requesting READ_DATA.
+    pub fn with_owned_pin_update<T>(
+        &self,
+        relative: &Path,
+        tag: &[u8],
+        physical: twodrive_core::NativeFileIdentity,
+        size: u64,
+        action: impl FnOnce(&NativeObservation, &dyn Fn(i32) -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
+        self.with_owned_metadata_update(relative, tag, physical, size, |os, mutate| {
+            action(os, &|pin| mutate(None, pin))
+        })
+    }
+    fn with_owned_metadata_update<T>(
+        &self,
+        relative: &Path,
+        tag: &[u8],
+        physical: twodrive_core::NativeFileIdentity,
+        size: u64,
+        action: impl FnOnce(&NativeObservation, &dyn Fn(Option<u64>, i32) -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
         let (_, _parents) = self.guard_relative_parent(relative)?;
         let raw = unsafe {
             CreateFileW(
@@ -614,52 +640,54 @@ impl PersistentSession {
             usize::try_from(size).map_err(|_| "timestamp size overflow")?,
             false,
         )?;
-        let update = |stamp: u64, pin: i32| {
-            let mut metadata = CF_FS_METADATA::default();
-            if unsafe {
-                GetFileInformationByHandleEx(
-                    handle.0,
-                    FileBasicInfo,
-                    (&mut metadata.BasicInfo as *mut FILE_BASIC_INFO).cast(),
-                    size_of::<FILE_BASIC_INFO>() as u32,
-                )
-            } == 0
-            {
-                return Err("timestamp basic metadata unavailable".into());
-            }
-            metadata.FileSize = i64::try_from(size).map_err(|_| "timestamp size overflow")?;
-            metadata.BasicInfo.LastWriteTime =
-                i64::try_from(stamp).map_err(|_| "timestamp overflow")?;
-            metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
-                | FILE_ATTRIBUTE_HIDDEN
-                | FILE_ATTRIBUTE_SYSTEM
-                | FILE_ATTRIBUTE_ARCHIVE
-                | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
-            if metadata.BasicInfo.FileAttributes == 0 {
-                metadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-            }
-            hr(
-                unsafe {
-                    CfUpdatePlaceholder(
-                        handle.0,
-                        &metadata,
-                        ptr::null(),
-                        0,
-                        ptr::null(),
-                        0,
-                        CF_UPDATE_FLAG_MARK_IN_SYNC | CF_UPDATE_FLAG_VERIFY_IN_SYNC,
-                        ptr::null_mut(),
-                        ptr::null_mut(),
-                    )
-                },
-                "preserve source time without data access",
-            )?;
-            #[cfg(feature = "native-test-hooks")]
-            if INTERRUPT_LOCAL_TIME_BEFORE_PIN.with(|f| f.replace(false)) {
-                return Err("generated interruption before local timestamp pin restore".into());
-            }
+        let update = |stamp: Option<u64>, pin: i32| {
             if !matches!(pin, 0..=2) {
                 return Err("invalid stored pin".into());
+            }
+            if let Some(stamp) = stamp {
+                let mut metadata = CF_FS_METADATA::default();
+                if unsafe {
+                    GetFileInformationByHandleEx(
+                        handle.0,
+                        FileBasicInfo,
+                        (&mut metadata.BasicInfo as *mut FILE_BASIC_INFO).cast(),
+                        size_of::<FILE_BASIC_INFO>() as u32,
+                    )
+                } == 0
+                {
+                    return Err("timestamp basic metadata unavailable".into());
+                }
+                metadata.FileSize = i64::try_from(size).map_err(|_| "timestamp size overflow")?;
+                metadata.BasicInfo.LastWriteTime =
+                    i64::try_from(stamp).map_err(|_| "timestamp overflow")?;
+                metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
+                    | FILE_ATTRIBUTE_HIDDEN
+                    | FILE_ATTRIBUTE_SYSTEM
+                    | FILE_ATTRIBUTE_ARCHIVE
+                    | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+                if metadata.BasicInfo.FileAttributes == 0 {
+                    metadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+                }
+                hr(
+                    unsafe {
+                        CfUpdatePlaceholder(
+                            handle.0,
+                            &metadata,
+                            ptr::null(),
+                            0,
+                            ptr::null(),
+                            0,
+                            CF_UPDATE_FLAG_MARK_IN_SYNC | CF_UPDATE_FLAG_VERIFY_IN_SYNC,
+                            ptr::null_mut(),
+                            ptr::null_mut(),
+                        )
+                    },
+                    "preserve source time without data access",
+                )?;
+                #[cfg(feature = "native-test-hooks")]
+                if INTERRUPT_LOCAL_TIME_BEFORE_PIN.with(|f| f.replace(false)) {
+                    return Err("generated interruption before local timestamp pin restore".into());
+                }
             }
             hr(
                 unsafe { CfSetPinState(handle.0, pin, CF_SET_PIN_FLAG_NONE, ptr::null_mut()) },

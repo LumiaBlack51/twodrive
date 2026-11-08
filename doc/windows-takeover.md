@@ -618,3 +618,23 @@ uses content-addressed version directories, verifies candidates before replacing
 task definitions, constructs Disabled settings atomically and updates owned tasks
 through supported registration parameters. Actual install/reinstall, rejected
 candidate and post-registration interruption tests passed. See TD-20261108-57.
+
+
+The latest ancestor recovery shares one identity-fenced projection transaction
+between local and remote parent transitions. Pending child content versions,
+local time/pin restoration and remote removals retain their decisions at the new
+path. Direct surviving namespace completion restores durable pin policy under
+an attributes-only physical lease before cancelling optional timestamp work;
+newer explicit release/pin choices take precedence. Windows generated recovery
+and Windows/WSL journal contracts cover these paths (TD-20261108-60/-61).
+
+A later bounded complete-account refresh exited normally with zero local uploads.
+Its first delta had one deferred operation; subsequent refresh/source-copy and
+full inventory completed with zero pending work. The transient cause is not yet
+identified. The current snapshot contains 20,171 publications (12,746 files,
+7,425 directories). Every cloud path/type/size matches the personal source;
+three extra helper/unused-vault items remain in the original. Verified resident
+replicas now total 2,071 files / 759,185,275 bytes, with no source mutation or cloud
+content upload during import. The user requires school sync to remain running.
+The original folder and both Microsoft clients are still unchanged; normal
+startup remains disabled, installed Office acceptance and cutover remain pending.

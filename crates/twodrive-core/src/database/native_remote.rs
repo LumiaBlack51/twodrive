@@ -19,6 +19,73 @@ pub struct NativeRemoteRemoval {
     pub expected: NativeProjection,
     pub state: String,
 }
+/// Called inside the verified ancestor projection transaction for either
+/// local or remote moves. No content/version/pin acknowledgement is granted.
+pub(super) fn rebase_child_decisions(
+    conn: &rusqlite::Connection,
+    p: &NativeProjection,
+    old_path: &str,
+    new_path: &str,
+    source: &str,
+    destination: &str,
+) -> anyhow::Result<()> {
+    // Rebase durable child work in the same projection transaction.
+    // Real remote versions and interrupted pin restoration remain
+    // pending; ancestor movement grants no content acknowledgement.
+    if p.state == "updating" {
+        let mut pending = conn.prepare("SELECT sequence,payload FROM local_native_remote_updates WHERE local_id=?1 AND state='prepared'")?;
+        let rows = pending
+            .query_map([&p.local_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(pending);
+        for (sequence, payload) in rows {
+            let mut update: super::native_remote::NativeRemoteUpdate =
+                serde_json::from_str(&payload)?;
+            let mut baseline = update.expected.clone();
+            baseline.state = "updating".into();
+            baseline.path = p.path.clone();
+            ensure!(
+                baseline == *p
+                    && matches!(update.expected.path.as_str(), path if path == old_path || path == new_path),
+                "moved child update identity changed"
+            );
+            update.expected.path = new_path.to_string();
+            if update.next.path == source || update.next.path.starts_with(&format!("{source}/")) {
+                update.next.path = format!("{}{}", destination, &update.next.path[source.len()..]);
+                update.next.parent_path = crate::paths::parent_cloud_path(&update.next.path);
+                update.next.name = crate::paths::cloud_name(&update.next.path);
+            }
+            ensure!(conn.execute("UPDATE local_native_remote_updates SET payload=?2 WHERE sequence=?1 AND state='prepared' AND payload=?3",params![sequence,serde_json::to_string(&update)?,payload])?==1,"moved child update fence changed");
+            conn.execute("UPDATE local_native_source_imports SET state='isolated' WHERE local_id=?1 AND state IN ('verified','data_ready')",[&p.local_id])?;
+        }
+    }
+    if p.state == "removing" {
+        let mut pending=conn.prepare("SELECT sequence,payload FROM local_native_remote_removals WHERE local_id=?1 AND state='prepared'")?;
+        let rows = pending
+            .query_map([&p.local_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(pending);
+        for (sequence, payload) in rows {
+            let mut removal: super::native_remote::NativeRemoteRemoval =
+                serde_json::from_str(&payload)?;
+            let mut baseline = removal.expected.clone();
+            baseline.state = "removing".into();
+            baseline.path = p.path.clone();
+            ensure!(
+                baseline == *p
+                    && (removal.expected.path == old_path || removal.expected.path == new_path),
+                "moved child removal identity changed"
+            );
+            removal.expected.path = new_path.to_string();
+            ensure!(conn.execute("UPDATE local_native_remote_removals SET payload=?2 WHERE sequence=?1 AND state='prepared' AND payload=?3",params![sequence,serde_json::to_string(&removal)?,payload])?==1,"moved child removal fence changed");
+        }
+    }
+    Ok(())
+}
 impl CacheJournal {
     pub fn native_remote_removal_applied(
         &self,
@@ -357,7 +424,9 @@ impl CacheJournal {
         Ok(stored)
     }
     /// A durable, identity-bound namespace completion supersedes only local
-    /// timestamp work. It grants no authority to mutate cloud/native content.
+    /// timestamp work. For a surviving renamed file, the adapter must restore
+    /// the durable pin under its exact physical metadata lease first.
+    /// It grants no authority to mutate cloud/native content.
     pub fn cancel_native_migration_namespace(
         &self,
         update: &NativeRemoteUpdate,
@@ -546,6 +615,23 @@ impl CacheJournal {
             drop(stmt);
             for (child, path) in rows {
                 let old = format!("{}{}", expected.path, &path[update.next.path.len()..]);
+                if child != expected.local_id
+                    && let Some(p) = projection::get(&tx, &child)?
+                {
+                    ensure!(
+                        p.root_binding == expected.root_binding
+                            && (p.path == old || p.path == path),
+                        "remote move descendant identity changed"
+                    );
+                    rebase_child_decisions(
+                        &tx,
+                        &p,
+                        &old,
+                        &path,
+                        &expected.path,
+                        &update.next.path,
+                    )?;
+                }
                 tx.execute("UPDATE local_native_projections SET path=?2 WHERE local_id=?1 AND root_binding=?3 AND path=?4",params![child,path,expected.root_binding,old])?;
                 tx.execute("UPDATE local_cache_journal SET cloud_path=?2 WHERE local_id=?1 AND cloud_path=?3",params![child,path,old])?;
                 tx.execute(

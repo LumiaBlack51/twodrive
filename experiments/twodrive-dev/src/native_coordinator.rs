@@ -2078,6 +2078,21 @@ mod tests {
     fn parent_move_recovers_prepared_remote_child_version() {
         source_import_recovery_case(13);
     }
+    #[test]
+    #[ignore = "explicit NEW generated root; direct rename preserves middle-of-update durable pin"]
+    fn direct_rename_restores_pending_pin_before_timestamp_cancellation() {
+        source_import_recovery_case(15);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; newer release takes precedence during direct rename recovery"]
+    fn direct_rename_preserves_later_release() {
+        source_import_recovery_case(16);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; pending native child deletion survives a remote parent move"]
+    fn remote_parent_move_recovers_prepared_child_removal() {
+        source_import_recovery_case(17);
+    }
     fn source_import_recovery_case(mode: u8) {
         use sha2::Digest;
         let root = PathBuf::from(
@@ -2098,7 +2113,7 @@ mod tests {
         let cache = private.join("cache");
         std::fs::create_dir(&cache).unwrap();
         let provider = crate::local_files::tests::MockProvider::new().with_auxiliary_files();
-        if matches!(mode, 10 | 12 | 13) {
+        if matches!(mode, 10 | 12 | 13 | 17) {
             provider.nest_primary_for_test();
         }
         let item = provider.list_all().unwrap().remove(0);
@@ -2116,7 +2131,7 @@ mod tests {
             IndexedItem {
                 id: item.remote_id.clone(),
                 parent: Some(
-                    if matches!(mode, 10 | 12 | 13) {
+                    if matches!(mode, 10 | 12 | 13 | 17) {
                         "folder-A"
                     } else {
                         "root"
@@ -2131,7 +2146,7 @@ mod tests {
                 deleted: false,
             },
         ];
-        if matches!(mode, 10 | 12 | 13) {
+        if matches!(mode, 10 | 12 | 13 | 17) {
             indexed.push(IndexedItem {
                 id: "folder-A".into(),
                 parent: Some("root".into()),
@@ -2170,7 +2185,7 @@ mod tests {
             &checkpoint,
         )
         .unwrap();
-        let path = if matches!(mode, 10 | 12 | 13) {
+        let path = if matches!(mode, 10 | 12 | 13 | 17) {
             root.join("A").join(&item.name)
         } else {
             owner.root().join(&item.name)
@@ -2218,12 +2233,12 @@ mod tests {
             );
         }
         owner.bridge.journal().prepare_native_source_import(twodrive_core::NativeSourceImport{sequence:0,expected,source_root_receipt:serde_json::json!({"schema_version":1,"volume_serial":42,"file_id":88,"identity":b"generated-foreign-source"}).to_string(),source_file:twodrive_core::NativeFileIdentity{volume_serial:42,file_id:99},cache_path:input,digest:format!("{:x}",sha2::Sha256::digest(&bytes)),source_filetime:source_stamp,source_pinned:true,state:"verified".into()},crate::local_files::digest_file).unwrap();
-        if mode == 12 {
+        if matches!(mode, 12 | 15 | 16) {
             twodrive_local_files::native::interrupt_local_time_before_pin_for_test();
         } else if mode == 3 {
             twodrive_local_files::native::test_release_intent(&path).unwrap();
             twodrive_local_files::native::interrupt_local_time_before_pin_for_test();
-        } else if mode != 13 {
+        } else if !matches!(mode, 13 | 17) {
             crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.set(true));
         }
 
@@ -2266,6 +2281,40 @@ mod tests {
                 deferred: 1,
                 ..Default::default()
             }
+        } else if mode == 17 {
+            use crate::provider::Provider;
+            assert_eq!(owner.resume_source_imports().unwrap().imported, 1);
+            std::fs::remove_file(private.join("source-network-paused")).unwrap();
+            let expected = owner
+                .bridge
+                .journal()
+                .native_projection_for_id(&item.remote_id)
+                .unwrap()
+                .unwrap();
+            owner
+                .bridge
+                .journal()
+                .prepare_native_remote_removal(&expected, |f, h| {
+                    anyhow::ensure!(crate::local_files::digest_file(f)? == h, "changed");
+                    Ok(())
+                })
+                .unwrap();
+            provider.delete_bound(&item).unwrap();
+            let parent = provider.get_metadata("folder-A").unwrap().unwrap();
+            let parent = provider
+                .move_bound(
+                    &parent,
+                    &MetadataEntry::new_dir("root", "/", 1, "root-v1"),
+                    "/B",
+                )
+                .unwrap();
+            let progress = owner.apply_remote_metadata(&[parent]).unwrap();
+            assert_eq!(progress.deferred, 0, "{progress:?}");
+            assert_eq!(progress.moved, 1, "{progress:?}");
+            SourceImportProgress {
+                deferred: 1,
+                ..Default::default()
+            }
         } else if mode == 13 {
             assert_eq!(owner.resume_source_imports().unwrap().imported, 1);
             std::fs::remove_file(private.join("source-network-paused")).unwrap();
@@ -2282,9 +2331,12 @@ mod tests {
         } else {
             owner.resume_source_imports().unwrap()
         };
-        if matches!(mode, 5..=8 | 10 | 12 | 13) {
+        if matches!(mode, 5..=8 | 10 | 12 | 13 | 15 | 16) {
+            if mode == 16 {
+                twodrive_local_files::native::test_release_intent(&path).unwrap();
+            }
             use std::os::windows::process::CommandExt;
-            let code = if matches!(mode, 5 | 10 | 12 | 13) {
+            let code = if matches!(mode, 5 | 10 | 12 | 13 | 15 | 16) {
                 "if ($env:TD_MODE -in '10','12','13') {[IO.Directory]::Move($env:TD_FROM,$env:TD_TO)} else {[IO.File]::Move($env:TD_FROM,$env:TD_TO)}"
             } else {
                 "[IO.File]::Delete($env:TD_FROM)"
@@ -2293,7 +2345,7 @@ mod tests {
                 .args(["-NoProfile", "-NonInteractive", "-Command", code])
                 .env(
                     "TD_FROM",
-                    if matches!(mode, 10 | 12 | 13) {
+                    if matches!(mode, 10 | 12 | 13 | 17) {
                         root.join("A")
                     } else {
                         path.clone()
@@ -2301,7 +2353,7 @@ mod tests {
                 )
                 .env(
                     "TD_TO",
-                    if matches!(mode, 10 | 12 | 13) {
+                    if matches!(mode, 10 | 12 | 13 | 17) {
                         root.join("B")
                     } else {
                         root.join("target-renamed.txt")
@@ -2351,6 +2403,50 @@ mod tests {
             std::fs::remove_file(private.join("source-network-paused")).unwrap();
         }
         owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+        if mode == 17 {
+            let pending = owner
+                .bridge
+                .journal()
+                .native_remote_removals(owner.binding().unwrap())
+                .unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].expected.path, format!("/B/{}", item.name));
+            let progress = owner
+                .apply_remote_removals(&HashSet::from(["folder-A".to_string()]))
+                .unwrap();
+            assert_eq!(progress.removed, 1, "{progress:?}");
+            assert_eq!(progress.deferred, 0);
+            owner.disconnect().unwrap();
+            drop(owner);
+            owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+            assert!(
+                owner
+                    .bridge
+                    .journal()
+                    .native_remote_removals(owner.binding().unwrap())
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                owner
+                    .bridge
+                    .journal()
+                    .native_projection_for_id(&item.remote_id)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                std::fs::read(cache.join("generated-source-copy.bin")).unwrap(),
+                bytes
+            );
+            std::fs::remove_dir(root.join("B")).unwrap();
+            owner.retire_empty_generated_fixture().unwrap();
+            drop(owner);
+            std::fs::remove_dir(root).unwrap();
+            std::fs::remove_file(checkpoint).unwrap();
+            state.close().unwrap();
+            return;
+        }
         if mode == 9 {
             twodrive_local_files::native::test_release_intent(&path).unwrap();
             twodrive_local_files::native::interrupt_local_time_before_pin_for_test();
@@ -2360,10 +2456,10 @@ mod tests {
             owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
         }
         let mut recovered = owner.resume_source_imports().unwrap();
-        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13) {
+        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13 | 15 | 16) {
             let mut progress = owner.synchronize_once().unwrap();
             for _ in 0..20 {
-                if (matches!(mode, 5 | 10 | 12 | 13) && progress.renamed == 1)
+                if (matches!(mode, 5 | 10 | 12 | 13 | 15 | 16) && progress.renamed == 1)
                     || (mode != 5 && progress.deleted == 1)
                 {
                     break;
@@ -2401,7 +2497,7 @@ mod tests {
                 std::fs::read(cache.join("generated-source-copy.bin")).unwrap(),
                 bytes
             );
-            if matches!(mode, 10 | 12 | 13) {
+            if matches!(mode, 10 | 12 | 13 | 17) {
                 let child = root.join("B").join(&item.name);
                 let projection = owner
                     .bridge
@@ -2441,7 +2537,7 @@ mod tests {
                 );
                 std::fs::remove_file(child).unwrap();
                 std::fs::remove_dir(root.join("B")).unwrap();
-            } else if mode == 5 {
+            } else if matches!(mode, 5 | 15 | 16) {
                 assert_eq!(
                     std::fs::read(root.join("target-renamed.txt")).unwrap(),
                     bytes
@@ -2452,6 +2548,26 @@ mod tests {
                         .unwrap()
                         .is_some()
                 );
+                if matches!(mode, 15 | 16) {
+                    owner.disconnect().unwrap();
+                    drop(owner);
+                    owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
+                    let native = owner
+                        .owner
+                        .inventory()
+                        .unwrap()
+                        .into_iter()
+                        .find(|e| !e.directory)
+                        .unwrap()
+                        .cloud
+                        .unwrap();
+                    assert_eq!(native.pinned, mode == 15);
+                    assert_eq!(native.release_requested, mode == 16);
+                    assert_eq!(
+                        std::fs::read(root.join("target-renamed.txt")).unwrap(),
+                        bytes
+                    );
+                }
                 std::fs::remove_file(root.join("target-renamed.txt")).unwrap();
             } else {
                 assert!(provider.get_metadata_by_path(&item.path).unwrap().is_none());
