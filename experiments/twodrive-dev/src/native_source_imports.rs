@@ -1,6 +1,9 @@
 use super::*;
 use crate::local_files::digest_file;
-use twodrive_core::NativeSourceImport;
+use twodrive_core::{NativeRemoteUpdate, NativeSourceImport};
+use twodrive_local_files::native::persistent::{NativeEvent, NativeEventKind};
+#[cfg(all(test, feature = "native-test-hooks"))]
+thread_local! {pub(super) static FAIL_NEXT_NAMESPACE_LOOKUP_87:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
 
 #[derive(Default, Debug, Serialize)]
 pub struct SourceImportProgress {
@@ -27,6 +30,7 @@ impl NativeCoordinator {
                 .pending_native_events(&binding, 1000)?;
             let receipt = serde_json::to_string(self.receipt())?;
             let mut cancelled = false;
+            let mut namespace_failed = false;
             for (sequence, payload) in events {
                 let event: twodrive_local_files::native::persistent::NativeEvent =
                     serde_json::from_str(&payload)?;
@@ -39,71 +43,22 @@ impl NativeCoordinator {
                 {
                     continue;
                 }
-                use twodrive_local_files::native::persistent::NativeEventKind;
-                let result = match event.kind {
-                    NativeEventKind::RenameCompleted | NativeEventKind::DeleteCompleted => {
-                        let physical = twodrive_core::NativeFileIdentity {
-                            volume_serial: event.volume_serial,
-                            file_id: event.file_id,
-                        };
-                        if let Some(path) = self
-                            .owner
-                            .locate_file_id(physical.volume_serial, physical.file_id)
-                            .map_err(anyhow::Error::msg)?
-                        {
-                            let relative = path
-                                .strip_prefix(self.owner.root())
-                                .context("renamed pin left owned root")?;
-                            self.owner
-                                .with_owned_pin_update(
-                                    relative,
-                                    &update.expected.tag,
-                                    physical,
-                                    update.expected.size,
-                                    |os, set_pin| {
-                                        let pin = if os.release_requested {
-                                            2
-                                        } else if os.pinned {
-                                            1
-                                        } else {
-                                            update.local_pin.unwrap_or(0)
-                                        };
-                                        let current = if matches!(pin, 1..=2)
-                                            && update.local_pin != Some(pin)
-                                        {
-                                            self.bridge
-                                                .journal()
-                                                .refresh_native_migration_pin(&update, pin)
-                                                .map_err(|e| e.to_string())?
-                                        } else {
-                                            update.clone()
-                                        };
-                                        set_pin(pin)?;
-                                        self.bridge
-                                            .journal()
-                                            .cancel_native_migration_namespace(
-                                                &current, &receipt, sequence, &payload,
-                                            )
-                                            .map_err(|e| e.to_string())
-                                    },
-                                )
-                                .map_err(anyhow::Error::msg)
-                        } else if event.kind == NativeEventKind::DeleteCompleted {
-                            self.bridge.journal().cancel_native_migration_namespace(
-                                &update, &receipt, sequence, &payload,
-                            )
-                        } else {
-                            continue;
-                        }
+                match self.recover_source_namespace(&update, &receipt, sequence, &payload, &event) {
+                    Ok(true) => {
+                        cancelled = true;
+                        break;
                     }
-                    _ => continue,
-                };
-                if result.is_ok() {
-                    cancelled = true;
-                    break;
+                    Ok(false) => continue,
+                    Err(error) => {
+                        progress.deferred += 1;
+                        progress.error =
+                            Some(twodrive_backend::diagnostics::safe_error(&error).to_string());
+                        namespace_failed = true;
+                        break;
+                    }
                 }
             }
-            if cancelled {
+            if cancelled || namespace_failed {
                 continue;
             }
             if let Err(error) = self.bridge.apply_native_remote_version(
@@ -131,6 +86,98 @@ impl NativeCoordinator {
             }
         }
         Ok(progress)
+    }
+    fn locate_import_file(
+        &self,
+        physical: twodrive_core::NativeFileIdentity,
+    ) -> Result<Option<PathBuf>, String> {
+        #[cfg(all(test, feature = "native-test-hooks"))]
+        if FAIL_NEXT_NAMESPACE_LOOKUP_87.with(|f| f.replace(false)) {
+            return Err("namespace identity lookup: 87".into());
+        }
+        self.owner
+            .locate_file_id(physical.volume_serial, physical.file_id)
+    }
+    fn recover_source_namespace(
+        &self,
+        update: &NativeRemoteUpdate,
+        receipt: &str,
+        sequence: i64,
+        payload: &str,
+        event: &NativeEvent,
+    ) -> anyhow::Result<bool> {
+        if !matches!(
+            event.kind,
+            NativeEventKind::RenameCompleted | NativeEventKind::DeleteCompleted
+        ) {
+            return Ok(false);
+        }
+        let physical = twodrive_core::NativeFileIdentity {
+            volume_serial: event.volume_serial,
+            file_id: event.file_id,
+        };
+        let located = self.locate_import_file(physical);
+        let path = match located {
+            Ok(Some(path)) => Some(path),
+            _ if event.kind == NativeEventKind::DeleteCompleted => {
+                // A rejected/expired file reference is not absence authority.
+                // Re-inventory the owned namespace for a surviving exact object;
+                // cancellation itself still requires the retained completion.
+                self.owner
+                    .inventory()
+                    .map_err(anyhow::Error::msg)?
+                    .into_iter()
+                    .find(|entry| {
+                        entry.volume_serial == physical.volume_serial
+                            && entry.file_id == physical.file_id
+                            && !entry.directory
+                            && entry.identity.as_deref() == Some(update.expected.tag.as_slice())
+                    })
+                    .map(|entry| self.owner.root().join(entry.relative_path))
+            }
+            Ok(None) => return Ok(false),
+            Err(error) => return Err(anyhow::Error::msg(error)),
+        };
+        if let Some(path) = path {
+            let relative = path
+                .strip_prefix(self.owner.root())
+                .context("renamed pin left owned root")?;
+            self.owner
+                .with_owned_pin_update(
+                    relative,
+                    &update.expected.tag,
+                    physical,
+                    update.expected.size,
+                    |os, set_pin| {
+                        let pin = if os.release_requested {
+                            2
+                        } else if os.pinned {
+                            1
+                        } else {
+                            update.local_pin.unwrap_or(0)
+                        };
+                        let current = if matches!(pin, 1..=2) && update.local_pin != Some(pin) {
+                            self.bridge
+                                .journal()
+                                .refresh_native_migration_pin(update, pin)
+                                .map_err(|e| e.to_string())?
+                        } else {
+                            update.clone()
+                        };
+                        set_pin(pin)?;
+                        self.bridge
+                            .journal()
+                            .cancel_native_migration_namespace(&current, receipt, sequence, payload)
+                            .map_err(|e| e.to_string())
+                    },
+                )
+                .map_err(anyhow::Error::msg)?;
+        } else {
+            self.bridge
+                .journal()
+                .cancel_native_migration_namespace(update, receipt, sequence, payload)?;
+        }
+        Ok(true)
     }
     fn apply_source_import(&mut self, import: &NativeSourceImport) -> anyhow::Result<bool> {
         let current = self

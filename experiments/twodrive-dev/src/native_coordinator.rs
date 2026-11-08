@@ -2093,6 +2093,11 @@ mod tests {
     fn remote_parent_move_recovers_prepared_child_removal() {
         source_import_recovery_case(17);
     }
+    #[test]
+    #[ignore = "explicit NEW generated root; error 87 on expired deleted identity does not starve unrelated sync"]
+    fn deleted_source_timestamp_recovers_expired_identity_lookup() {
+        source_import_recovery_case(18);
+    }
     fn source_import_recovery_case(mode: u8) {
         use sha2::Digest;
         let root = PathBuf::from(
@@ -2331,7 +2336,7 @@ mod tests {
         } else {
             owner.resume_source_imports().unwrap()
         };
-        if matches!(mode, 5..=8 | 10 | 12 | 13 | 15 | 16) {
+        if matches!(mode, 5..=8 | 10 | 12 | 13 | 15 | 16 | 18) {
             if mode == 16 {
                 twodrive_local_files::native::test_release_intent(&path).unwrap();
             }
@@ -2455,8 +2460,22 @@ mod tests {
             drop(owner);
             owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
         }
+        if mode == 18 {
+            source_imports::FAIL_NEXT_NAMESPACE_LOOKUP_87.with(|f| f.set(true));
+            std::fs::write(
+                root.join("unrelated-after-delete.txt"),
+                b"unrelated progress after expired identity",
+            )
+            .unwrap();
+        }
         let mut recovered = owner.resume_source_imports().unwrap();
-        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13 | 15 | 16) {
+        if mode == 18 {
+            assert!(
+                !source_imports::FAIL_NEXT_NAMESPACE_LOOKUP_87.with(|f| f.get()),
+                "lookup injection was not reached"
+            );
+        }
+        if matches!(mode, 5..=8 | 10 | 11 | 12 | 13 | 15 | 16 | 18) {
             let mut progress = owner.synchronize_once().unwrap();
             for _ in 0..20 {
                 if (matches!(mode, 5 | 10 | 12 | 13 | 15 | 16) && progress.renamed == 1)
@@ -2572,6 +2591,17 @@ mod tests {
             } else {
                 assert!(provider.get_metadata_by_path(&item.path).unwrap().is_none());
                 assert!(db.get_by_remote_id(&item.remote_id).unwrap().is_none());
+            }
+            if mode == 18 {
+                let extra = provider
+                    .get_metadata_by_path("/unrelated-after-delete.txt")
+                    .unwrap()
+                    .expect("unrelated creation stalled");
+                assert_eq!(
+                    provider.download(&extra.remote_id).unwrap(),
+                    b"unrelated progress after expired identity"
+                );
+                std::fs::remove_file(root.join("unrelated-after-delete.txt")).unwrap();
             }
             owner.retire_empty_generated_fixture().unwrap();
             drop(owner);
