@@ -2,7 +2,7 @@
 //! authorizes hydration; completion binds its exact version to a physical file.
 use super::*;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NativeProjection {
     pub local_id: String,
     pub root_binding: String,
@@ -37,7 +37,9 @@ pub(super) fn init(conn: &rusqlite::Connection) -> anyhow::Result<()> {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_native_projection_file
             ON local_native_projections(root_binding,volume_serial,native_file_id)
             WHERE native_file_id IS NOT NULL;
-        CREATE TABLE IF NOT EXISTS local_native_captures(local_id TEXT PRIMARY KEY,generation INTEGER NOT NULL,volume_serial INTEGER NOT NULL,file_id TEXT NOT NULL);",
+        CREATE TABLE IF NOT EXISTS local_native_captures(local_id TEXT PRIMARY KEY,generation INTEGER NOT NULL,volume_serial INTEGER NOT NULL,file_id TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS local_native_directory_transfers(local_id TEXT PRIMARY KEY,parent_id TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);
+        CREATE TABLE IF NOT EXISTS local_native_moves(local_id TEXT PRIMARY KEY,root_binding TEXT NOT NULL,source_path TEXT NOT NULL,intent TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT);",
     )?;
     Ok(())
 }
@@ -102,7 +104,10 @@ fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NativeProjection> {
     })
 }
 const COLUMNS: &str = "local_id,root_binding,tag,cloud_id,path,etag,size,modified_unix,directory,state,volume_serial,native_file_id";
-fn get(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<Option<NativeProjection>> {
+pub(super) fn get(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> anyhow::Result<Option<NativeProjection>> {
     Ok(conn
         .query_row(
             &format!("SELECT {COLUMNS} FROM local_native_projections WHERE local_id=?1"),
@@ -123,6 +128,24 @@ fn baseline_valid(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<bool>
         AND NOT EXISTS(SELECT 1 FROM native_event_log WHERE binding=p.root_binding))",[id],|row|row.get(0))?)
 }
 impl CacheJournal {
+    pub fn native_work_ids(&self) -> anyhow::Result<Vec<String>> {
+        let conn = journal_connection(&self.0.db)?;
+        let mut stmt=conn.prepare("SELECT f.remote_id FROM files f WHERE f.state IN ('dirty','writing','uploading','conflict','error','hydrating')
+            OR EXISTS(SELECT 1 FROM local_native_dirty n WHERE n.cloud_id=f.remote_id OR n.cloud_id=f.cloud_remote_id)
+            OR EXISTS(SELECT 1 FROM local_native_captures c WHERE c.local_id=f.remote_id)")?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+    pub fn native_work_pending(&self) -> anyhow::Result<bool> {
+        if !self.native_work_ids()?.is_empty() {
+            return Ok(true);
+        }
+        Ok(journal_connection(&self.0.db)?.query_row("SELECT EXISTS(SELECT 1 FROM local_native_moves WHERE state<>'applied')
+            OR EXISTS(SELECT 1 FROM pending_metadata_operations) OR EXISTS(SELECT 1 FROM pending_deletes)
+            OR EXISTS(SELECT 1 FROM local_native_projections WHERE state<>'published')
+            OR EXISTS(SELECT 1 FROM local_native_creations c WHERE NOT EXISTS(SELECT 1 FROM local_native_projections p WHERE p.local_id=c.local_id AND p.state='published'))",[],|r|r.get(0))?)
+    }
     /// Publish a newly created native file only after its create receipt and
     /// retained native/private full-byte verification agree on this generation.
     pub fn with_created_projection_ack(

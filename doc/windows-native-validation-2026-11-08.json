@@ -435,5 +435,42 @@
     "callback_scopes_drained_before_source_drop": true,
     "owner_lock_reacquired_without_cleanup_sleep": true,
     "unit_gate_test_passed": true
+  },
+  "native_directory_creation": {
+    "actual_cfapi": true,
+    "backend": "mock",
+    "automatic_parent_first_directory_depth": 2,
+    "automatic_file_creation": true,
+    "dehydrate_readback": true,
+    "dispatch_fence_survives_restart": true,
+    "foreign_physical_binding_ack_refused": true,
+    "live_cloud_creation_not_run": false,
+    "live_personal_onedrive": {
+      "automatic_parent_first_directories": 2,
+      "automatic_create_only_file": true,
+      "native_and_cloud_full_byte_readback": true,
+      "generated_scopes_retired": true,
+      "copied_credentials_retired": true
+    }
+  },
+  "native_rename": {
+    "actual_cfapi_external_child": true,
+    "directory_and_file_move_mock": true,
+    "actual_personal_onedrive_directory_and_file_move": true,
+    "opaque_id_and_complete_bytes_preserved": true,
+    "partial_linux_metadata_commit_recovery_mock": true,
+    "uncertain_move_refused_blind_retry": true,
+    "idle_watcher_resume_test_pending": false,
+    "idle_then_external_rename_wakes_worker": true
+  },
+  "replacement_upload_recovery": {
+    "old_actual_native_test_failed": true,
+    "old_cache_files_before": 4,
+    "old_cache_files_after_three_retries": 7,
+    "success_after_owner_restart": true,
+    "conflict_after_owner_restart": true,
+    "generation_preserved": true,
+    "no_extra_capture_files": true,
+    "backend": "mock"
   }
 }

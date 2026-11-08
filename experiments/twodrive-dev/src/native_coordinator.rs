@@ -4,7 +4,7 @@ use crate::{local_files::LocalFileBridge, native_source::BoundPublishedSource};
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -16,6 +16,8 @@ use twodrive_local_files::{
         DatabaseEventSink, DurableDirectoryWatcher, PersistentSession, RootReceipt,
     },
 };
+#[path = "native_renames.rs"]
+mod renames;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Configuration {
@@ -222,6 +224,7 @@ pub struct NativeCoordinator {
     owner: PersistentSession,
     _source: Arc<BoundPublishedSource>,
     bridge: LocalFileBridge,
+    last_successful_watch: Option<(i64, i64)>,
 }
 #[derive(Default, Serialize, Debug)]
 pub struct SyncProgress {
@@ -231,8 +234,166 @@ pub struct SyncProgress {
     pub needs_namespace: bool,
     pub error: Option<String>,
     pub replacements: usize,
+    pub created: usize,
+    pub renamed: usize,
+    pub idle: bool,
 }
 impl NativeCoordinator {
+    fn cloud_path(relative: &Path) -> anyhow::Result<String> {
+        let names = relative
+            .components()
+            .map(|part| match part {
+                std::path::Component::Normal(name) => {
+                    name.to_str().context("invalid native filename")
+                }
+                _ => anyhow::bail!("relative native path required"),
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        ensure!(
+            !names.is_empty(),
+            "native root cannot be created as a child"
+        );
+        for name in &names {
+            twodrive_local_files::names::validate_native_name(name).map_err(anyhow::Error::msg)?;
+        }
+        let path = format!("/{}", names.join("/"));
+        crate::provider::valid_path(&path)?;
+        Ok(path)
+    }
+    pub fn synchronize_new_directory(&mut self, relative: &Path) -> anyhow::Result<()> {
+        let path = Self::cloud_path(relative)?;
+        let db = self.bridge.journal().database();
+        let parent_path = path.rsplit_once('/').unwrap().0;
+        let parent = if parent_path.is_empty() {
+            MetadataEntry::new_dir(
+                db.get_state_value("native_cloud_root_id")?
+                    .context("native cloud root missing")?,
+                "/",
+                0,
+                "",
+            )
+        } else {
+            let record = db
+                .get_by_path(parent_path)?
+                .context("native parent has not synchronized")?;
+            ensure!(
+                record.metadata.is_dir && !db.has_pending_metadata_at_or_above(parent_path)?,
+                "native parent has pending work"
+            );
+            let mut entry = record.metadata;
+            entry.remote_id = record
+                .cloud_remote_id
+                .context("native parent has no cloud receipt")?;
+            entry
+        };
+        let root_receipt = serde_json::to_string(self.receipt())?;
+        let claims = self.bridge.journal().native_creations()?;
+        let claim = claims
+            .iter()
+            .find(|c| c.path == path && c.root_binding == root_receipt);
+        let existing = db.get_by_path(&path)?;
+        let id = if let Some(record) = &existing {
+            ensure!(
+                record.metadata.is_dir
+                    && claim.is_some_and(|c| c.local_id == record.metadata.remote_id),
+                "native directory is already owned"
+            );
+            record.metadata.remote_id.clone()
+        } else {
+            claim
+                .map(|c| c.local_id.clone())
+                .unwrap_or_else(|| format!("local-upload-dir-{:032x}", rand::random::<u128>()))
+        };
+        self.owner
+            .with_local_directory(
+                relative,
+                id.as_bytes(),
+                |volume, file_id| {
+                    let physical = format!("{volume:08x}:{file_id:016x}");
+                    if let Some(claim) = claim {
+                        if claim.native_binding != physical {
+                            return Err("native directory physical identity changed".into());
+                        }
+                        Ok(())
+                    } else {
+                        self.bridge
+                            .journal()
+                            .begin_native_creation(&id, &path, &root_receipt, &physical)
+                            .map_err(|e| e.to_string())
+                    }
+                },
+                |_, _, _| {
+                    if existing.is_none() {
+                        db.create_local_directory(&id, &path)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    self.bridge
+                        .journal()
+                        .stage_native_directory(&id, &parent.remote_id)
+                        .map_err(|e| e.to_string())
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+        if self.bridge.journal().dispatch_native_directory(&id)? {
+            match self.bridge.backend().create_directory_bound(&parent, &path) {
+                Ok(receipt) => self
+                    .bridge
+                    .journal()
+                    .receive_native_directory(&id, &receipt)?,
+                Err(error) => {
+                    if error
+                        .downcast_ref::<crate::provider::TransferNotStarted>()
+                        .is_some()
+                    {
+                        self.bridge.journal().native_directory_not_dispatched(&id)?;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        let receipt = self.bridge.journal().native_directory_receipt(&id)?;
+        ensure!(
+            db.complete_metadata_operation(&id, &path, &receipt)?,
+            "native directory path changed during cloud creation"
+        );
+        let root = self.binding()?.to_string();
+        self.owner
+            .with_local_directory(
+                relative,
+                id.as_bytes(),
+                |volume, file_id| {
+                    let expected = self
+                        .bridge
+                        .journal()
+                        .native_creations()
+                        .map_err(|e| e.to_string())?;
+                    if !expected.iter().any(|c| {
+                        c.local_id == id
+                            && c.root_binding == root_receipt
+                            && c.native_binding == format!("{volume:08x}:{file_id:016x}")
+                    }) {
+                        return Err("native directory receipt identity changed".into());
+                    }
+                    Ok(())
+                },
+                |volume_serial, file_id, acknowledge| {
+                    self.bridge
+                        .journal()
+                        .with_native_directory_ack(
+                            &id,
+                            &root,
+                            &root_receipt,
+                            twodrive_core::NativeFileIdentity {
+                                volume_serial,
+                                file_id,
+                            },
+                            || acknowledge().map_err(anyhow::Error::msg),
+                        )
+                        .map_err(|e| e.to_string())
+                },
+            )
+            .map_err(anyhow::Error::msg)
+    }
     /// Create-only transfer for a named ordinary file beneath an already owned
     /// directory. The physical creation claim and immutable bytes precede I/O.
     pub fn synchronize_new_file(&mut self, relative: &Path) -> anyhow::Result<bool> {
@@ -308,27 +469,66 @@ impl NativeCoordinator {
     /// delete notifications. The new immutable snapshot is durable first.
     pub fn synchronize_once(&mut self) -> anyhow::Result<SyncProgress> {
         self.drain_observations()?;
+        let state = self
+            .watcher
+            .as_ref()
+            .context("native watcher stopped")?
+            .state()
+            .map_err(anyhow::Error::msg)?;
+        if !state.rescan_required
+            && self.last_successful_watch == Some((state.epoch, state.generation))
+            && self
+                .bridge
+                .journal()
+                .database()
+                .pending_native_events(self.binding()?, 1)?
+                .is_empty()
+            && !self.bridge.journal().native_work_pending()?
+        {
+            return Ok(SyncProgress {
+                idle: true,
+                ..Default::default()
+            });
+        }
+        let renamed = self.synchronize_renames()?;
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
         let projections = self.bridge.journal().native_projections(&binding)?;
         let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let by_path = entries
+            .iter()
+            .map(|entry| (entry.relative_path.as_path(), entry))
+            .collect::<HashMap<_, _>>();
+        let physical = entries
+            .iter()
+            .map(|entry| (entry.volume_serial, entry.file_id))
+            .collect::<HashSet<_>>();
         let mut candidates = HashMap::new();
         for projection in projections
             .iter()
             .filter(|p| !p.directory && p.state == "published")
         {
             let relative = Self::relative(&projection.path)?;
-            let Some(entry) = entries
-                .iter()
-                .find(|entry| entry.relative_path == relative && !entry.directory)
+            let Some(entry) = by_path
+                .get(relative.as_path())
+                .copied()
+                .filter(|entry| !entry.directory)
             else {
                 continue;
             };
-            let old_is_present = entries.iter().any(|entry| {
-                projection.volume_serial == Some(entry.volume_serial)
-                    && projection.native_file_id.as_deref()
-                        == Some(format!("{:016x}", entry.file_id).as_str())
-            });
+            let old_physical = (
+                projection
+                    .volume_serial
+                    .context("published volume missing")?,
+                u64::from_str_radix(
+                    projection
+                        .native_file_id
+                        .as_deref()
+                        .context("published physical identity missing")?,
+                    16,
+                )?,
+            );
+            let old_is_present = physical.contains(&old_physical);
             if !old_is_present
                 && entry.volume_serial == self.owner.receipt().volume_serial
                 && entry
@@ -355,6 +555,7 @@ impl NativeCoordinator {
             let Some((projection, _, current_id)) = candidates.get(&event.identity) else {
                 return Ok(SyncProgress {
                     needs_namespace: true,
+                    renamed,
                     ..Default::default()
                 });
             };
@@ -364,12 +565,52 @@ impl NativeCoordinator {
             {
                 return Ok(SyncProgress {
                     needs_namespace: true,
+                    renamed,
                     ..Default::default()
                 });
             }
         }
-        let mut progress = SyncProgress::default();
-        for (projection, relative, _) in candidates.values() {
+        let mut progress = SyncProgress {
+            renamed,
+            ..Default::default()
+        };
+        for (projection, relative, current_id) in candidates.values() {
+            let id = &projection.local_id;
+            if self
+                .bridge
+                .journal()
+                .snapshot_if_owned(id)?
+                .as_ref()
+                .is_some_and(|state| state.uncertain_upload)
+                && let Err(error) = self.bridge.reconcile(id)
+            {
+                progress.deferred += 1;
+                progress.error =
+                    Some(twodrive_backend::diagnostics::safe_error(&error).to_string());
+                continue;
+            }
+            let state = self.bridge.journal().snapshot_if_owned(id)?;
+            let captured = self.bridge.journal().native_capture_binding(id)?;
+            // This exact replacement already has a durable immutable snapshot.
+            // Consume only its covered namespace hints, then verify/acknowledge
+            // the retained receipt below before considering a newer capture.
+            if captured.is_some_and(|capture| {
+                capture.physical.volume_serial == self.receipt().volume_serial
+                    && capture.physical.file_id == *current_id
+                    && state
+                        .as_ref()
+                        .is_some_and(|state| state.generation == capture.generation)
+            }) {
+                continue;
+            }
+            if state
+                .as_ref()
+                .is_some_and(|state| state.state == twodrive_core::FileState::Conflict)
+            {
+                progress.deferred += 1;
+                progress.conflicts += 1;
+                continue;
+            }
             if let Err(error) =
                 self.bridge
                     .capture_native_replacement(&self.owner, relative, &projection.local_id)
@@ -387,8 +628,55 @@ impl NativeCoordinator {
         if let Some((through, _)) = events.last() {
             db.acknowledge_native_events(&binding, *through)?;
         }
+        // Discover ordinary children only after the existing native namespace
+        // decisions above have been durably handled. Parents always precede files.
+        let mut entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        entries.sort_by_key(|entry| (entry.relative_path.components().count(), !entry.directory));
+        for entry in entries {
+            let path = Self::cloud_path(&entry.relative_path)?;
+            let existing = db.get_by_path(&path)?;
+            let published = existing
+                .as_ref()
+                .map(|record| {
+                    self.bridge
+                        .journal()
+                        .native_projection_for_id(&record.metadata.remote_id)
+                })
+                .transpose()?
+                .flatten();
+            if published.is_some() {
+                continue;
+            }
+            let owned_pending = existing
+                .as_ref()
+                .is_some_and(|record| record.metadata.remote_id.starts_with("local-upload-"));
+            if entry.identity.is_some() && !owned_pending {
+                progress.needs_namespace = true;
+                continue;
+            }
+            let result = if entry.directory {
+                self.synchronize_new_directory(&entry.relative_path)
+                    .map(|_| true)
+            } else {
+                self.synchronize_new_file(&entry.relative_path)
+            };
+            match result {
+                Ok(true) => progress.created += 1,
+                Ok(false) => progress.deferred += 1,
+                Err(error) => {
+                    progress.deferred += 1;
+                    progress.error =
+                        Some(twodrive_backend::diagnostics::safe_error(&error).to_string());
+                }
+            }
+        }
+        if progress.needs_namespace || progress.deferred != 0 {
+            return Ok(progress);
+        }
         let mut data = self.synchronize_known_files_once()?;
         data.replacements = progress.replacements;
+        data.created = progress.created;
+        data.renamed = progress.renamed;
         Ok(data)
     }
     /// The caller supplies a verified account-owned bridge and an all-or-nothing
@@ -442,6 +730,10 @@ impl NativeCoordinator {
             .journal()
             .database()
             .upsert_metadata_batch(&metadata)?;
+        bridge
+            .journal()
+            .database()
+            .set_state_value("native_cloud_root_id", &plan.root_id)?;
         let binding = std::str::from_utf8(identity)?.to_string();
         let source = Arc::new(BoundPublishedSource::unbound(bridge.clone()));
         let sink = Arc::new(
@@ -458,6 +750,7 @@ impl NativeCoordinator {
         .map_err(anyhow::Error::msg)?;
         source.bind_root(&owner)?;
         let mut coordinator = Self {
+            last_successful_watch: None,
             watcher: None,
             owner,
             _source: source,
@@ -487,6 +780,7 @@ impl NativeCoordinator {
             .map_err(anyhow::Error::msg)?;
         Ok(Self {
             watcher: Some(watcher),
+            last_successful_watch: None,
             owner,
             _source: source,
             bridge,
@@ -518,6 +812,7 @@ impl NativeCoordinator {
             .map_err(anyhow::Error::msg)?;
         Ok(Self {
             watcher: Some(watcher),
+            last_successful_watch: None,
             owner,
             _source: source,
             bridge,
@@ -636,6 +931,12 @@ impl NativeCoordinator {
             return Ok(progress);
         }
         let expected = self.bridge.journal().native_projections(&binding)?;
+        let durable_work = self
+            .bridge
+            .journal()
+            .native_work_ids()?
+            .into_iter()
+            .collect::<HashSet<_>>();
         let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
         let by_tag = expected
             .iter()
@@ -656,14 +957,20 @@ impl NativeCoordinator {
                 progress.needs_namespace = true;
                 return Ok(progress);
             };
-            let captured = self
-                .bridge
-                .journal()
-                .native_capture_binding(&projection.local_id)?;
-            let captured_matches = captured.is_some_and(|binding| {
-                binding.physical.volume_serial == entry.volume_serial
-                    && binding.physical.file_id == entry.file_id
-            });
+            let published_matches = projection.volume_serial == Some(entry.volume_serial)
+                && projection.native_file_id.as_deref()
+                    == Some(format!("{:016x}", entry.file_id).as_str());
+            let captured_matches = if published_matches {
+                false
+            } else {
+                self.bridge
+                    .journal()
+                    .native_capture_binding(&projection.local_id)?
+                    .is_some_and(|binding| {
+                        binding.physical.volume_serial == entry.volume_serial
+                            && binding.physical.file_id == entry.file_id
+                    })
+            };
             if entry.relative_path != Self::relative(&projection.path)?
                 || projection.volume_serial != Some(entry.volume_serial)
                 || (!captured_matches
@@ -675,6 +982,15 @@ impl NativeCoordinator {
                 return Ok(progress);
             }
             if !entry.directory {
+                if !durable_work.contains(&projection.local_id)
+                    && entry.size == projection.size
+                    && entry
+                        .cloud
+                        .as_ref()
+                        .is_some_and(|cloud| cloud.os_in_sync && cloud.modified_bytes == 0)
+                {
+                    continue;
+                }
                 work.push((entry, projection.clone()));
             }
         }
@@ -720,6 +1036,22 @@ impl NativeCoordinator {
             }
             let path = self.root().join(&entry.relative_path);
             let result = (|| -> anyhow::Result<bool> {
+                let retained = self.bridge.journal().native_capture_binding(id)?;
+                if self
+                    .bridge
+                    .journal()
+                    .snapshot_if_owned(id)?
+                    .as_ref()
+                    .is_some_and(|state| {
+                        state.sync_confirmed()
+                            && !state.native_dirty
+                            && retained
+                                .is_some_and(|capture| capture.generation == state.generation)
+                    })
+                    && self.bridge.acknowledge_native(&path, id)?
+                {
+                    return Ok(true);
+                }
                 self.bridge.capture_native_edit(&path, id)?;
                 ensure!(
                     self.bridge.upload(id, crate::local_files::no_progress())?,
@@ -750,6 +1082,7 @@ impl NativeCoordinator {
                     watermark.through_sequence,
                 )?;
             }
+            self.last_successful_watch = Some((watermark.epoch, watermark.generation));
         }
         Ok(progress)
     }
@@ -878,7 +1211,9 @@ mod tests {
             twodrive_local_files::names::ordinal_ignorecase_cmp,
         )
         .unwrap();
-        let provider = crate::local_files::tests::MockProvider::empty();
+        let provider = crate::local_files::tests::MockProvider::empty_at(
+            "/generated-dir/sub/generated-中文.txt",
+        );
         let bridge = LocalFileBridge::open_bound(
             Database::new(private.join("native.sqlite3")),
             &cache,
@@ -894,18 +1229,53 @@ mod tests {
             &checkpoint,
         )
         .unwrap();
-        let relative = Path::new("generated-中文.txt");
-        let path = coordinator.root().join(relative);
+        let relative = Path::new("generated-dir/sub/generated-中文.txt");
+        let mut path = coordinator.root().join(relative);
         let bytes = b"generated new file only, no original cloud bytes";
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, bytes).unwrap();
-        assert!(coordinator.synchronize_new_file(relative).unwrap());
+        let progress = coordinator.synchronize_once().unwrap();
+        assert_eq!(progress.created, 3, "{progress:?}");
+        assert_eq!(progress.deferred, 0, "{progress:?}");
+        assert!(!progress.needs_namespace, "{progress:?}");
+        let idle = coordinator.synchronize_once().unwrap();
+        assert!(
+            idle.idle,
+            "stable acknowledged watcher must become idle: {idle:?}"
+        );
+        use std::os::windows::process::CommandExt;
+        for action in ["directory", "file"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "native_coordinator::tests::namespace_rename_child",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("TWODRIVE_NAMESPACE_CHILD_ROOT", coordinator.root())
+                .env("TWODRIVE_NAMESPACE_CHILD_ACTION", action)
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let progress = coordinator.synchronize_once().unwrap();
+            assert_eq!(progress.renamed, 1, "{progress:?}");
+            assert_eq!(progress.deferred, 0, "{progress:?}");
+            assert!(!progress.needs_namespace, "{progress:?}");
+        }
+        path = coordinator.root().join("renamed-dir/sub/renamed.txt");
         let projections = coordinator
             .bridge
             .journal()
             .native_projections(coordinator.binding().unwrap())
             .unwrap();
-        assert_eq!(projections.len(), 1);
-        let projection = &projections[0];
+        assert_eq!(projections.len(), 3);
+        let projection = projections.iter().find(|p| !p.directory).unwrap();
         assert!(projection.local_id.starts_with("local-upload-"));
         assert_eq!(projection.tag, projection.local_id.as_bytes());
         assert_eq!(provider.download(&projection.cloud_id).unwrap(), bytes);
@@ -934,11 +1304,42 @@ mod tests {
             .expect("clean new file snapshot");
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(coordinator.root().join("renamed-dir/sub")).unwrap();
+        std::fs::remove_dir(coordinator.root().join("renamed-dir")).unwrap();
         coordinator.retire_empty_generated_fixture().unwrap();
         drop(coordinator);
         std::fs::remove_dir(root).unwrap();
         std::fs::remove_file(checkpoint).unwrap();
         state.close().unwrap();
+    }
+    #[test]
+    #[ignore = "child helper for explicit generated namespace tests"]
+    fn namespace_rename_child() {
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_NAMESPACE_CHILD_ROOT").expect("generated child root"),
+        );
+        assert!(
+            root.is_absolute()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        match std::env::var("TWODRIVE_NAMESPACE_CHILD_ACTION")
+            .unwrap()
+            .as_str()
+        {
+            "directory" => {
+                std::fs::rename(root.join("generated-dir"), root.join("renamed-dir")).unwrap()
+            }
+            "file" => std::fs::rename(
+                root.join("renamed-dir/sub/generated-中文.txt"),
+                root.join("renamed-dir/sub/renamed.txt"),
+            )
+            .unwrap(),
+            _ => panic!("unknown generated action"),
+        }
     }
     #[test]
     #[ignore = "child helper for the explicit generated replacement test"]
@@ -967,6 +1368,14 @@ mod tests {
     #[test]
     #[ignore = "explicit NEW generated CFAPI root; projected in-place edit, upload and updated native acknowledgement"]
     fn projected_edit_advances_its_version_under_the_retained_native_lease() {
+        projected_replacement_recovery(false);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated CFAPI root; replacement lost reply, restart and conflicting remote bytes"]
+    fn projected_replacement_conflict_survives_restart_without_more_snapshots() {
+        projected_replacement_recovery(true);
+    }
+    fn projected_replacement_recovery(conflict: bool) {
         use std::io::Write;
         let root = PathBuf::from(
             std::env::var_os("TWODRIVE_APPROVED_PROJECTED_EDIT_ROOT")
@@ -1045,7 +1454,16 @@ mod tests {
         writer.sync_all().unwrap();
         drop(writer);
         let progress = coordinator.synchronize_known_files_once().unwrap();
-        assert_eq!(progress.uploaded, 1);
+        if progress.uploaded != 1 || progress.deferred != 0 || progress.needs_namespace {
+            std::fs::remove_file(&file).unwrap();
+            coordinator.retire_empty_generated_fixture().unwrap();
+            drop(coordinator);
+            std::fs::remove_dir(root).unwrap();
+            std::fs::remove_file(checkpoint).unwrap();
+            state.close().unwrap();
+            panic!("generated initial in-place worker failed: {progress:?}");
+        }
+        assert_eq!(progress.uploaded, 1, "{progress:?}");
         assert_eq!(progress.deferred, 0);
         assert!(!progress.needs_namespace);
         let projection = coordinator
@@ -1103,33 +1521,67 @@ mod tests {
             .output()
             .unwrap();
         assert!(child.status.success(), "generated child replacement failed");
+        provider.lost_reply(true);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let replacement = loop {
             let progress = coordinator.synchronize_once().unwrap();
-            if progress.uploaded == 1 || std::time::Instant::now() >= deadline {
+            if progress.deferred == 1 || std::time::Instant::now() >= deadline {
                 break progress;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         };
-        assert_eq!(replacement.uploaded, 1);
-        assert_eq!(replacement.deferred, 0);
-        assert!(!replacement.needs_namespace);
+        assert_eq!(
+            replacement.deferred, 1,
+            "lost reply was not injected: {replacement:?}"
+        );
+        assert!(
+            coordinator
+                .bridge
+                .status(&metadata.remote_id)
+                .unwrap()
+                .uncertain_upload
+        );
+        let retained_generation = coordinator
+            .bridge
+            .status(&metadata.remote_id)
+            .unwrap()
+            .generation;
+        let snapshots_before = std::fs::read_dir(&cache).unwrap().count();
+        let receipt = coordinator.receipt().clone();
+        coordinator.disconnect().unwrap();
+        drop(coordinator);
+        provider.lost_reply(false);
+        if conflict {
+            provider.change(b"generated concurrent remote version");
+        }
+        let bridge = LocalFileBridge::open_bound(
+            Database::new(private.join("native.sqlite3")),
+            &cache,
+            Backend::new(provider.clone()),
+            "generated-projected-edit",
+        )
+        .unwrap();
+        let mut coordinator = NativeCoordinator::resume(bridge, &root, &receipt).unwrap();
+        let recovery = coordinator.synchronize_once().unwrap();
+        let mut retry_states = Vec::new();
+        for _ in 0..2 {
+            retry_states.push(coordinator.synchronize_once().unwrap());
+        }
         let replaced = coordinator
             .bridge
             .journal()
             .native_projection_for_id(&metadata.remote_id)
             .unwrap()
             .unwrap();
-        assert_ne!(replaced.native_file_id, projection.native_file_id);
-        assert_eq!(provider.download(&metadata.remote_id).unwrap(), atomic);
-        assert!(
-            coordinator
-                .bridge
-                .journal()
-                .native_capture_binding(&metadata.remote_id)
-                .unwrap()
-                .is_none()
-        );
+        let recovered_state = coordinator.bridge.status(&metadata.remote_id).unwrap();
+        let snapshots_after = std::fs::read_dir(&cache).unwrap().count();
+        let local_bytes = std::fs::read(&file).unwrap();
+        let remote_bytes = provider.download(&metadata.remote_id).unwrap();
+        let captured = coordinator
+            .bridge
+            .journal()
+            .native_capture_binding(&metadata.remote_id)
+            .unwrap();
         std::fs::remove_file(file).unwrap();
         let source_probe = Arc::downgrade(&coordinator._source);
         coordinator.retire_empty_generated_fixture().unwrap();
@@ -1151,6 +1603,35 @@ mod tests {
             .expect("native cache owner remained alive after coordinator drop");
         drop(ownership);
         state.close().unwrap();
+        assert_eq!(local_bytes, atomic);
+        assert_eq!(
+            snapshots_after, snapshots_before,
+            "retries must not keep extra full captures"
+        );
+        assert_eq!(
+            recovered_state.generation, retained_generation,
+            "receipt recovery must use the retained snapshot"
+        );
+        assert!(!recovered_state.uncertain_upload, "recovery={recovery:?}");
+        assert_eq!(recovery.deferred, 0, "{recovery:?}");
+        if conflict {
+            assert_eq!(recovery.conflicts, 1, "{recovery:?}");
+            assert!(
+                retry_states
+                    .iter()
+                    .all(|p| p.conflicts == 1 && p.deferred == 0)
+            );
+            assert_eq!(recovered_state.state, twodrive_core::FileState::Conflict);
+            assert_eq!(remote_bytes, b"generated concurrent remote version");
+            assert_eq!(replaced.native_file_id, projection.native_file_id);
+            assert!(captured.is_some());
+        } else {
+            assert_eq!(recovery.uploaded, 1, "{recovery:?}");
+            assert!(recovered_state.sync_confirmed());
+            assert_eq!(remote_bytes, atomic);
+            assert_ne!(replaced.native_file_id, projection.native_file_id);
+            assert!(captured.is_none());
+        }
     }
     #[test]
     #[ignore = "explicit NEW generated CFAPI root; whole nested projection, directory watcher and resumed source"]

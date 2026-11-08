@@ -49,12 +49,10 @@ impl Provider for NativeAccount {
         path: &str,
     ) -> anyhow::Result<MetadataEntry> {
         ensure!(self.writable, "native account is read-only");
-        self.verified()?.graph.create_directory_bound(
-            &self.expected,
-            &parent.remote_id,
-            path,
-            &mut || Ok(()),
-        )
+        self.verified()
+            .context(TransferNotStarted)?
+            .graph
+            .create_directory_bound(&self.expected, &parent.remote_id, path, &mut || Ok(()))
     }
     fn move_bound(
         &self,
@@ -63,23 +61,29 @@ impl Provider for NativeAccount {
         path: &str,
     ) -> anyhow::Result<MetadataEntry> {
         ensure!(self.writable, "native account is read-only");
-        self.verified()?.graph.move_item_bound(
-            &self.expected,
-            &entry.remote_id,
-            &entry.etag,
-            &parent.remote_id,
-            path,
-            &mut || Ok(()),
-        )
+        self.verified()
+            .context(TransferNotStarted)?
+            .graph
+            .move_item_bound(
+                &self.expected,
+                &entry.remote_id,
+                &entry.etag,
+                &parent.remote_id,
+                path,
+                &mut || Ok(()),
+            )
     }
     fn delete_bound(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
         ensure!(self.writable, "native account is read-only");
-        self.verified()?.graph.delete_item_bound(
-            &self.expected,
-            &entry.remote_id,
-            &entry.etag,
-            &mut || Ok(()),
-        )
+        self.verified()
+            .context(TransferNotStarted)?
+            .graph
+            .delete_item_bound(
+                &self.expected,
+                &entry.remote_id,
+                &entry.etag,
+                &mut || Ok(()),
+            )
     }
     fn supports_mount(&self) -> bool {
         false

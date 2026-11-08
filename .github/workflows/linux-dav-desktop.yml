@@ -127,6 +127,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked --release --features native-local-fixture --bins
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Persistent native coordinator compile and unit contracts
+        working-directory: experiments/twodrive-dev
+        run: |
+          cargo clippy --locked --features native-sync,native-test-hooks --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --features native-sync,native-test-hooks
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Windows IPC, file transfer, backups and autostart isolation
         run: |
           python scripts/test-local-file-preflight.py --engine experiments/twodrive-dev/target/release/twodrive-dav-engine.exe

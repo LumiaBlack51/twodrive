@@ -374,10 +374,34 @@ edit/upload/acknowledgement and a separate-process atomic replacement preserving
 the cloud object, followed by native readback. The backend for this test was mock.
 Namespace events veto new uploads/native in-sync state, while an immutable upload
 already in flight can retain its data receipt for later namespace reconciliation.
-Generic new-file/directory, rename/delete, remote delta and pin/eviction consumers
-remain incomplete; production takeover is not enabled by these tests.
+Automatic new-file and nested directory creation now run parent-first. Directory
+creation persists its physical claim and dispatch fence before cloud I/O; only
+a definite pre-dispatch authority failure can reset it. An ambiguous create
+remains fenced across owner restart rather than adopting a same-name folder.
+Generated actual native validation passed a two-level ordinary directory plus
+file through conversion, mock create-only receipts, publication and rehydration.
+A separate generated-only actual personal OneDrive run also passed automatic
+parent-first directory/file creation and independent native/cloud full-byte
+readback; all generated cloud/native scopes and copied credentials were retired.
+Bound-ID file/subtree rename now persists intent and dispatch/receipt phases,
+then composes the shipped Linux subtree/pin routines with native journal and
+publication advancement. A partial local commit is fenced and replayable.
+Generated native external-process directory/file renames and a separate actual
+personal OneDrive run preserve object IDs and complete bytes. Ambiguous move
+responses remain fenced; no blind replay is enabled. Idle local workers use the
+acknowledged watcher epoch/generation plus a durable-work veto, and full scans
+use path/tag/physical maps rather than repeated whole-tree searches.
+Delete, remote delta and pin/eviction consumers remain incomplete;
+production takeover is not enabled by these tests.
 
 The coordinator integration exposed a shutdown tail: native disconnect returned
 before a private cache reader's Rust destructor completed. Explicit callback-scope
 counting and a Condvar drain now precede source destruction. The regression checks
 owner-lock reacquisition with no cleanup sleep; see TD-20261108-33.
+
+Replacement upload recovery is now exercised through synchronize_once after
+closing/reopening the native owner. An existing captured generation is reconciled
+before another snapshot, then full native/private hashes gate publication. A
+concurrent remote outcome remains Conflict and repeated passes create no extra
+snapshots. The previous source order failed the native regression by retaining
+three extra captures across three retries; see TD-20261108-34.

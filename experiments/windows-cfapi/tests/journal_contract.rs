@@ -792,3 +792,205 @@ fn process_restart_keeps_ambiguous_upload_and_rejects_blind_retry() {
             .unwrap()
     );
 }
+
+#[test]
+fn native_directory_dispatch_and_physical_receipts_survive_restart() {
+    let (temp, journal, _) = fixture();
+    let db = journal.database().clone();
+    let id = "local-upload-dir-generated";
+    let root = "generated-root";
+    let physical = twodrive_core::NativeFileIdentity {
+        volume_serial: 7,
+        file_id: 9,
+    };
+    let receipt = serde_json::json!({"identity": root.as_bytes(), "volume_serial":7, "file_id":8})
+        .to_string();
+    journal
+        .begin_native_creation(id, "/folder", &receipt, "00000007:0000000000000009")
+        .unwrap();
+    db.create_local_directory(id, "/folder").unwrap();
+    journal
+        .stage_native_directory(id, "generated-parent")
+        .unwrap();
+    assert!(
+        journal
+            .stage_native_directory(id, "unrelated-parent")
+            .is_err()
+    );
+    assert!(journal.dispatch_native_directory(id).unwrap());
+    drop(journal);
+    let cache = temp.path().canonicalize().unwrap().join("cache");
+    let journal =
+        CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    assert!(
+        journal.dispatch_native_directory(id).is_err(),
+        "unknown create must not repeat after restart"
+    );
+    assert!(
+        journal
+            .receive_native_directory(id, &MetadataEntry::new_dir("cloud-dir", "/other", 1, "v1"))
+            .is_err()
+    );
+    let cloud = MetadataEntry::new_dir("cloud-dir", "/folder", 1, "v1");
+    journal.receive_native_directory(id, &cloud).unwrap();
+    assert!(!journal.dispatch_native_directory(id).unwrap());
+    assert_eq!(
+        journal.native_directory_receipt(id).unwrap().remote_id,
+        "cloud-dir"
+    );
+    assert!(
+        db.complete_metadata_operation(id, "/folder", &cloud)
+            .unwrap()
+    );
+    let calls = std::cell::Cell::new(0);
+    assert!(
+        journal
+            .with_native_directory_ack(
+                id,
+                root,
+                &receipt,
+                twodrive_core::NativeFileIdentity {
+                    file_id: 10,
+                    ..physical
+                },
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(())
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(
+        calls.get(),
+        0,
+        "identity must be checked before acknowledging the kernel"
+    );
+    journal
+        .with_native_directory_ack(id, root, &receipt, physical, || {
+            calls.set(calls.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(calls.get(), 1);
+    let projection = journal.native_projection_for_id(id).unwrap().unwrap();
+    assert!(projection.directory);
+    assert_eq!(projection.cloud_id, "cloud-dir");
+    assert_eq!(projection.tag, id.as_bytes());
+    db.complete_metadata_operation(
+        id,
+        "/folder",
+        &MetadataEntry::new_dir("cloud-dir", "/folder", 2, "later-version"),
+    )
+    .unwrap();
+    assert!(
+        journal
+            .with_native_directory_ack(id, root, &receipt, physical, || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert_eq!(
+        calls.get(),
+        1,
+        "stale create receipt must not acknowledge a newer directory version"
+    );
+}
+
+#[test]
+fn native_subtree_move_receipt_recovers_between_linux_metadata_and_journal_commits() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, path) = paths(temp.path());
+    db.init().unwrap();
+    let directory = MetadataEntry::new_dir("directory", "/folder", 1, "directory-v1");
+    db.upsert_metadata(&directory).unwrap();
+    db.upsert_metadata(&MetadataEntry::new_file(
+        ID,
+        "/folder/generated.txt",
+        ORIGINAL.len() as u64,
+        1,
+        "version-1",
+    ))
+    .unwrap();
+    let journal =
+        CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    for (id, tag, file_id) in [
+        (
+            "directory",
+            b"generated-directory-private-tag".as_slice(),
+            9,
+        ),
+        (ID, b"generated-file-private-tag".as_slice(), 10),
+    ] {
+        journal
+            .prepare_native_projection(id, "generated-root", tag)
+            .unwrap();
+        journal
+            .complete_native_projection(id, "generated-root", tag, 7, file_id)
+            .unwrap();
+    }
+    fs::write(&path, ORIGINAL).unwrap();
+    journal
+        .publish_download(ID, 0, &path, &hash(ORIGINAL), "version-1")
+        .unwrap();
+    edit(&journal);
+    let generation = journal.snapshot(ID).unwrap().generation;
+    let intent = twodrive_core::NativeMoveIntent {
+        publication: journal
+            .native_projection_for_id("directory")
+            .unwrap()
+            .unwrap(),
+        version: directory,
+        destination: "/renamed".into(),
+        parent_id: "generated-parent".into(),
+    };
+    journal.prepare_native_move(&intent).unwrap();
+    assert!(journal.snapshot(ID).unwrap().pending_operations);
+    assert!(journal.begin_upload(ID, digest).is_err());
+    assert!(journal.dispatch_native_move("directory").unwrap());
+    assert!(
+        journal.dispatch_native_move("directory").is_err(),
+        "unknown move must not be repeated"
+    );
+    journal
+        .receive_native_move(
+            "directory",
+            &MetadataEntry::new_dir("directory", "/renamed", 2, "directory-v2"),
+        )
+        .unwrap();
+    // Simulate interruption after the shipped subtree routine committed but
+    // before the native journal/projection completion.
+    db.move_subtree_and_queue("directory", "/renamed").unwrap();
+    drop(journal);
+    let journal =
+        CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    assert!(journal.snapshot(ID).unwrap().pending_operations);
+    journal.apply_native_move("directory").unwrap();
+    let after = journal.snapshot(ID).unwrap();
+    assert_eq!(after.generation, generation);
+    assert_eq!(after.state, FileState::Dirty);
+    assert!(!after.pending_operations);
+    assert_eq!(fs::read(&path).unwrap(), EDITED);
+    assert_eq!(
+        db.get_by_remote_id(ID).unwrap().unwrap().metadata.path,
+        "/renamed/generated.txt"
+    );
+    assert_eq!(
+        journal.native_projection_for_id(ID).unwrap().unwrap().path,
+        "/renamed/generated.txt"
+    );
+    let upload = journal.begin_upload(ID, digest).unwrap();
+    upload
+        .acknowledge(
+            &MetadataEntry::new_file(
+                ID,
+                "/renamed/generated.txt",
+                EDITED.len() as u64,
+                2,
+                "version-2",
+            ),
+            &hash(EDITED),
+        )
+        .unwrap();
+    assert!(journal.snapshot(ID).unwrap().sync_confirmed());
+}

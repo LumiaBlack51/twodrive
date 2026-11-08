@@ -43,6 +43,9 @@ impl PersistentSession {
         )?;
         let (handle, tag) = self.namespace_checked_handle(handle)?;
         let (volume, id, _) = file_binding(handle.0)?;
+        if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            directory_observation(handle.0, identity)?;
+        }
         before_convert(volume, id)?;
         if tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
             hr(
@@ -93,6 +96,31 @@ impl PersistentSession {
         directory: bool,
         action: impl FnOnce(u32, u64) -> Result<T>,
     ) -> Result<T> {
+        self.with_namespace_binding(
+            relative,
+            identity,
+            size,
+            directory,
+            |volume, id, observation| {
+                if !observation.os_in_sync
+                    || observation.modified_bytes != 0
+                    || observation.logical_size != size
+                {
+                    return Err("publication metadata already changed".into());
+                }
+                action(volume, id)
+            },
+        )
+    }
+    /// Identity/namespace lease only. Dirty data is neither read nor acknowledged.
+    pub fn with_namespace_binding<T>(
+        &self,
+        relative: &Path,
+        identity: &[u8],
+        size: u64,
+        directory: bool,
+        action: impl FnOnce(u32, u64, &NativeObservation) -> Result<T>,
+    ) -> Result<T> {
         let (_, parents) = self.guard_relative_parent(relative)?;
         let parent = parents
             .last()
@@ -134,13 +162,7 @@ impl PersistentSession {
             usize::try_from(size).map_err(|_| "publication size overflow")?,
             directory,
         )?;
-        if !observation.os_in_sync
-            || observation.modified_bytes != 0
-            || observation.logical_size != size
-        {
-            return Err("publication metadata already changed".into());
-        }
-        action(volume, id)
+        action(volume, id, &observation)
     }
 
     fn namespace_handle(&self, path: &Path) -> Result<(Handle, FILE_ATTRIBUTE_TAG_INFO)> {

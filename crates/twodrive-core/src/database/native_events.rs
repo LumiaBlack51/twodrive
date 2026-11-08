@@ -12,6 +12,26 @@ pub struct NativeWatchState {
 }
 
 impl Database {
+    /// Consume individual decisions without acknowledging unrelated operations
+    /// interleaved by other application threads. Compare the original payload.
+    pub fn acknowledge_native_event_decisions(
+        &self,
+        binding: &str,
+        decisions: &[(i64, String)],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(decisions.len() <= 10_000, "too many native decisions");
+        let mut conn = self.connect()?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (sequence, payload) in decisions {
+            tx.execute(
+                "DELETE FROM native_event_log WHERE sequence=?1 AND binding=?2 AND payload=?3",
+                params![sequence, binding, payload],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     /// Every new OS subscription starts with an unknown gap. A new inventory
     /// must reconcile that gap; old observations remain available for recovery.
     pub fn begin_native_watch(&self, binding: &str) -> anyhow::Result<NativeWatchState> {

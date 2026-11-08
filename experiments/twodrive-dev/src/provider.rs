@@ -43,7 +43,10 @@ pub trait Provider: CloudBackend {
         _parent: &MetadataEntry,
         _path: &str,
     ) -> anyhow::Result<MetadataEntry> {
-        anyhow::bail!("conditional namespace creation unavailable")
+        Err(
+            anyhow::anyhow!("conditional namespace creation unavailable")
+                .context(TransferNotStarted),
+        )
     }
     fn move_bound(
         &self,
@@ -51,10 +54,13 @@ pub trait Provider: CloudBackend {
         _parent: &MetadataEntry,
         _path: &str,
     ) -> anyhow::Result<MetadataEntry> {
-        anyhow::bail!("conditional namespace move unavailable")
+        Err(anyhow::anyhow!("conditional namespace move unavailable").context(TransferNotStarted))
     }
     fn delete_bound(&self, _entry: &MetadataEntry) -> anyhow::Result<()> {
-        anyhow::bail!("conditional namespace deletion unavailable")
+        Err(
+            anyhow::anyhow!("conditional namespace deletion unavailable")
+                .context(TransferNotStarted),
+        )
     }
     /// Optional protocol process control, used by bounded desktop operations.
     fn set_operation_cancel(&self, _cancel: Arc<std::sync::atomic::AtomicBool>) {}
@@ -88,9 +94,13 @@ impl Backend {
         parent: &MetadataEntry,
         path: &str,
     ) -> anyhow::Result<MetadataEntry> {
-        self.check_pause()?;
-        valid_path(path)?;
-        ensure!(parent.is_dir, "namespace parent is not a directory");
+        (|| {
+            self.check_pause()?;
+            valid_path(path)?;
+            ensure!(parent.is_dir, "namespace parent is not a directory");
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
         self.inner.create_directory_bound(parent, path)
     }
     pub fn move_bound(
@@ -99,20 +109,28 @@ impl Backend {
         parent: &MetadataEntry,
         path: &str,
     ) -> anyhow::Result<MetadataEntry> {
-        self.check_pause()?;
-        valid_path(path)?;
-        ensure!(
-            !entry.etag.is_empty() && parent.is_dir && entry.path != "/",
-            "conditional namespace move lacks a version"
-        );
+        (|| {
+            self.check_pause()?;
+            valid_path(path)?;
+            ensure!(
+                !entry.etag.is_empty() && parent.is_dir && entry.path != "/",
+                "conditional namespace move lacks a version"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
         self.inner.move_bound(entry, parent, path)
     }
     pub fn delete_bound(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
-        self.check_pause()?;
-        ensure!(
-            !entry.etag.is_empty() && entry.path != "/",
-            "conditional namespace delete lacks a version"
-        );
+        (|| {
+            self.check_pause()?;
+            ensure!(
+                !entry.etag.is_empty() && entry.path != "/",
+                "conditional namespace delete lacks a version"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
         self.inner.delete_bound(entry)
     }
     pub fn new(provider: impl Provider) -> Self {

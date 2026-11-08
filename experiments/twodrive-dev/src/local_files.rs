@@ -90,6 +90,10 @@ impl LocalFileBridge {
     pub fn journal(&self) -> &CacheJournal {
         &self.journal
     }
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub(crate) fn backend(&self) -> &Backend {
+        &self.backend
+    }
     pub fn status(&self, id: &str) -> anyhow::Result<CacheSnapshot> {
         self.journal.snapshot(id)
     }
@@ -189,6 +193,36 @@ impl LocalFileBridge {
         record: &twodrive_core::FileRecord,
         generation: Option<i64>,
     ) -> Result<i64, String> {
+        if let Some(expected) = generation {
+            let state = self
+                .status(&record.metadata.remote_id)
+                .map_err(|e| e.to_string())?;
+            if state.generation != expected
+                || state.readers != 0
+                || state.writers != 0
+                || state.upload_generation.is_some()
+                || state.uncertain_upload
+                || state.pending_operations
+                || !matches!(
+                    state.state,
+                    twodrive_core::FileState::Dirty
+                        | twodrive_core::FileState::Cached
+                        | twodrive_core::FileState::Pinned
+                )
+            {
+                return Err(format!(
+                    "native capture awaits existing cache work: generation_match={} readers={} writers={} upload={} uncertain={} recovery={} pending={} state={:?}",
+                    state.generation == expected,
+                    state.readers,
+                    state.writers,
+                    state.upload_generation.is_some(),
+                    state.uncertain_upload,
+                    state.recovery_required,
+                    state.pending_operations,
+                    state.state
+                ));
+            }
+        }
         let modified = locked.modified_time()?;
         let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())
             .map_err(|e| e.to_string())?;

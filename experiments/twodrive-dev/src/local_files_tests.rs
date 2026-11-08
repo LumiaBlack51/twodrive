@@ -17,12 +17,14 @@ const REMOTE_PATH: &str = "/generated-中文.txt";
 const INITIAL: &[u8] = b"generated initial provider content";
 const EDITED: &[u8] = b"generated unsynchronized content survives complete-byte checks";
 struct Remote {
+    path: String,
     present: bool,
     bytes: Vec<u8>,
     version: u64,
 }
 #[derive(Clone)]
 pub(crate) struct MockProvider {
+    folders: Arc<Mutex<Vec<MetadataEntry>>>,
     remote: Arc<Mutex<Remote>>,
     mode: Arc<AtomicU8>,
     conditional: bool,
@@ -31,7 +33,9 @@ pub(crate) struct MockProvider {
 impl MockProvider {
     pub(crate) fn new() -> Self {
         Self {
+            folders: Arc::default(),
             remote: Arc::new(Mutex::new(Remote {
+                path: REMOTE_PATH.into(),
                 present: true,
                 bytes: INITIAL.to_vec(),
                 version: 1,
@@ -46,19 +50,30 @@ impl MockProvider {
         value.remote.lock().unwrap().present = false;
         value
     }
+    #[cfg(all(windows, feature = "native-sync"))]
+    pub(crate) fn empty_at(path: &str) -> Self {
+        let value = Self::empty();
+        value.remote.lock().unwrap().path = path.into();
+        value
+    }
     fn metadata(remote: &Remote) -> MetadataEntry {
         MetadataEntry::new_file(
             OBJECT,
-            REMOTE_PATH,
+            &remote.path,
             remote.bytes.len() as u64,
             remote.version as i64,
             format!("version-{}", remote.version),
         )
     }
-    fn change(&self, bytes: &[u8]) {
+    pub(crate) fn change(&self, bytes: &[u8]) {
         let mut r = self.remote.lock().unwrap();
         r.bytes = bytes.to_vec();
         r.version += 1;
+    }
+    #[cfg(all(windows, feature = "native-test-hooks"))]
+    pub(crate) fn lost_reply(&self, enabled: bool) {
+        self.mode
+            .store(if enabled { 2 } else { 0 }, Ordering::SeqCst);
     }
 }
 impl CloudBackend for MockProvider {
@@ -76,12 +91,24 @@ impl CloudBackend for MockProvider {
         })
     }
     fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        if let Some(folder) = self
+            .folders
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|folder| folder.remote_id == id)
+        {
+            return Ok(Some(folder.clone()));
+        }
         ensure!(id == OBJECT, "opaque ID required, never a path");
         let remote = self.remote.lock().unwrap();
         Ok(remote.present.then(|| Self::metadata(&remote)))
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
-        ensure!(path == REMOTE_PATH, "unexpected fixture path");
+        ensure!(
+            path == self.remote.lock().unwrap().path,
+            "unexpected fixture path"
+        );
         self.get_metadata(OBJECT)
     }
     fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
@@ -137,6 +164,89 @@ impl CloudBackend for MockProvider {
     }
 }
 impl Provider for MockProvider {
+    fn move_bound(
+        &self,
+        entry: &MetadataEntry,
+        parent: &MetadataEntry,
+        path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        let mut folders = self.folders.lock().unwrap();
+        let parent_path = path.rsplit_once('/').unwrap().0;
+        ensure!(
+            (parent_path.is_empty() && parent.remote_id == "root")
+                || folders.iter().any(
+                    |folder| folder.remote_id == parent.remote_id && folder.path == parent_path
+                ),
+            "fixture move parent mismatch"
+        );
+        let mut remote = self.remote.lock().unwrap();
+        if entry.remote_id == OBJECT {
+            ensure!(
+                remote.present && entry.etag == Self::metadata(&remote).etag,
+                "fixture conflict"
+            );
+            remote.path = path.into();
+            remote.version += 1;
+            return Ok(Self::metadata(&remote));
+        }
+        let folder = folders
+            .iter_mut()
+            .find(|folder| folder.remote_id == entry.remote_id)
+            .context("fixture folder missing")?;
+        ensure!(folder.etag == entry.etag, "fixture conflict");
+        let old = folder.path.clone();
+        *folder = MetadataEntry::new_dir(
+            &entry.remote_id,
+            path,
+            folder.modified_unix,
+            format!("{}-moved", folder.etag),
+        );
+        let result = folder.clone();
+        for child in folders.iter_mut() {
+            if let Some(suffix) = child.path.strip_prefix(&format!("{old}/")) {
+                *child = MetadataEntry::new_dir(
+                    &child.remote_id,
+                    format!("{path}/{suffix}"),
+                    child.modified_unix,
+                    &child.etag,
+                );
+            }
+        }
+        if let Some(suffix) = remote.path.strip_prefix(&format!("{old}/")) {
+            remote.path = format!("{path}/{suffix}");
+        }
+        Ok(result)
+    }
+    fn create_directory_bound(
+        &self,
+        parent: &MetadataEntry,
+        path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        let mut folders = self.folders.lock().unwrap();
+        let parent_path = path.rsplit_once('/').unwrap().0;
+        if parent_path.is_empty() {
+            ensure!(parent.remote_id == "root", "opaque root ID required");
+        } else {
+            ensure!(
+                folders.iter().any(
+                    |folder| folder.remote_id == parent.remote_id && folder.path == parent_path
+                ),
+                "parent must finish before child"
+            );
+        }
+        ensure!(
+            folders.iter().all(|folder| folder.path != path),
+            "fixture conflict: folder already exists"
+        );
+        let entry = MetadataEntry::new_dir(
+            format!("generated-directory-{}", folders.len()),
+            path,
+            1,
+            "folder-v1",
+        );
+        folders.push(entry.clone());
+        Ok(entry)
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             upload: true,
@@ -157,7 +267,7 @@ impl Provider for MockProvider {
     ) -> anyhow::Result<MetadataEntry> {
         self.upload_calls.fetch_add(1, Ordering::SeqCst);
         ensure!(
-            path == REMOTE_PATH && (id == Some(OBJECT) || id.is_none()),
+            path == self.remote.lock().unwrap().path && (id == Some(OBJECT) || id.is_none()),
             "identity/path boundary violated"
         );
         let bytes = fs::read(source)?;
