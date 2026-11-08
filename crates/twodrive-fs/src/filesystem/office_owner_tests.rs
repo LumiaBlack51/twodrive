@@ -594,3 +594,241 @@ fn in_flight_upload_renamed_to_excluded_then_unlinked_keeps_its_tombstone() {
     drop(filesystem);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn excluded_backup_does_not_block_new_original_save_across_retries_and_restart() {
+    let root = test_root("excluded-backup-save");
+    fs::create_dir_all(&root).unwrap();
+    let rules = NameExclusions::new(vec![r"\.bak$".into()]).unwrap();
+    let db = Database::new(root.join("db")).with_name_exclusions(rules.clone());
+    db.init().unwrap();
+    let backend = MockBackend::new();
+    sync_metadata(&db, &backend).unwrap();
+    let filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    let backend = Arc::clone(&filesystem.backend);
+    let mut test = TestFs {
+        fs: filesystem,
+        root,
+    };
+    let original = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
+    let original_bytes = backend
+        .download(original.cloud_remote_id.as_deref().unwrap())
+        .unwrap();
+    test.fs
+        .rename_record(
+            ROOT_INO,
+            OsStr::new("README-cloud.txt"),
+            ROOT_INO,
+            OsStr::new("README-cloud.txt.bak"),
+        )
+        .unwrap();
+    let (_, fh, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("README-cloud.txt"), libc::O_RDWR)
+        .unwrap();
+    let saved = b"complete newly saved document with excluded backup";
+    write_slice(&test.fs.write_handles[&fh].cache_path, 0, saved).unwrap();
+    test.fs.queue_upload_handle(fh).unwrap();
+    test.fs.write_handles.remove(&fh);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !test
+        .fs
+        .upload_pool
+        .sender
+        .pending
+        .lock()
+        .unwrap()
+        .is_empty()
+    {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    recover_dirty_uploads(&db, backend.as_ref()).unwrap();
+    // Reopen persistence and execute the same startup/periodic recovery paths.
+    let reopened = Database::new(test.root.join("db")).with_name_exclusions(rules);
+    reopened.init().unwrap();
+    recover_interrupted_writes(&reopened).unwrap();
+    recover_dirty_uploads(&reopened, backend.as_ref()).unwrap();
+    let uploaded = backend
+        .get_metadata_by_path("/README-cloud.txt")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        backend.download(&uploaded.remote_id).unwrap(),
+        saved,
+        "excluded backup must not monopolize the original cloud identity"
+    );
+    let backup = reopened
+        .get_by_path("/README-cloud.txt.bak")
+        .unwrap()
+        .unwrap();
+    assert_eq!(backup.state, FileState::LocalOnly);
+    assert_eq!(
+        fs::read(backup.cache_path.unwrap()).unwrap(),
+        original_bytes
+    );
+    assert!(backup.cloud_remote_id.is_none());
+    assert!(
+        backend
+            .get_metadata_by_path("/README-cloud.txt.bak")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        reopened
+            .get_by_path("/README-cloud.txt")
+            .unwrap()
+            .unwrap()
+            .state,
+        FileState::Cached
+    );
+}
+
+struct BackupVersionBackend {
+    inner: MockBackend,
+    external_change: std::sync::atomic::AtomicBool,
+    attempted_etags: Mutex<Vec<String>>,
+}
+impl CloudBackend for BackupVersionBackend {
+    fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+        let mut entries = self.inner.list_all()?;
+        if self.external_change.load(Ordering::SeqCst) {
+            for entry in &mut entries {
+                if entry.path == "/report.txt" {
+                    entry.etag = "etag-external".into();
+                }
+            }
+        }
+        Ok(entries)
+    }
+    fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+        self.inner.download(id)
+    }
+    fn upload(&self, path: &str, bytes: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+        self.upload_with_etag(path, bytes, None)
+    }
+    fn upload_with_etag(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        etag: Option<&str>,
+    ) -> anyhow::Result<MetadataEntry> {
+        if path == "/report.txt"
+            && self.external_change.load(Ordering::SeqCst)
+            && let Some(etag) = etag
+        {
+            self.attempted_etags.lock().unwrap().push(etag.into());
+            if etag != "etag-external" {
+                anyhow::bail!("Graph request failed with HTTP 412 Precondition Failed");
+            }
+        }
+        self.inner.upload(path, bytes)
+    }
+    fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+        self.inner.create_folder(path)
+    }
+    fn rename(&self, id: &str, path: &str) -> anyhow::Result<MetadataEntry> {
+        self.inner.rename(id, path)
+    }
+    fn delete(&self, id: &str) -> anyhow::Result<()> {
+        self.inner.delete(id)
+    }
+}
+
+#[test]
+fn excluded_backup_handoff_retains_old_etag_and_preserves_external_edit_as_conflict() {
+    let root = test_root("excluded-backup-external-edit");
+    fs::create_dir_all(&root).unwrap();
+    let db = Database::new(root.join("db"))
+        .with_name_exclusions(NameExclusions::new(vec![r"\.bak$".into()]).unwrap());
+    db.init().unwrap();
+    let backend = BackupVersionBackend {
+        inner: MockBackend::new(),
+        external_change: std::sync::atomic::AtomicBool::new(false),
+        attempted_etags: Mutex::new(Vec::new()),
+    };
+    backend
+        .inner
+        .upload("/report.txt", b"original before backup".to_vec())
+        .unwrap();
+    sync_metadata(&db, &backend).unwrap();
+    let baseline = db
+        .get_by_path("/report.txt")
+        .unwrap()
+        .unwrap()
+        .metadata
+        .etag;
+    let mut filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    filesystem
+        .rename_record(
+            ROOT_INO,
+            OsStr::new("report.txt"),
+            ROOT_INO,
+            OsStr::new("report.txt.bak"),
+        )
+        .unwrap();
+    filesystem
+        .backend
+        .inner
+        .upload("/report.txt", b"external cloud winner".to_vec())
+        .unwrap();
+    filesystem
+        .backend
+        .external_change
+        .store(true, Ordering::SeqCst);
+    let (_, fh, _) = filesystem
+        .create_upload(ROOT_INO, OsStr::new("report.txt"), libc::O_RDWR)
+        .unwrap();
+    write_slice(
+        &filesystem.write_handles[&fh].cache_path,
+        0,
+        b"local saved document",
+    )
+    .unwrap();
+    filesystem.queue_upload_handle(fh).unwrap();
+    filesystem.write_handles.remove(&fh);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !filesystem
+        .upload_pool
+        .sender
+        .pending
+        .lock()
+        .unwrap()
+        .is_empty()
+    {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let attempts = filesystem.backend.attempted_etags.lock().unwrap();
+    assert_eq!(&*attempts, &[baseline]);
+    drop(attempts);
+    let remote = filesystem
+        .backend
+        .get_metadata_by_path("/report.txt")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        filesystem.backend.download(&remote.remote_id).unwrap(),
+        b"external cloud winner"
+    );
+    let conflict = filesystem
+        .backend
+        .list_all()
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.name.contains("TwoDrive conflict"))
+        .expect("local edit must be preserved as a conflict copy");
+    assert_eq!(
+        filesystem.backend.download(&conflict.remote_id).unwrap(),
+        b"local saved document"
+    );
+    let backup = db.get_by_path("/report.txt.bak").unwrap().unwrap();
+    assert_eq!(backup.state, FileState::LocalOnly);
+    assert!(backup.cloud_remote_id.is_none());
+    assert_eq!(
+        fs::read(backup.cache_path.unwrap()).unwrap(),
+        b"original before backup"
+    );
+    drop(filesystem);
+    fs::remove_dir_all(root).unwrap();
+}

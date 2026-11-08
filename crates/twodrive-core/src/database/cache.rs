@@ -1,5 +1,5 @@
 use super::Database;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::fs;
 use std::path::Path;
 
@@ -82,6 +82,76 @@ impl Database {
             params![state.as_str(), remote_id],
         )?;
         Ok(())
+    }
+
+    /// A backup-style save can leave the original cloud identity on an excluded
+    /// local backup. Hand it to the new original without accepting a newer
+    /// remote version as the user's baseline or uploading the backup itself.
+    pub fn adopt_excluded_backup_identity(
+        &self,
+        record: &FileRecord,
+        remote: &crate::MetadataEntry,
+    ) -> anyhow::Result<Option<FileRecord>> {
+        if record.cloud_remote_id.is_some()
+            || self.excludes_upload(record)
+            || record.metadata.path != remote.path
+            || record.state != FileState::Dirty
+        {
+            return Ok(None);
+        }
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let owner: Option<(String, String)> = tx
+            .query_row(
+                "SELECT remote_id, etag FROM files WHERE cloud_remote_id = ?1
+                AND remote_id <> ?2 AND state = 'local_only' AND is_dir = 0
+                AND cache_path IS NOT NULL AND etag <> '' AND upload_path IS NULL
+                AND NOT EXISTS (SELECT 1 FROM pending_metadata_operations WHERE local_id = files.remote_id)",
+                params![remote.remote_id, record.metadata.remote_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((owner_id, baseline_etag)) = owner else {
+            return Ok(None);
+        };
+        let deleting: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending_deletes
+            WHERE cloud_remote_id = ?1 OR remote_id = ?1 OR local_id IN (?2, ?3))",
+            params![remote.remote_id, owner_id, record.metadata.remote_id],
+            |row| row.get(0),
+        )?;
+        if deleting {
+            return Ok(None);
+        }
+        tx.execute(
+            "UPDATE files SET cloud_remote_id = NULL, etag = '' WHERE remote_id = ?1",
+            params![owner_id],
+        )?;
+        let claimed = tx.execute(
+            "UPDATE files SET cloud_remote_id = ?1, etag = ?2
+            WHERE remote_id = ?3 AND cloud_remote_id IS NULL AND state = 'dirty'
+                AND path = ?4 AND cache_path IS ?5 AND size = ?6 AND modified_unix = ?7
+                AND etag = ?8 AND upload_path IS NULL",
+            params![
+                remote.remote_id,
+                baseline_etag,
+                record.metadata.remote_id,
+                record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
+                record.metadata.size as i64,
+                record.metadata.modified_unix,
+                record.metadata.etag
+            ],
+        )?;
+        if claimed != 1 {
+            return Ok(None);
+        } // Roll back the detach too.
+        tx.execute(
+            "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
+            params![owner_id],
+        )?;
+        tx.commit()?;
+        self.get_by_remote_id(&record.metadata.remote_id)
     }
 
     /// Claim only the snapshot inspected by the worker. Network preflight can

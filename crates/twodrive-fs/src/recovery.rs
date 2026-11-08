@@ -87,7 +87,7 @@ pub fn recover_dirty_uploads_concurrent<B: CloudBackend>(
 pub fn recover_dirty_record<B: CloudBackend>(
     db: &Database,
     backend: &B,
-    record: FileRecord,
+    mut record: FileRecord,
     on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let lock = item_sync_lock(&record.metadata.remote_id);
@@ -141,8 +141,14 @@ pub fn recover_dirty_record<B: CloudBackend>(
             .pending_deletes()?
             .iter()
             .any(|delete| delete.cloud_remote_id.as_deref() == Some(remote.remote_id.as_str()));
-        if owned_by_another_record || awaiting_delete {
+        if awaiting_delete {
             return Ok(false);
+        }
+        if owned_by_another_record {
+            let Some(adopted) = db.adopt_excluded_backup_identity(&record, &remote)? else {
+                return Ok(false);
+            };
+            record = adopted;
         }
     }
 
