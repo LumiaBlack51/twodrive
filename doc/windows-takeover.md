@@ -228,3 +228,21 @@ scan cannot clear a changed epoch/generation. Native generated rename/delete
 observations survived watcher recreation; cancellation drains pending OS buffer
 references. These are observations, not permission to delete a cloud item.
 The persistent coordinator and namespace mutation consumer remain outstanding.
+
+
+An immutable publication source now serves a verified private-cache lease for the
+entire CFAPI fetch. The bound hydration claim compares the published local/cloud
+identity, path, ETag, size and mtime without importing fresh discovery. A newer
+remote version before first download is refused; corruption remains recoverable
+local work. One digest check precedes bounded 64 KiB transfers, with cancellation
+registered before downloading and checked during verification. Generated Windows
+regressions cover the retained lease, blocked writes, cancellation, unpublished
+remote changes and corruption. The real personal OneDrive generated-file smoke
+was rerun using this source; all four sizes, native acknowledgements, stale ETag
+refusal and scope cleanup passed. This is still a component test, without a
+persistent root projection/delta coordinator.
+
+Dot's definite-pre-transfer rejection finding is fixed: a local pause before
+Provider invocation returns the exact upload claim to Dirty using generation,
+owner and digest checks. Actual provider errors remain uncertain; an intervening
+native edit is retained and blocks a stale retry. See TD-20261108-22.

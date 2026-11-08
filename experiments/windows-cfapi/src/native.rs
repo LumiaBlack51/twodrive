@@ -82,9 +82,27 @@ pub fn platform() -> Result<CF_PLATFORM_INFO> {
 /// this boundary. Each requested buffer is at most 64 KiB.
 pub trait HydrationSource: Send + Sync {
     fn size(&self, identity: &[u8]) -> Result<usize>;
+    /// An engine can retain an immutable, verified cache lease for the whole
+    /// fetch instead of reopening and rehashing it for every 64 KiB transfer.
+    fn begin_read(
+        &self,
+        _identity: &[u8],
+        _cancelled: &AtomicBool,
+    ) -> Result<Option<Box<dyn HydrationRead>>> {
+        Ok(None)
+    }
     fn read_range(
         &self,
         identity: &[u8],
+        offset: usize,
+        length: usize,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<u8>>;
+}
+
+pub trait HydrationRead {
+    fn read_range(
+        &mut self,
         offset: usize,
         length: usize,
         cancelled: &AtomicBool,
@@ -167,6 +185,11 @@ unsafe extern "system" fn fetch(
         }
         offset = start as i64;
         length = (end - start) as i64;
+        // Register cancellation before any blocking provider download.
+        let mut reader = match &source.engine {
+            Some(engine) => engine.begin_read(identity, &cancelled)?,
+            None => None,
+        };
         for start in (start..end).step_by(65536) {
             if source.offline.load(Ordering::SeqCst)
                 || source.stopping.load(Ordering::SeqCst)
@@ -175,9 +198,12 @@ unsafe extern "system" fn fetch(
                 return Err("request unavailable or cancelled".into());
             }
             let count = (end - start).min(65536);
-            let bytes = match &source.engine {
-                Some(engine) => engine.read_range(identity, start, count, &cancelled)?,
-                None => payload()[start..start + count].to_vec(),
+            let bytes = match &mut reader {
+                Some(reader) => reader.read_range(start, count, &cancelled)?,
+                None => match &source.engine {
+                    Some(engine) => engine.read_range(identity, start, count, &cancelled)?,
+                    None => payload()[start..start + count].to_vec(),
+                },
             };
             if bytes.len() != count
                 || cancelled.load(Ordering::SeqCst)

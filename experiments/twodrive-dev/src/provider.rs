@@ -12,6 +12,16 @@ use std::{
 
 pub type Progress = Arc<dyn Fn(u64, u64) -> anyhow::Result<()> + Send + Sync>;
 
+/// Only attached by Backend before invoking the Provider. Provider failures and
+/// progress-callback cancellation are never classified as zero-call rejection.
+#[derive(Debug)]
+pub(crate) struct TransferNotStarted;
+impl std::fmt::Display for TransferNotStarted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transfer rejected before provider invocation")
+    }
+}
+
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Capabilities {
     pub upload: bool,
@@ -156,13 +166,17 @@ impl Backend {
         source: &Path,
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
-        valid_path(path)?;
-        self.check_pause()?;
-        let caps = self.capabilities();
-        ensure!(
-            caps.upload && caps.conditional_upload,
-            "atomic creation unavailable"
-        );
+        (|| {
+            valid_path(path)?;
+            self.check_pause()?;
+            let caps = self.capabilities();
+            ensure!(
+                caps.upload && caps.conditional_upload,
+                "atomic creation unavailable"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
         let paused = self.paused.clone();
         self.inner.upload_controlled(
             path,
@@ -188,13 +202,17 @@ impl Backend {
         version: &str,
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
-        valid_path(path)?;
-        self.check_pause()?;
-        let caps = self.capabilities();
-        ensure!(
-            caps.upload && caps.conditional_upload && !id.is_empty() && !version.is_empty(),
-            "versioned conditional upload unavailable"
-        );
+        (|| {
+            valid_path(path)?;
+            self.check_pause()?;
+            let caps = self.capabilities();
+            ensure!(
+                caps.upload && caps.conditional_upload && !id.is_empty() && !version.is_empty(),
+                "versioned conditional upload unavailable"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
         let paused = self.paused.clone();
         self.inner.upload_controlled(
             path,

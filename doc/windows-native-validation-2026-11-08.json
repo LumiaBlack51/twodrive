@@ -275,5 +275,21 @@
     "stale_scan_watermark_cannot_clear_new_changes": true,
     "sqlite_partial_batch_rolls_back": true,
     "cloud_deletion_authority": false
+  },
+  "published_native_source": {
+    "immutable_published_version_before_download": true,
+    "one_verified_cache_lease_per_cfapi_fetch": true,
+    "cancellation_registered_before_download": true,
+    "unpublished_cloud_version_refused": true,
+    "corruption_preserved_for_recovery": true,
+    "real_personal_cloud_four_sizes_and_cleanup": true,
+    "persistent_projection_delta_coordinator": false
+  },
+  "zero_call_upload_rejection": {
+    "old_regression_failed": true,
+    "no_provider_invocation_when_paused": true,
+    "dirty_retry_survives_restart": true,
+    "same_local_identity_full_content_and_cloud_binding": true,
+    "ambiguous_provider_failures_stay_fenced": true
   }
 }

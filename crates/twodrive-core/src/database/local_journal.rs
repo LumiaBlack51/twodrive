@@ -202,6 +202,39 @@ impl CacheJournal {
         &self.0.root
     }
 
+    /// Claim exactly the published native version. Unlike metadata discovery,
+    /// hydration must never import a newer remote version into an old file.
+    pub fn begin_bound_download(&self, expected: &FileRecord) -> anyhow::Result<i64> {
+        ensure!(
+            !expected.metadata.is_dir
+                && expected.cloud_remote_id.is_some()
+                && !expected.metadata.etag.is_empty(),
+            "bound version required"
+        );
+        let _guard = self
+            .0
+            .gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache gate poisoned"))?;
+        let mut conn = journal_connection(&self.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure!(tx.execute("UPDATE files SET state='hydrating' WHERE remote_id=?1 AND cloud_remote_id=?2
+            AND path=?3 AND etag=?4 AND size=?5 AND modified_unix=?6 AND is_dir=0
+            AND state='online_only' AND cache_path IS NULL AND release_pending=0
+            AND NOT EXISTS(SELECT 1 FROM local_cache_journal WHERE local_id=?1)
+            AND NOT EXISTS(SELECT 1 FROM local_native_dirty WHERE cloud_id=?1 OR cloud_id=?2)
+            AND NOT EXISTS(SELECT 1 FROM pending_deletes WHERE remote_id=?1 OR local_id=?1 OR path=?3)
+            AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations op JOIN files parent ON parent.remote_id=op.local_id WHERE ?3=parent.path OR substr(?3,1,length(parent.path)+1)=parent.path||'/')",
+            params![expected.metadata.remote_id,expected.cloud_remote_id,expected.metadata.path,expected.metadata.etag,i64::try_from(expected.metadata.size)?,expected.metadata.modified_unix])?==1,"published hydration baseline changed");
+        let generation = tx.query_row(
+            "SELECT download_generation FROM files WHERE remote_id=?1",
+            [&expected.metadata.remote_id],
+            |row| row.get(0),
+        )?;
+        tx.commit()?;
+        Ok(generation)
+    }
+
     /// Refuse an already owned cache before provider metadata can invalidate it.
     /// The owner gate also serializes the initial claim against publication.
     pub fn begin_download(&self, remote: &MetadataEntry) -> anyhow::Result<(String, i64)> {
@@ -789,6 +822,7 @@ impl CacheJournal {
                 && !state.pending_operations
                 && !state.recovery_required
                 && !state.uncertain_upload
+                && !state.native_dirty
                 && state.base_etag == record.metadata.etag,
             "upload snapshot is blocked"
         );
@@ -1057,6 +1091,42 @@ impl UploadLease {
     }
     pub fn file(&mut self) -> &mut File {
         &mut self.file
+    }
+    /// The caller must prove it never invoked the provider. This must not be
+    /// used for timeouts, cancellation after dispatch, or any ambiguous reply.
+    pub fn reject_unstarted(
+        mut self,
+        digest: impl FnOnce(&mut File) -> anyhow::Result<String>,
+    ) -> anyhow::Result<()> {
+        ensure!(
+            digest(&mut self.file)? == self.digest,
+            "unstarted upload snapshot changed"
+        );
+        let _guard = self
+            .journal
+            .0
+            .gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache gate poisoned"))?;
+        let mut conn = journal_connection(&self.journal.0.db)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = snapshot(&tx, &self.record.metadata.remote_id)?;
+        ensure!(
+            self.epoch == self.journal.0.epoch
+                && state.generation == self.generation
+                && state.upload_generation == Some(self.generation)
+                && state.state == FileState::Uploading
+                && !state.uncertain_upload
+                && state.writers == 0,
+            "stale unstarted transfer"
+        );
+        ensure!(tx.execute("UPDATE files SET state='dirty' WHERE remote_id=?1 AND state='uploading'
+            AND path=?2 AND cache_path IS ?3 AND cloud_remote_id IS ?4 AND etag=?5 AND size=?6 AND modified_unix=?7",
+            params![self.record.metadata.remote_id,self.record.metadata.path,self.record.cache_path.as_ref().map(|p|p.to_string_lossy()),self.record.cloud_remote_id,self.record.metadata.etag,i64::try_from(self.record.metadata.size)?,self.record.metadata.modified_unix])?==1,"unstarted upload owner changed");
+        ensure!(tx.execute("UPDATE local_cache_journal SET upload_generation=NULL,upload_epoch=NULL,upload_digest=NULL,dirty_intent=1 WHERE local_id=?1 AND generation=?2 AND upload_generation=?2 AND upload_epoch=?3",params![self.record.metadata.remote_id,self.generation,self.epoch])?==1,"unstarted upload epoch changed");
+        tx.commit()?;
+        self.closed = true;
+        Ok(())
     }
     pub fn acknowledge(
         mut self,

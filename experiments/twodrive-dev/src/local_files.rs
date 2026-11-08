@@ -328,6 +328,15 @@ impl LocalFileBridge {
         remote_id: &str,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> anyhow::Result<String> {
+        self.hydrate_version(remote_id, None, cancelled)
+    }
+
+    fn hydrate_version(
+        &self,
+        remote_id: &str,
+        expected: Option<&twodrive_core::FileRecord>,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> anyhow::Result<String> {
         use std::sync::atomic::Ordering;
         ensure!(!cancelled.load(Ordering::SeqCst), "hydration cancelled");
         let backend = &self.backend;
@@ -339,7 +348,19 @@ impl LocalFileBridge {
             "versioned file required"
         );
         let db = self.journal.database();
-        let (id, generation) = self.journal.begin_download(&core_metadata(&remote))?;
+        let (id, generation) = if let Some(expected) = expected {
+            ensure!(
+                expected.cloud_remote_id.as_deref() == Some(remote.remote_id.as_str())
+                    && same_version(&expected.metadata, &remote),
+                "remote differs from published native version"
+            );
+            (
+                expected.metadata.remote_id.clone(),
+                self.journal.begin_bound_download(expected)?,
+            )
+        } else {
+            self.journal.begin_download(&core_metadata(&remote))?
+        };
         let result = (|| {
             let mut temporary = tempfile::NamedTempFile::new_in(self.journal.cache_root())?;
             let size = backend.download_to(remote_id, temporary.as_file_mut(), &mut |_| {
@@ -370,6 +391,73 @@ impl LocalFileBridge {
             db.fail_hydration(&id, generation)?;
         }
         result
+    }
+
+    /// Retain one verified private-file lease throughout a native fetch. Its
+    /// baseline is supplied by the persisted publication, never fresh discovery.
+    pub fn open_published_read(
+        &self,
+        expected: &twodrive_core::FileRecord,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> anyhow::Result<PublishedRead> {
+        use std::sync::atomic::Ordering;
+        ensure!(!cancelled.load(Ordering::SeqCst), "native read cancelled");
+        let id = &expected.metadata.remote_id;
+        let current = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("publication no longer exists")?;
+        ensure!(
+            same_version(&current.metadata, &expected.metadata)
+                && current.cloud_remote_id == expected.cloud_remote_id
+                && !expected.metadata.is_dir,
+            "native publication version changed"
+        );
+        if current.cache_path.is_none() {
+            self.hydrate_version(
+                current
+                    .cloud_remote_id
+                    .as_deref()
+                    .context("unbound publication")?,
+                Some(expected),
+                cancelled,
+            )?;
+        }
+        let mut file = self.journal.open_read(id)?;
+        let state = self.status(id)?;
+        let actual = self
+            .journal
+            .database()
+            .get_by_remote_id(id)?
+            .context("publication disappeared")?;
+        ensure!(
+            state.sync_confirmed()
+                && same_version(&actual.metadata, &expected.metadata)
+                && actual.cloud_remote_id == expected.cloud_remote_id,
+            "native source is not acknowledged"
+        );
+        let digest = file.acknowledged_digest().to_owned();
+        if digest_reader_checked(&mut file, &mut || {
+            ensure!(
+                !cancelled.load(Ordering::SeqCst),
+                "native verification cancelled"
+            );
+            Ok(())
+        })? != digest
+        {
+            drop(file);
+            self.journal.record_external_edit(id, state.generation)?;
+            anyhow::bail!("private native source changed; preserved for recovery");
+        }
+        ensure!(!cancelled.load(Ordering::SeqCst), "native read cancelled");
+        Ok(PublishedRead {
+            file,
+            bridge: self.clone(),
+            id: id.clone(),
+            generation: state.generation,
+            size: expected.metadata.size,
+        })
     }
 
     /// Provider's explicit conditional-write capability is mandatory; legacy
@@ -410,7 +498,9 @@ impl LocalFileBridge {
                 lease.acknowledge(&core_metadata(&remote), &digest)
             }
             Err(error) => {
-                if provider.is_conflict_error(&error) {
+                if error.is::<crate::provider::TransferNotStarted>() {
+                    lease.reject_unstarted(digest_file)?;
+                } else if provider.is_conflict_error(&error) {
                     lease.reject_conflict()?;
                 }
                 // All other errors can be an accepted write with a lost reply.
@@ -472,10 +562,61 @@ impl LocalFileBridge {
     }
 }
 
+pub struct PublishedRead {
+    file: twodrive_core::CacheReadLease,
+    bridge: LocalFileBridge,
+    id: String,
+    generation: i64,
+    size: u64,
+}
+impl PublishedRead {
+    pub fn read_range(
+        &mut self,
+        offset: usize,
+        length: usize,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> anyhow::Result<Vec<u8>> {
+        use std::sync::atomic::Ordering;
+        ensure!(
+            !cancelled.load(Ordering::SeqCst)
+                && length <= 65536
+                && (offset as u64)
+                    .checked_add(length as u64)
+                    .is_some_and(|end| end <= self.size),
+            "bounded uncancelled native range required"
+        );
+        let state = self.bridge.status(&self.id)?;
+        ensure!(
+            state.sync_confirmed() && state.generation == self.generation,
+            "native read version invalidated"
+        );
+        self.file.seek(SeekFrom::Start(offset as u64))?;
+        let mut bytes = vec![0; length];
+        self.file.read_exact(&mut bytes)?;
+        ensure!(!cancelled.load(Ordering::SeqCst), "native read cancelled");
+        Ok(bytes)
+    }
+}
+
+fn same_version(a: &MetadataEntry, b: &MetadataEntry) -> bool {
+    a.path == b.path
+        && a.etag == b.etag
+        && a.size == b.size
+        && a.modified_unix == b.modified_unix
+        && a.is_dir == b.is_dir
+}
+
 pub(crate) fn digest_reader(reader: &mut impl Read) -> anyhow::Result<String> {
+    digest_reader_checked(reader, &mut || Ok(()))
+}
+fn digest_reader_checked(
+    reader: &mut impl Read,
+    check: &mut dyn FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<String> {
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 65536];
     loop {
+        check()?;
         let size = reader.read(&mut buffer)?;
         if size == 0 {
             break;

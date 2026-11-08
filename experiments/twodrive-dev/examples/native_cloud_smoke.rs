@@ -1,24 +1,21 @@
 //! Explicit, disposable real-OneDrive validation. Never accepts an existing
 //! native root or an arbitrary cloud destination. No user work files are used.
-#[cfg(all(windows, feature = "native-local-fixture"))]
+#[cfg(all(windows, feature = "native-sync"))]
 fn run() -> anyhow::Result<()> {
     use anyhow::{Context, ensure};
     use sha2::{Digest, Sha256};
     use std::{
         fs,
-        io::{Read, Seek, SeekFrom, Write},
+        io::Write,
         path::{Path, PathBuf},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
+        sync::Arc,
     };
     use twodrive_dev::{
-        local_files::{LocalFileBridge, no_progress},
+        local_files::no_progress,
         model::CloudBackend,
         onedrive::{self, OneDrive},
     };
-    use twodrive_local_files::native::{HydrationSource, Session};
+    use twodrive_local_files::native::Session;
     let mut args = std::env::args_os().skip(1);
     ensure!(
         args.next().as_deref() == Some(std::ffi::OsStr::new("--allow-generated-cloud-write")),
@@ -88,64 +85,16 @@ fn run() -> anyhow::Result<()> {
             &account,
             true,
         )?;
-        struct Source {
-            bridge: LocalFileBridge,
-            id: String,
-            size: usize,
-        }
-        impl HydrationSource for Source {
-            fn size(&self, id: &[u8]) -> Result<usize, String> {
-                if id != self.id.as_bytes() {
-                    return Err("outside generated cloud scope".into());
-                }
-                Ok(self.size)
-            }
-            fn read_range(
-                &self,
-                id: &[u8],
-                offset: usize,
-                len: usize,
-                cancelled: &AtomicBool,
-            ) -> Result<Vec<u8>, String> {
-                self.size(id)?;
-                if cancelled.load(Ordering::SeqCst) {
-                    return Err("cancelled".into());
-                }
-                let record = self
-                    .bridge
-                    .journal()
-                    .database()
-                    .get_by_cloud_remote_id(&self.id)
-                    .map_err(|e| e.to_string())?;
-                let local_id = if let Some(r) = record.filter(|r| r.cache_path.is_some()) {
-                    r.metadata.remote_id
-                } else {
-                    self.bridge
-                        .hydrate_cancellable(&self.id, cancelled)
-                        .map_err(|e| e.to_string())?
-                };
-                let mut lease = self
-                    .bridge
-                    .journal()
-                    .open_read(&local_id)
-                    .map_err(|e| e.to_string())?;
-                lease
-                    .seek(SeekFrom::Start(offset as u64))
-                    .map_err(|e| e.to_string())?;
-                let mut bytes = vec![0; len];
-                lease.read_exact(&mut bytes).map_err(|e| e.to_string())?;
-                Ok(bytes)
-            }
-        }
-        let mut session = Session::create_with_source(
-            &root,
-            Arc::new(Source {
-                bridge: bridge.clone(),
-                id: remote.remote_id.clone(),
-                size: initial.len(),
-            }),
-        )
-        .map_err(anyhow::Error::msg)?;
+        bridge.journal().database().upsert_metadata(&remote)?;
+        let published = bridge
+            .journal()
+            .database()
+            .get_by_cloud_remote_id(&remote.remote_id)?
+            .context("missing generated publication")?;
+        let source =
+            twodrive_dev::native_source::PublishedSource::new(bridge.clone(), vec![published])?;
+        let mut session =
+            Session::create_with_source(&root, Arc::new(source)).map_err(anyhow::Error::msg)?;
         let visible = session
             .placeholder_for(
                 Path::new("generated.bin"),
@@ -265,14 +214,14 @@ fn run() -> anyhow::Result<()> {
     }
     result
 }
-#[cfg(all(windows, feature = "native-local-fixture"))]
+#[cfg(all(windows, feature = "native-sync"))]
 fn main() {
     if let Err(error) = run() {
         eprintln!("{}", twodrive_backend::diagnostics::safe_error(&error));
         std::process::exit(1);
     }
 }
-#[cfg(not(all(windows, feature = "native-local-fixture")))]
+#[cfg(not(all(windows, feature = "native-sync")))]
 fn main() {
     eprintln!("requires Windows native-local-fixture and explicit generated-cloud-write opt-in");
     std::process::exit(2);

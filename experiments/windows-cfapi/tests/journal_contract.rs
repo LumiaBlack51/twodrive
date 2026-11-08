@@ -67,6 +67,46 @@ fn edit(j: &CacheJournal) {
 }
 
 #[test]
+fn bound_hydration_claim_never_reimports_a_changed_native_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+    let (db, cache, _) = paths(temp.path());
+    db.init().unwrap();
+    let metadata = MetadataEntry::new_file(ID, "/published.txt", 5, 1, "etag-1");
+    db.upsert_metadata(&metadata).unwrap();
+    let journal = CacheJournal::open(db.clone(), &cache, &hash(b"published-provider")).unwrap();
+    let published = db.get_by_remote_id(ID).unwrap().unwrap();
+    let mut newer = metadata.clone();
+    newer.etag = "etag-2".into();
+    db.upsert_metadata(&newer).unwrap();
+    assert!(journal.begin_bound_download(&published).is_err());
+    assert_eq!(
+        db.get_by_remote_id(ID).unwrap().unwrap().metadata.etag,
+        "etag-2"
+    );
+    db.upsert_metadata(&metadata).unwrap();
+    journal.record_native_edit(ID).unwrap();
+    assert!(journal.begin_bound_download(&published).is_err());
+    assert_eq!(
+        db.get_by_remote_id(ID).unwrap().unwrap().state,
+        FileState::Dirty
+    );
+}
+
+#[test]
+fn zero_call_rejection_preserves_newer_native_dirty_intent() {
+    let (_temp, j, path) = fixture();
+    edit(&j);
+    let lease = j.begin_upload(ID, digest).unwrap();
+    j.record_native_edit(ID).unwrap();
+    lease.reject_unstarted(digest).unwrap();
+    let state = j.snapshot(ID).unwrap();
+    assert_eq!(state.state, FileState::Dirty);
+    assert!(state.native_dirty && !state.uncertain_upload && state.upload_generation.is_none());
+    assert!(j.begin_upload(ID, digest).is_err());
+    assert_eq!(fs::read(path).unwrap(), EDITED);
+}
+
+#[test]
 fn native_creation_claim_survives_restart_and_new_edits_veto_the_first_receipt() {
     let temp = tempfile::tempdir().unwrap();
     let (db, root, path) = paths(temp.path());

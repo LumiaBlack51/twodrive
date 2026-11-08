@@ -6,6 +6,9 @@
 mod local_files;
 #[path = "../../twodrive-dev/src/model.rs"]
 mod model;
+#[cfg(feature = "native-sync")]
+#[path = "../../twodrive-dev/src/native_source.rs"]
+mod native_source;
 #[path = "../../twodrive-dev/src/provider.rs"]
 mod provider;
 #[cfg(feature = "native-local-fixture")]

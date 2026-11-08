@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{
         Mutex,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
     },
 };
 use twodrive_core::FileState;
@@ -26,6 +26,7 @@ struct MockProvider {
     remote: Arc<Mutex<Remote>>,
     mode: Arc<AtomicU8>,
     conditional: bool,
+    upload_calls: Arc<AtomicUsize>,
 }
 impl MockProvider {
     fn new() -> Self {
@@ -37,6 +38,7 @@ impl MockProvider {
             })),
             mode: Arc::new(AtomicU8::new(0)),
             conditional: true,
+            upload_calls: Arc::new(AtomicUsize::new(0)),
         }
     }
     fn empty() -> Self {
@@ -153,6 +155,7 @@ impl Provider for MockProvider {
         version: Option<&str>,
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
+        self.upload_calls.fetch_add(1, Ordering::SeqCst);
         ensure!(
             path == REMOTE_PATH && (id == Some(OBJECT) || id.is_none()),
             "identity/path boundary violated"
@@ -1142,4 +1145,111 @@ fn rejected_rehydration_must_preserve_owned_cache_metadata_and_journal() {
     assert_eq!(after.cache_path, before.cache_path);
     assert_eq!(f.bridge.status(OBJECT).unwrap().generation, generation);
     assert_eq!(bytes(&f.bridge), INITIAL);
+}
+
+#[test]
+fn published_reader_refuses_new_remote_versions_and_holds_one_verified_lease() {
+    use std::sync::atomic::AtomicBool;
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    let expected = provider.get_metadata(OBJECT).unwrap().unwrap();
+    f.db.upsert_metadata(&expected).unwrap();
+    let published = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    provider.change(b"same identity, newer unpublished cloud content");
+    let cancel = AtomicBool::new(false);
+    assert!(f.bridge.open_published_read(&published, &cancel).is_err());
+    let retained = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    assert_eq!(retained.metadata.etag, published.metadata.etag);
+    assert!(retained.cache_path.is_none());
+    assert_eq!(retained.state, FileState::OnlineOnly);
+    // Independently establish a current publication, then retain it throughout
+    // multiple bounded transfers. Server changes cannot change that cache lease.
+    let remote = provider.get_metadata(OBJECT).unwrap().unwrap();
+    f.db.upsert_metadata(&remote).unwrap();
+    let published = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    let mut read = f.bridge.open_published_read(&published, &cancel).unwrap();
+    assert_eq!(f.bridge.status(OBJECT).unwrap().readers, 1);
+    assert!(f.bridge.edit(OBJECT).is_err());
+    provider.change(b"another cloud version during the retained fetch");
+    assert_eq!(read.read_range(0, 4, &cancel).unwrap(), b"same");
+    assert_eq!(read.read_range(4, 9, &cancel).unwrap(), b" identity");
+    cancel.store(true, Ordering::SeqCst);
+    assert!(read.read_range(0, 1, &cancel).is_err());
+    drop(read);
+    assert_eq!(f.bridge.status(OBJECT).unwrap().readers, 0);
+    cancel.store(false, Ordering::SeqCst);
+    let mut writer = f.bridge.edit(OBJECT).unwrap();
+    writer.write_all(b"local edited").unwrap();
+    writer.finish().unwrap();
+    assert!(f.bridge.open_published_read(&published, &cancel).is_err());
+}
+
+#[test]
+fn published_reader_preserves_corruption_for_recovery_instead_of_hydrating_it() {
+    use std::sync::atomic::AtomicBool;
+    let provider = MockProvider::new();
+    let f = fixture(&provider);
+    f.bridge.hydrate(OBJECT).unwrap();
+    let published = f.db.get_by_remote_id(OBJECT).unwrap().unwrap();
+    let path = published.cache_path.as_ref().unwrap();
+    fs::write(path, EDITED).unwrap();
+    assert!(
+        f.bridge
+            .open_published_read(&published, &AtomicBool::new(false))
+            .is_err()
+    );
+    assert_eq!(fs::read(path).unwrap(), EDITED);
+    assert!(!f.bridge.status(OBJECT).unwrap().sync_confirmed());
+    assert!(f.bridge.status(OBJECT).unwrap().recovery_required);
+}
+
+#[test]
+fn paused_first_upload_never_calls_provider_and_remains_retryable_after_restart() {
+    let provider = MockProvider::empty();
+    let f = fixture(&provider);
+    let pause = f.cache.join("paused");
+    let bridge = LocalFileBridge {
+        journal: f.bridge.journal.clone(),
+        backend: Backend::new(provider.clone()).with_pause_file(pause.clone()),
+    };
+    let path = f.cache.join("new-native.bin");
+    fs::write(&path, EDITED).unwrap();
+    let id = "local-upload-paused-new-file";
+    bridge.stage_creation(id, REMOTE_PATH, &path).unwrap();
+    fs::write(&pause, b"paused").unwrap();
+    assert!(bridge.upload(id, no_progress()).is_err());
+    assert_eq!(provider.upload_calls.load(Ordering::SeqCst), 0);
+    let state = bridge.status(id).unwrap();
+    assert_eq!(state.state, FileState::Dirty);
+    assert!(state.upload_generation.is_none() && !state.uncertain_upload);
+    assert_eq!(fs::read(&path).unwrap(), EDITED);
+    drop(bridge);
+    let Fixture {
+        db,
+        cache,
+        bridge: owner,
+        _temp,
+    } = f;
+    drop(owner);
+    fs::remove_file(&pause).unwrap();
+    let reopened = LocalFileBridge::open(
+        db,
+        &cache,
+        Backend::new(provider.clone()),
+        "generated-provider-account-1",
+    )
+    .unwrap();
+    assert!(reopened.upload(id, no_progress()).unwrap());
+    assert_eq!(provider.upload_calls.load(Ordering::SeqCst), 1);
+    let bound = reopened
+        .journal
+        .database()
+        .get_by_remote_id(id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(bound.cloud_remote_id.as_deref(), Some(OBJECT));
+    assert_eq!(fs::read(bound.cache_path.unwrap()).unwrap(), EDITED);
+    assert_eq!(provider.download(OBJECT).unwrap(), EDITED);
+    drop(reopened);
+    drop(_temp);
 }

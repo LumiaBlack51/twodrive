@@ -7,6 +7,8 @@ pub mod local_files;
 pub mod model;
 #[cfg(all(windows, feature = "native-local-fixture"))]
 pub mod native_local_fixture;
+#[cfg(all(windows, feature = "native-sync"))]
+pub mod native_source;
 pub mod network;
 pub mod onedrive;
 pub mod peer;
