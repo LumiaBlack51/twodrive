@@ -16,10 +16,11 @@ use crate::recovery::{enqueue_recovery, recover_interrupted_writes};
 pub fn mount_mock(paths: AppPaths) -> anyhow::Result<()> {
     cleanup_stale_mountpoint(&paths.mount_dir);
     paths.ensure()?;
-    let db = Database::new(paths.db_path.clone());
+    let config = Config::load_or_create(&paths)?;
+    let db = Database::new(paths.db_path.clone())
+        .with_name_exclusions(config.sync.exclude_name_regexes.clone());
     db.init()?;
     let backend = MockBackend::new();
-    let config = Config::load_or_create(&paths)?;
     let upload_concurrency = config.power.ac_upload_concurrency.max(1) as usize;
     let count = sync_metadata(&db, &backend)?;
     println!("twodrive: loaded {count} mock metadata entries");
@@ -41,10 +42,11 @@ pub fn mount_mock(paths: AppPaths) -> anyhow::Result<()> {
 pub fn mount_graph(paths: AppPaths) -> anyhow::Result<()> {
     cleanup_stale_mountpoint(&paths.mount_dir);
     paths.ensure()?;
-    let db = Database::new(paths.db_path.clone());
+    let config = Config::load_or_create(&paths)?;
+    let db = Database::new(paths.db_path.clone())
+        .with_name_exclusions(config.sync.exclude_name_regexes.clone());
     db.init()?;
     let backend = GraphBackend::from_paths(&paths)?;
-    let config = Config::load_or_create(&paths)?;
     let upload_concurrency = config.power.ac_upload_concurrency.max(1) as usize;
     println!("twodrive: database {}", db.path().display());
     println!("twodrive: cache {}", paths.cache_dir.display());

@@ -2689,6 +2689,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "regex-automata"
 version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3749,7 +3761,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "twodrive-backend"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3767,9 +3779,10 @@ dependencies = [
 
 [[package]]
 name = "twodrive-core"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "anyhow",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3818,7 +3831,7 @@ dependencies = [
 
 [[package]]
 name = "twodrive-fs"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "anyhow",
  "fuser",

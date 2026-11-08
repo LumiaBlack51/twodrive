@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::{FileRecord, FileState, MetadataEntry};
+use crate::{FileRecord, FileState, MetadataEntry, NameExclusions};
 
 mod cache;
 pub mod cloud;
@@ -18,6 +18,7 @@ mod schema;
 #[derive(Debug, Clone)]
 pub struct Database {
     db_path: PathBuf,
+    name_exclusions: NameExclusions,
     metadata_write_lock: Arc<Mutex<()>>,
 }
 
@@ -25,8 +26,24 @@ impl Database {
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
+            name_exclusions: NameExclusions::default(),
             metadata_write_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    pub fn with_name_exclusions(mut self, rules: NameExclusions) -> Self {
+        self.name_exclusions = rules;
+        self
+    }
+
+    pub fn excludes_file_name(&self, name: &str) -> bool {
+        self.name_exclusions.matches(name)
+    }
+
+    pub fn excludes_upload(&self, record: &FileRecord) -> bool {
+        !record.metadata.is_dir
+            && (record.state == FileState::LocalOnly
+                || self.excludes_file_name(&record.metadata.name))
     }
 
     pub fn path(&self) -> &Path {

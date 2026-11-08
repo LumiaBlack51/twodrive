@@ -10,7 +10,15 @@ pub struct Config {
     pub graph: GraphConfig,
     pub cache: CacheConfig,
     pub power: PowerConfig,
+    pub sync: SyncConfig,
     pub known_folders: KnownFoldersConfig,
+}
+
+/// Filename exclusions shared by FUSE local writes and known-folder uploads.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncConfig {
+    pub exclude_name_regexes: crate::NameExclusions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

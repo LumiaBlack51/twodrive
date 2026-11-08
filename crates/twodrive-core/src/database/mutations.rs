@@ -60,7 +60,7 @@ impl Database {
                 remote_id, cloud_remote_id, path, parent_path, name, is_dir, size,
                 modified_unix, etag, state, cache_path, cache_accessed_unix,
                 pin_inheritance_blocked, local_mode
-            ) VALUES (?1, NULL, ?2, ?3, ?4, 0, 0, ?5, '', 'writing', ?6, ?5, 1, ?7)
+            ) VALUES (?1, NULL, ?2, ?3, ?4, 0, 0, ?5, '', ?8, ?6, ?5, 1, ?7)
             "#,
             params![
                 local_id,
@@ -69,7 +69,12 @@ impl Database {
                 cloud_name(&path),
                 now_unix(),
                 cache_path.to_string_lossy(),
-                mode & 0o777
+                mode & 0o777,
+                if self.excludes_file_name(&cloud_name(&path)) {
+                    "local_only"
+                } else {
+                    "writing"
+                }
             ],
         )?;
         self.get_by_remote_id(local_id)?
@@ -158,8 +163,8 @@ impl Database {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
-            params![new_path, parent_cloud_path(&new_path), cloud_name(&new_path), local_id],
+            "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
+            params![new_path, parent_cloud_path(&new_path), cloud_name(&new_path), local_id, self.excludes_file_name(&cloud_name(&new_path))],
         )?;
         for descendant in descendants {
             let suffix = descendant
@@ -169,12 +174,13 @@ impl Database {
                 .ok_or_else(|| anyhow::anyhow!("descendant path lost its parent prefix"))?;
             let descendant_path = normalize_cloud_path(&format!("{new_path}{suffix}"));
             tx.execute(
-                "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
+                "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
                 params![
                     descendant_path,
                     parent_cloud_path(&descendant_path),
                     cloud_name(&descendant_path),
-                    descendant.metadata.remote_id
+                    descendant.metadata.remote_id,
+                    self.excludes_file_name(&cloud_name(&descendant_path))
                 ],
             )?;
         }
@@ -187,7 +193,9 @@ impl Database {
                 WHERE substr(path, 1, length(?1) + 1) = ?1 || '/')",
             params![new_path],
         )?;
-        if record.cloud_remote_id.is_some() {
+        if record.cloud_remote_id.is_some()
+            && (record.metadata.is_dir || !self.excludes_file_name(&cloud_name(&new_path)))
+        {
             tx.execute(
                 r#"
                 INSERT INTO pending_metadata_operations(local_id, kind, path, queued_unix)
@@ -247,10 +255,11 @@ impl Database {
             "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
             params![source_local_id],
         )?;
-        if let Some(source_cloud_id) = source
-            .cloud_remote_id
-            .as_deref()
-            .filter(|source_id| Some(*source_id) != target.cloud_remote_id.as_deref())
+        if !self.excludes_file_name(&cloud_name(&new_path))
+            && let Some(source_cloud_id) = source
+                .cloud_remote_id
+                .as_deref()
+                .filter(|source_id| Some(*source_id) != target.cloud_remote_id.as_deref())
         {
             tx.execute(
                 r#"
@@ -282,7 +291,7 @@ impl Database {
                 name = ?3,
                 size = ?4,
                 modified_unix = ?5,
-                state = CASE WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
+                state = CASE WHEN ?11 THEN 'local_only' WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
                 cache_path = ?7,
                 cache_accessed_unix = ?8,
                 local_mode = ?10
@@ -302,6 +311,7 @@ impl Database {
                 now_unix(),
                 target_local_id,
                 source.local_mode,
+                self.excludes_file_name(&cloud_name(&new_path)),
             ],
         )?;
         anyhow::ensure!(updated == 1, "replacement target was not updated");
@@ -399,6 +409,33 @@ impl Database {
         tx.execute("DELETE FROM files WHERE remote_id = ?1", params![remote_id])?;
         tx.commit()?;
         self.recompute_pin_inheritance()
+    }
+
+    /// Return false when a cloud identity or transfer claim requires a tombstone.
+    pub fn remove_local_only_file(&self, local_id: &str) -> anyhow::Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let safe: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM files
+            WHERE remote_id = ?1 AND state = 'local_only' AND cloud_remote_id IS NULL AND upload_path IS NULL)", params![local_id], |row| row.get(0))?;
+        if !safe {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO retired_cache(cache_path)
+            SELECT cache_path FROM files WHERE remote_id = ?1 AND cache_path IS NOT NULL",
+            params![local_id],
+        )?;
+        let changed = tx.execute(
+            "DELETE FROM files WHERE remote_id = ?1 AND state = 'local_only'",
+            params![local_id],
+        )?;
+        anyhow::ensure!(changed == 1, "local-only file changed during unlink");
+        tx.execute(
+            "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
+            params![local_id],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn queue_pending_delete(&self, record: &FileRecord) -> anyhow::Result<PendingDelete> {
@@ -627,6 +664,9 @@ impl Database {
         path: &str,
         cache_path: &Path,
     ) -> anyhow::Result<bool> {
+        if self.excludes_upload(record) {
+            return Ok(false);
+        }
         Ok(self.connect()?.execute(
             "UPDATE files SET upload_path = ?2, upload_target_id = NULL, upload_cache_path = ?3
              WHERE remote_id = ?1 AND state = 'conflict' AND path = ?4

@@ -86,6 +86,21 @@ The mount's recovery/metadata loop waits 60 seconds between passes and uses `ac_
 
 File and directory rwx permissions are stored locally and enforced on this mount, including executable files and `chmod`; they survive remounts but do not sync to OneDrive. Cloud-only imports and existing entries default to 0644 (files) or 0755 (directories). Full POSIX ownership, special mode bits, and directory timestamp semantics are not preserved; the mount root mode remains fixed. The client operates against the signed-in user's `/me/drive`; do not assume multi-account management or arbitrary SharePoint library support.
 
+## Filename upload exclusions
+
+Office owner files whose names start with `~$` stay local in FUSE. Applications can create, read, write, lock and delete them normally; they do not create upload activity or cloud retry jobs. Local writes and pending uploads are not network transfers: the tray shows uploading only while the backend transfer runs, and byte progress comes from that transfer.
+
+Add optional filename rules to `~/.config/twodrive/config.toml`:
+
+```toml
+[sync]
+exclude_name_regexes = ['(?i)\.bak$', '^scratch-[0-9]+\.txt$']
+```
+
+These are Rust regular expressions, matched against the filename (not its full path). Matching searches anywhere unless anchored with `^`/`$`, and is case sensitive unless `(?i)` is used. TOML single quotes preserve the backslash. Lookaround and backreferences are unsupported; invalid or oversized patterns reject configuration loading. The default custom list is empty; the built-in `~$` rule always applies. Close mounted files before restarting TwoDrive to apply changes.
+
+The same regexes filter known-folder scans, events and saved upload jobs. Existing exact-name/suffix rules remain specific to known folders; those scanners also prune matching ancestor names. FUSE regexes apply to files, not directory trees. Excluded local bytes remain durable across restart and are protected from cache release. Renaming a temporary file to a nonexcluded final name, including atomic replacement of an existing document, restores normal upload after active writers close. Removing a custom rule restores upload on restart. Previously uploaded cloud copies are not removed by exclusion; explicitly deleting a cloud-backed file still uses the normal cloud deletion queue. Reading existing cloud files still works; this is an upload exclusion, not selective download or a remote cleanup command. A missing local-only cache is reported for recovery rather than replaced with older cloud bytes.
+
 ## Optional known-folder uploads
 
 Known-folder handling is **disabled by default**, separate from the read/write mount, and supports `upload_only`. Configured local folders upload directly without an extra TwoDrive content cache. Local source deletion does not delete the cloud copy; deletion propagation is ignored even if requested in config.

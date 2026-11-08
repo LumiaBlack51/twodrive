@@ -17,7 +17,11 @@ pub fn sync_delta_metadata<B: CloudBackend>(db: &Database, backend: &B) -> anyho
         if record.as_ref().is_some_and(|record| {
             matches!(
                 record.state,
-                FileState::Writing | FileState::Dirty | FileState::Uploading | FileState::Conflict
+                FileState::LocalOnly
+                    | FileState::Writing
+                    | FileState::Dirty
+                    | FileState::Uploading
+                    | FileState::Conflict
             ) || db
                 .pending_metadata_operation(&record.metadata.remote_id)
                 .ok()

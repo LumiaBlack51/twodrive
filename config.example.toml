@@ -21,6 +21,12 @@ battery_sync_interval = "60m"
 ac_download_concurrency = 4
 battery_download_concurrency = 1
 
+[sync]
+# Rust regexes on filenames; TOML literal strings preserve backslashes.
+# Shared by FUSE writes and known-folder uploads; apply after restart.
+# Office owner files (~$...) are always local-only, even with no custom rules.
+exclude_name_regexes = [] # Example: ['(?i)\.bak$', '^scratch-[0-9]+\.txt$']
+
 [known_folders]
 enabled = false
 mode = "upload_only"
