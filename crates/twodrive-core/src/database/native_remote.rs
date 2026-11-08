@@ -9,6 +9,8 @@ pub struct NativeRemoteUpdate {
     pub next: MetadataEntry,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_modified_filetime: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_pin: Option<i32>,
     pub state: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -202,7 +204,7 @@ impl CacheJournal {
         next: &MetadataEntry,
         verify: impl FnOnce(&mut File, &str) -> anyhow::Result<()>,
     ) -> anyhow::Result<NativeRemoteUpdate> {
-        self.prepare_native_update(expected, next, None, verify)
+        self.prepare_native_update(expected, next, None, None, verify)
     }
     pub fn prepare_native_migration_time(
         &self,
@@ -210,6 +212,19 @@ impl CacheJournal {
         filetime: u64,
         verify: impl FnOnce(&mut File, &str) -> anyhow::Result<()>,
     ) -> anyhow::Result<NativeRemoteUpdate> {
+        self.prepare_native_migration_time_with_pin(expected, filetime, None, verify)
+    }
+    pub fn prepare_native_migration_time_with_pin(
+        &self,
+        expected: &NativeProjection,
+        filetime: u64,
+        pin: Option<i32>,
+        verify: impl FnOnce(&mut File, &str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<NativeRemoteUpdate> {
+        ensure!(
+            pin.is_none_or(|p| matches!(p, 0..=2)),
+            "invalid stored target pin"
+        );
         ensure!(
             !expected.directory && filetime >= 116_444_736_000_000_000,
             "valid source file timestamp required"
@@ -221,13 +236,14 @@ impl CacheJournal {
             (filetime / 10_000_000) as i64 - 11_644_473_600,
             &expected.etag,
         );
-        self.prepare_native_update(expected, &next, Some(filetime), verify)
+        self.prepare_native_update(expected, &next, Some(filetime), pin, verify)
     }
     fn prepare_native_update(
         &self,
         expected: &NativeProjection,
         next: &MetadataEntry,
         local_modified_filetime: Option<u64>,
+        local_pin: Option<i32>,
         verify: impl FnOnce(&mut File, &str) -> anyhow::Result<()>,
     ) -> anyhow::Result<NativeRemoteUpdate> {
         ensure!(
@@ -295,6 +311,7 @@ impl CacheJournal {
             expected: expected.clone(),
             next: next.clone(),
             local_modified_filetime,
+            local_pin,
             state: "prepared".into(),
         };
         tx.execute("INSERT INTO local_native_remote_updates(local_id,root_binding,payload,state) VALUES(?1,?2,?3,'prepared')",params![expected.local_id,expected.root_binding,serde_json::to_string(&update)?])?;
@@ -326,7 +343,8 @@ impl CacheJournal {
         ensure!(
             stored.expected == update.expected
                 && stored.next == update.next
-                && stored.local_modified_filetime == update.local_modified_filetime,
+                && stored.local_modified_filetime == update.local_modified_filetime
+                && stored.local_pin == update.local_pin,
             "local metadata intent changed"
         );
         let mut expected = update.expected.clone();
@@ -385,7 +403,8 @@ impl CacheJournal {
         ensure!(
             stored.expected == update.expected
                 && stored.next == update.next
-                && stored.local_modified_filetime == update.local_modified_filetime,
+                && stored.local_modified_filetime == update.local_modified_filetime
+                && stored.local_pin == update.local_pin,
             "native remote update receipt changed"
         );
         expected.state = "updating".into();

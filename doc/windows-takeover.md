@@ -602,3 +602,19 @@ is disabled by default; enabling/starting is explicit. The actual task was stage
 disabled, so it does not change the running Microsoft client or original folder.
 A second linked school account was visible in the shell. Final personal cutover
 must preserve that account unless the user authorizes a shared-client stop.
+
+
+Recovery follow-up: source receipt deferrals no longer starve normal native
+reconciliation. Independent journal references veto in-place private edits, while
+new native captures keep retained source bytes separate. Generated restart tests
+pass with newer native edits and an unrelated external-process rename. Local time
+updates use attributes/WRITE_DAC only and persist the target pin decision before
+the native call; interruption before pin restoration preserves a newer release
+without recalling data. Prior hydration alone is not completed-import evidence.
+
+A relocation collision created after preparation aborts that decision and resumes
+the exact intact source without touching the foreign destination. The installer
+uses content-addressed version directories, verifies candidates before replacing
+task definitions, constructs Disabled settings atomically and updates owned tasks
+through supported registration parameters. Actual install/reinstall, rejected
+candidate and post-registration interruption tests passed. See TD-20261108-57.

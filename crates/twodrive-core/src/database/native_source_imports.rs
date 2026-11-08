@@ -15,6 +15,14 @@ pub struct NativeSourceImport {
     pub state: String,
 }
 impl CacheJournal {
+    pub fn native_source_import_completed(
+        &self,
+        id: &str,
+        etag: &str,
+        filetime: u64,
+    ) -> anyhow::Result<bool> {
+        Ok(journal_connection(&self.0.db)?.query_row("SELECT EXISTS(SELECT 1 FROM local_native_source_imports WHERE local_id=?1 AND state='applied' AND json_extract(payload,'$.expected.etag')=?2 AND json_extract(payload,'$.source_filetime')=?3)",params![id,etag,filetime],|r|r.get(0))?)
+    }
     pub fn native_source_imports(&self, root: &str) -> anyhow::Result<Vec<NativeSourceImport>> {
         let conn = journal_connection(&self.0.db)?;
         let mut statement=conn.prepare("SELECT sequence,payload,state FROM local_native_source_imports WHERE root_binding=?1 AND state IN ('verified','data_ready') ORDER BY sequence")?;

@@ -108,6 +108,17 @@
       "legacy_pin_flag_state_restart": true,
       "flags_derived_state_transaction_rollback": true,
       "native_cloud_backend": "mock"
+    },
+    "source_import_followup_0ad3": {
+      "native_edit_and_unrelated_rename_restart_progress": true,
+      "source_snapshot_alias_private_writer_veto": true,
+      "target_release_between_time_update_and_pin_restore": true,
+      "relocation_collision_source_resume_foreign_sentinel_preserved": true,
+      "prior_hydration_exact_filetime_and_pin": true,
+      "installer_first_and_owned_reinstall": true,
+      "disabled_after_registration_interruption": true,
+      "rejected_candidate_preserves_previous_task_binary": true,
+      "journal_contracts": 40
     }
   },
   "cleanup": {

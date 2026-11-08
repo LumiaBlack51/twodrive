@@ -572,6 +572,103 @@ impl PersistentSession {
         action(&os)
     }
 
+    pub fn with_owned_time_update<T>(
+        &self,
+        relative: &Path,
+        tag: &[u8],
+        physical: twodrive_core::NativeFileIdentity,
+        size: u64,
+        action: impl FnOnce(&NativeObservation, &dyn Fn(u64, i32) -> Result<()>) -> Result<T>,
+    ) -> Result<T> {
+        let (_, _parents) = self.guard_relative_parent(relative)?;
+        let raw = unsafe {
+            CreateFileW(
+                wide(&self.root().join(relative)).as_ptr(),
+                FILE_READ_ATTRIBUTES | WRITE_DAC | DELETE,
+                FILE_SHARE_READ,
+                ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT
+                    | FILE_FLAG_OPEN_NO_RECALL
+                    | FILE_FLAG_BACKUP_SEMANTICS,
+                ptr::null_mut(),
+            )
+        };
+        if raw == INVALID_HANDLE_VALUE {
+            return Err("owned timestamp metadata lease busy".into());
+        }
+        let handle = Handle(raw, false);
+        let (volume, id, directory) = file_binding(handle.0)?;
+        let (root_id, identity) = root_identity(handle.0)?;
+        if directory
+            || volume != physical.volume_serial
+            || id != physical.file_id
+            || root_id != self.receipt.file_id
+            || identity != self.receipt.identity
+        {
+            return Err("owned timestamp physical identity changed".into());
+        }
+        let os = node_observation(
+            handle.0,
+            tag,
+            usize::try_from(size).map_err(|_| "timestamp size overflow")?,
+            false,
+        )?;
+        let update = |stamp: u64, pin: i32| {
+            let mut metadata = CF_FS_METADATA::default();
+            if unsafe {
+                GetFileInformationByHandleEx(
+                    handle.0,
+                    FileBasicInfo,
+                    (&mut metadata.BasicInfo as *mut FILE_BASIC_INFO).cast(),
+                    size_of::<FILE_BASIC_INFO>() as u32,
+                )
+            } == 0
+            {
+                return Err("timestamp basic metadata unavailable".into());
+            }
+            metadata.FileSize = i64::try_from(size).map_err(|_| "timestamp size overflow")?;
+            metadata.BasicInfo.LastWriteTime =
+                i64::try_from(stamp).map_err(|_| "timestamp overflow")?;
+            metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
+                | FILE_ATTRIBUTE_HIDDEN
+                | FILE_ATTRIBUTE_SYSTEM
+                | FILE_ATTRIBUTE_ARCHIVE
+                | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+            if metadata.BasicInfo.FileAttributes == 0 {
+                metadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+            }
+            hr(
+                unsafe {
+                    CfUpdatePlaceholder(
+                        handle.0,
+                        &metadata,
+                        ptr::null(),
+                        0,
+                        ptr::null(),
+                        0,
+                        CF_UPDATE_FLAG_MARK_IN_SYNC | CF_UPDATE_FLAG_VERIFY_IN_SYNC,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    )
+                },
+                "preserve source time without data access",
+            )?;
+            #[cfg(feature = "native-test-hooks")]
+            if INTERRUPT_LOCAL_TIME_BEFORE_PIN.with(|f| f.replace(false)) {
+                return Err("generated interruption before local timestamp pin restore".into());
+            }
+            if !matches!(pin, 0..=2) {
+                return Err("invalid stored pin".into());
+            }
+            hr(
+                unsafe { CfSetPinState(handle.0, pin, CF_SET_PIN_FLAG_NONE, ptr::null_mut()) },
+                "restore durable metadata target pin",
+            )
+        };
+        action(&os, &update)
+    }
+
     /// Parent leases remain held across the protected native file operation.
     pub fn with_owned_exclusive<T>(
         &self,

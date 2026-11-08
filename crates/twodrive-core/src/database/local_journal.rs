@@ -780,6 +780,7 @@ impl CacheJournal {
                 ),
             "cache mutation is blocked"
         );
+        ensure!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM local_cache_journal other JOIN local_cache_journal current ON current.local_id=?1 WHERE other.cache_path=current.cache_path AND other.local_id<>current.local_id)",[id],|r|r.get::<_,bool>(0))?,"cache mutation preserves independently retained source bytes");
         let generation = state
             .generation
             .checked_add(1)

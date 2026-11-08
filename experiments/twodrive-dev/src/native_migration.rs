@@ -198,15 +198,15 @@ impl NativeSession {
                 continue;
             };
             summary.candidates += 1;
-            if record.cache_path.is_some()
-                && record.metadata.modified_unix
-                    == (entry.last_write_time / 10_000_000) as i64 - 11_644_473_600
-                && self
-                    .coordinator
-                    .bridge
-                    .journal()
-                    .snapshot_if_owned(&record.metadata.remote_id)?
-                    .is_some_and(|s| s.sync_confirmed())
+            let projection = self
+                .coordinator
+                .bridge
+                .journal()
+                .native_projection_for_id(&record.metadata.remote_id)?
+                .context("source target publication missing")?;
+            if self
+                .coordinator
+                .source_import_is_complete(&entry, record, &projection)?
             {
                 summary.already_owned += 1;
                 continue;
@@ -220,12 +220,6 @@ impl NativeSession {
             };
             let mut expected = record.metadata.clone();
             expected.remote_id = id.clone();
-            let projection = self
-                .coordinator
-                .bridge
-                .journal()
-                .native_projection_for_id(&record.metadata.remote_id)?
-                .context("source target publication missing")?;
             if projection.state != "published" {
                 summary.deferred += 1;
                 continue;
@@ -523,5 +517,53 @@ impl NativeSession {
             }
         }
         Ok(summary)
+    }
+}
+
+impl NativeCoordinator {
+    pub(crate) fn source_import_is_complete(
+        &self,
+        entry: &twodrive_local_files::native::persistent::NativeEntry,
+        record: &twodrive_core::FileRecord,
+        projection: &NativeProjection,
+    ) -> anyhow::Result<bool> {
+        if record.cache_path.is_none()
+            || projection.state != "published"
+            || !self.bridge.journal().native_source_import_completed(
+                &record.metadata.remote_id,
+                &record.metadata.etag,
+                entry.last_write_time,
+            )?
+            || !self
+                .bridge
+                .journal()
+                .snapshot_if_owned(&record.metadata.remote_id)?
+                .is_some_and(|s| s.sync_confirmed())
+        {
+            return Ok(false);
+        }
+        let source_pinned = entry.cloud.as_ref().is_some_and(|os| os.pinned);
+        self.owner
+            .with_namespace_binding(
+                &NativeCoordinator::relative(&projection.path)?,
+                &projection.tag,
+                projection.size,
+                false,
+                |volume, id, os| {
+                    use std::os::windows::fs::MetadataExt;
+                    let stamp = std::fs::symlink_metadata(self.root().join(
+                        NativeCoordinator::relative(&projection.path).map_err(|e| e.to_string())?,
+                    ))
+                    .map_err(|e| e.to_string())?
+                    .last_write_time();
+                    Ok(volume == projection.volume_serial.unwrap_or(0)
+                        && Some(format!("{id:016x}")) == projection.native_file_id
+                        && os.os_in_sync
+                        && os.modified_bytes == 0
+                        && stamp == entry.last_write_time
+                        && (!source_pinned || os.pinned || os.release_requested))
+                },
+            )
+            .map_err(anyhow::Error::msg)
     }
 }

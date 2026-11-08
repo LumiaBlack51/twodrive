@@ -78,6 +78,27 @@ impl NativeCoordinator {
                 .isolate_native_source_import(import.sequence)?;
             return Ok(false);
         }
+        if self
+            .owner
+            .with_namespace_binding(
+                &Self::relative(&current.path)?,
+                &current.tag,
+                current.size,
+                false,
+                |volume, id, os| {
+                    Ok(volume != current.volume_serial.unwrap_or(0)
+                        || Some(format!("{id:016x}")) != current.native_file_id
+                        || !os.os_in_sync
+                        || os.modified_bytes != 0)
+                },
+            )
+            .unwrap_or(false)
+        {
+            self.bridge
+                .journal()
+                .isolate_native_source_import(import.sequence)?;
+            return Ok(false);
+        }
         let relative = Self::relative(&current.path)?;
         let physical = twodrive_core::NativeFileIdentity {
             volume_serial: current
@@ -91,8 +112,9 @@ impl NativeCoordinator {
                 16,
             )?,
         };
-        self.owner
-            .with_clean_cache_import(&relative, &current.tag, physical, current.size, |_| {
+        let target_intent = self
+            .owner
+            .with_clean_cache_import(&relative, &current.tag, physical, current.size, |native| {
                 let fresh = self
                     .bridge
                     .journal()
@@ -120,24 +142,27 @@ impl NativeCoordinator {
                 self.bridge
                     .journal()
                     .mark_native_source_data_ready(import)
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| e.to_string())?;
+                Ok(native.clone())
             })
             .map_err(anyhow::Error::msg)?;
-        self.owner
-            .with_owned_exclusive(&relative, &current.tag, physical, current.size, |locked| {
-                let native = locked.inspect()?;
-                if !native.os_in_sync || native.modified_bytes != 0 {
-                    return Err("source import preserves newer native bytes".into());
-                }
-                if import.source_pinned && !native.release_requested {
-                    locked.retain_pin_intent()?;
-                }
-                if !native.release_requested && current.size != 0 {
-                    locked.hydrate()?;
-                }
-                Ok(())
-            })
-            .map_err(anyhow::Error::msg)?;
+        if !target_intent.release_requested {
+            self.owner
+                .with_owned_exclusive(&relative, &current.tag, physical, current.size, |locked| {
+                    let native = locked.inspect()?;
+                    if !native.os_in_sync || native.modified_bytes != 0 {
+                        return Err("source import preserves newer native bytes".into());
+                    }
+                    if import.source_pinned && !native.release_requested {
+                        locked.retain_pin_intent()?;
+                    }
+                    if !native.release_requested && current.size != 0 {
+                        locked.hydrate()?;
+                    }
+                    Ok(())
+                })
+                .map_err(anyhow::Error::msg)?;
+        }
         // Source bytes are confirmed before the independently durable local
         // timestamp update. Interruption does not repeat a cloud mutation.
         self.bridge

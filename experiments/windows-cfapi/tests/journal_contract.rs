@@ -1644,6 +1644,11 @@ fn verified_source_receipt_retains_data_across_cache_and_metadata_restart_bounda
     j.publish_download(ID, generation, &path, &hash(ORIGINAL), "version-1")
         .unwrap();
     j.mark_native_source_data_ready(&source).unwrap();
+    assert!(
+        j.open_write(ID).is_err(),
+        "retained source snapshot must not alias a writable private lease"
+    );
+
     let update = j
         .prepare_native_migration_time(&source.expected, source.source_filetime, |f, h| {
             anyhow::ensure!(digest(f)? == h, "hash changed");
@@ -1672,4 +1677,41 @@ fn verified_source_receipt_retains_data_across_cache_and_metadata_restart_bounda
     assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
     assert!(!db.remove_unreferenced_cache(&path).unwrap());
     assert!(!j.native_work_pending().unwrap());
+}
+
+#[test]
+fn isolated_source_copy_keeps_original_bytes_when_native_capture_advances_target_cache() {
+    let (_temp, j, path) = remote_fixture(b"source-independent-owner");
+    let expected = j.native_projection_for_id(ID).unwrap().unwrap();
+    let source=j.prepare_native_source_import(twodrive_core::NativeSourceImport{sequence:0,expected:expected.clone(),source_root_receipt:serde_json::json!({"schema_version":1,"volume_serial":7,"file_id":88,"identity":b"generated-source"}).to_string(),source_file:twodrive_core::NativeFileIdentity{volume_serial:7,file_id:99},cache_path:path.clone(),digest:hash(ORIGINAL),source_filetime:116_444_736_000_000_000+123_456_789,source_pinned:false,state:"verified".into()},digest).unwrap();
+    j.mark_native_source_data_ready(&source).unwrap();
+    assert!(j.open_write(ID).is_err());
+    j.isolate_native_source_import(source.sequence).unwrap();
+    assert!(
+        j.open_write(ID).is_err(),
+        "isolation must retain the independent source owner"
+    );
+    let db = j.database().clone();
+    let cache = path.parent().unwrap().to_path_buf();
+    drop(j);
+    let j = CacheJournal::open(db.clone(), &cache, &hash(b"generated-provider-binding")).unwrap();
+    assert!(j.open_write(ID).is_err());
+    let replacement = cache.join("new-native-capture.bin");
+    fs::write(&replacement, EDITED).unwrap();
+    j.record_native_edit(ID).unwrap();
+    j.stage_projected_native_edit(
+        ID,
+        j.snapshot(ID).unwrap().generation,
+        &replacement,
+        EDITED.len() as u64,
+        &expected,
+        twodrive_core::NativeFileIdentity {
+            volume_serial: 7,
+            file_id: 9,
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), ORIGINAL);
+    assert_eq!(fs::read(&replacement).unwrap(), EDITED);
+    assert!(!db.remove_unreferenced_cache(&path).unwrap());
 }

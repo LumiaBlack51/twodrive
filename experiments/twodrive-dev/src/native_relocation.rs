@@ -48,6 +48,14 @@ pub(super) fn recover(state: &Path, configuration: &mut Configuration) -> anyhow
             && (configuration.root == relocation.from || configuration.root == relocation.to),
         "relocation authority/configuration changed"
     );
+    if relocation.state == "aborted" {
+        ensure!(
+            configuration.root == relocation.from
+                && owned_at(&relocation.from, &relocation.receipt)?,
+            "aborted relocation source changed"
+        );
+        return Ok(());
+    }
     if relocation.state == "committed" {
         ensure!(
             configuration.root == relocation.to && owned_at(&relocation.to, &relocation.receipt)?,
@@ -60,11 +68,17 @@ pub(super) fn recover(state: &Path, configuration: &mut Configuration) -> anyhow
         "unknown root relocation phase"
     );
     let from = owned_at(&relocation.from, &relocation.receipt)?;
+    if from {
+        ensure!(
+            configuration.root == relocation.from,
+            "prepared relocation source disagrees with configuration"
+        );
+        relocation.state = "aborted".into();
+        save(state, &relocation)?;
+        return Ok(());
+    }
     let to = owned_at(&relocation.to, &relocation.receipt)?;
-    ensure!(
-        from != to,
-        "root relocation requires one exact filesystem identity"
-    );
+    ensure!(to, "relocation root identity is missing");
     if to {
         configuration.root = relocation.to.clone();
         NativeSession::seal(state, configuration)?;
@@ -107,6 +121,14 @@ impl NativeSession {
         } = session;
         let cache_owner = coordinator.bridge.clone();
         drop(coordinator);
+        #[cfg(all(test, feature = "native-test-hooks"))]
+        if COLLIDE_AFTER_PREPARE.with(|f| f.replace(false)) {
+            std::fs::create_dir(&relocation.to)?;
+            std::fs::write(
+                relocation.to.join("generated-foreign-sentinel.txt"),
+                b"generated collision must remain untouched",
+            )?;
+        }
         relocate_owned_root(&relocation.from, &relocation.to, &relocation.receipt)
             .map_err(anyhow::Error::msg)?;
         #[cfg(all(test, feature = "native-test-hooks"))]
@@ -123,3 +145,6 @@ impl NativeSession {
 }
 #[cfg(all(test, feature = "native-test-hooks"))]
 thread_local! {pub(super) static INTERRUPT_AFTER_ROOT_MOVE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+thread_local! {pub(super) static COLLIDE_AFTER_PREPARE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}

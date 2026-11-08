@@ -157,13 +157,12 @@ impl LocalFileBridge {
                 .split('/')
                 .collect();
             return owner
-                .with_owned_exclusive(
+                .with_owned_time_update(
                     &relative,
                     &expected.tag,
                     physical,
                     expected.size,
-                    |locked| {
-                        let os = locked.inspect()?;
+                    |os, update_time| {
                         if !os.os_in_sync
                             || os.modified_bytes != 0
                             || os.logical_size != expected.size
@@ -179,16 +178,34 @@ impl LocalFileBridge {
                             update
                         } else {
                             self.journal
-                                .prepare_native_migration_time(expected, stamp, |file, digest| {
-                                    ensure!(
-                                        digest_file(file)? == digest,
-                                        "source timestamp private data changed"
-                                    );
-                                    Ok(())
-                                })
+                                .prepare_native_migration_time_with_pin(
+                                    expected,
+                                    stamp,
+                                    Some(if os.release_requested {
+                                        2
+                                    } else if os.pinned {
+                                        1
+                                    } else {
+                                        0
+                                    }),
+                                    |file, digest| {
+                                        ensure!(
+                                            digest_file(file)? == digest,
+                                            "source timestamp private data changed"
+                                        );
+                                        Ok(())
+                                    },
+                                )
                                 .map_err(|e| e.to_string())?
                         };
-                        locked.preserve_verified_filetime(stamp)?;
+                        let pin = if os.release_requested {
+                            2
+                        } else if os.pinned {
+                            1
+                        } else {
+                            update.local_pin.unwrap_or(0)
+                        };
+                        update_time(stamp, pin)?;
                         #[cfg(all(test, feature = "native-test-hooks"))]
                         if INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.replace(false)) {
                             return Err(

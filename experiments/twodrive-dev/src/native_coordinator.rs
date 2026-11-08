@@ -584,13 +584,8 @@ impl NativeCoordinator {
     pub fn synchronize_once(&mut self) -> anyhow::Result<SyncProgress> {
         self.drain_observations()?;
         let imports = self.resume_source_imports()?;
-        if imports.deferred != 0 {
-            return Ok(SyncProgress {
-                deferred: imports.deferred,
-                error: imports.error,
-                ..Default::default()
-            });
-        }
+        // Deferred replicas must not starve ordinary native reconciliation.
+        let _imports = imports;
         let state = self
             .watcher
             .as_ref()
@@ -2016,6 +2011,29 @@ mod tests {
     #[test]
     #[ignore = "explicit NEW generated root; verified source data, local time and pin survive interrupted native completion"]
     fn source_replica_resumes_after_native_metadata_before_receipt_completion() {
+        source_import_recovery_case(0);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; newer native edits isolate a pending replica without starving capture"]
+    fn source_replica_native_edit_restart_preserves_both_generations() {
+        source_import_recovery_case(1);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; target release survives interruption before timestamp pin restoration"]
+    fn source_replica_release_restart_does_not_repin_or_recall() {
+        source_import_recovery_case(3);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; prior hydration still requires exact imported metadata and pin"]
+    fn source_replica_prior_hydration_still_applies_exact_metadata() {
+        source_import_recovery_case(4);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated root; unrelated durable rename must progress while a source import waits"]
+    fn source_replica_unrelated_namespace_does_not_starve_reconciliation() {
+        source_import_recovery_case(2);
+    }
+    fn source_import_recovery_case(mode: u8) {
         use sha2::Digest;
         let root = PathBuf::from(
             std::env::var_os("TWODRIVE_APPROVED_REMOTE_UPDATE_ROOT")
@@ -2034,7 +2052,7 @@ mod tests {
         let private = state.path().canonicalize().unwrap();
         let cache = private.join("cache");
         std::fs::create_dir(&cache).unwrap();
-        let provider = crate::local_files::tests::MockProvider::new();
+        let provider = crate::local_files::tests::MockProvider::new().with_auxiliary_files();
         let item = provider.list_all().unwrap().remove(0);
         let plan = NamespacePlan::build(
             &[
@@ -2085,6 +2103,23 @@ mod tests {
         )
         .unwrap();
         let path = owner.root().join(&item.name);
+        if mode == 2 {
+            std::fs::write(
+                owner.root().join("unrelated.txt"),
+                b"generated unrelated namespace progress",
+            )
+            .unwrap();
+            assert!(owner.synchronize_once().unwrap().deferred == 0);
+        }
+
+        let source_stamp = if mode == 4 {
+            116_444_736_000_000_000 + 10_012_345
+        } else {
+            116_444_736_000_000_000 + 123_456_789
+        };
+        if mode == 4 {
+            std::fs::read(&path).unwrap();
+        }
         let bytes = provider.download(&item.remote_id).unwrap();
         std::fs::write(
             private.join("source-network-paused"),
@@ -2099,37 +2134,128 @@ mod tests {
             .native_projection_for_id(&item.remote_id)
             .unwrap()
             .unwrap();
-        owner.bridge.journal().prepare_native_source_import(twodrive_core::NativeSourceImport{sequence:0,expected,source_root_receipt:serde_json::json!({"schema_version":1,"volume_serial":42,"file_id":88,"identity":b"generated-foreign-source"}).to_string(),source_file:twodrive_core::NativeFileIdentity{volume_serial:42,file_id:99},cache_path:input,digest:format!("{:x}",sha2::Sha256::digest(&bytes)),source_filetime:116_444_736_000_000_000+123_456_789,source_pinned:true,state:"verified".into()},crate::local_files::digest_file).unwrap();
-        crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.set(true));
+        if mode == 4 {
+            let mut desired = owner.owner.inventory().unwrap().remove(0);
+            desired.last_write_time = source_stamp;
+            desired.cloud.as_mut().unwrap().pinned = true;
+            let record = db.get_by_remote_id(&item.remote_id).unwrap().unwrap();
+            assert!(
+                !owner
+                    .source_import_is_complete(&desired, &record, &expected)
+                    .unwrap()
+            );
+        }
+        owner.bridge.journal().prepare_native_source_import(twodrive_core::NativeSourceImport{sequence:0,expected,source_root_receipt:serde_json::json!({"schema_version":1,"volume_serial":42,"file_id":88,"identity":b"generated-foreign-source"}).to_string(),source_file:twodrive_core::NativeFileIdentity{volume_serial:42,file_id:99},cache_path:input,digest:format!("{:x}",sha2::Sha256::digest(&bytes)),source_filetime:source_stamp,source_pinned:true,state:"verified".into()},crate::local_files::digest_file).unwrap();
+        if mode == 3 {
+            twodrive_local_files::native::test_release_intent(&path).unwrap();
+            twodrive_local_files::native::interrupt_local_time_before_pin_for_test();
+        } else {
+            crate::local_files::INTERRUPT_REMOTE_AFTER_NATIVE_UPDATE.with(|f| f.set(true));
+        }
+
         let interrupted = owner.resume_source_imports().unwrap();
         let receipt = owner.receipt().clone();
         owner.disconnect().unwrap();
         drop(owner);
+        if mode == 1 {
+            std::fs::write(&path, b"generated newer native edit survives import").unwrap();
+        }
+        if mode == 2 {
+            use std::os::windows::process::CommandExt;
+            let child = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "[IO.File]::Move($env:TD_FROM,$env:TD_TO)",
+                ])
+                .env("TD_FROM", root.join("unrelated.txt"))
+                .env("TD_TO", root.join("unrelated-renamed.txt"))
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            assert!(child.status.success());
+            std::fs::remove_file(private.join("source-network-paused")).unwrap();
+        }
         owner = NativeCoordinator::resume(open(), &root, &receipt).unwrap();
-        let recovered = owner.resume_source_imports().unwrap();
+        let mut recovered = owner.resume_source_imports().unwrap();
+        let mut unrelated_progress = false;
+        if mode == 2 {
+            let coordinated = owner.synchronize_once();
+            unrelated_progress = coordinated
+                .as_ref()
+                .is_ok_and(|progress| progress.renamed == 1)
+                && provider
+                    .get_metadata_by_path("/unrelated-renamed.txt")
+                    .unwrap()
+                    .is_some();
+            recovered = owner.resume_source_imports().unwrap();
+        }
+
+        let captured = if mode == 1 {
+            Some(owner.synchronize_once().unwrap())
+        } else {
+            None
+        };
+        let preserved_source = std::fs::read(cache.join("generated-source-copy.bin")).unwrap();
+        let native = owner
+            .owner
+            .inventory()
+            .unwrap()
+            .into_iter()
+            .find(|e| e.relative_path == Path::new(&item.name))
+            .unwrap();
         let content = std::fs::read(&path);
-        let native = owner.owner.inventory().unwrap().remove(0);
+        let completed_evidence = owner
+            .bridge
+            .journal()
+            .native_source_import_completed(&item.remote_id, &item.etag, source_stamp)
+            .unwrap();
         let pending = owner
             .bridge
             .journal()
             .native_source_imports(owner.binding().unwrap())
             .unwrap()
             .len();
-        std::fs::remove_file(path).unwrap();
+        for entry in owner.owner.inventory().unwrap() {
+            assert!(!entry.directory);
+            std::fs::remove_file(owner.root().join(entry.relative_path)).unwrap();
+        }
         owner.retire_empty_generated_fixture().unwrap();
         drop(owner);
         std::fs::remove_dir(root).unwrap();
         std::fs::remove_file(checkpoint).unwrap();
         state.close().unwrap();
         assert_eq!(interrupted.deferred, 1, "{interrupted:?}");
-        assert_eq!(recovered.imported, 1, "{recovered:?}");
-        assert_eq!(recovered.deferred, 0, "{recovered:?}");
-        assert_eq!(content.unwrap(), bytes);
-        assert_eq!(
-            native.last_write_time,
-            116_444_736_000_000_000 + 123_456_789
-        );
-        assert!(native.cloud.unwrap().pinned);
+        if mode == 1 {
+            assert!(recovered.isolated >= 1, "{recovered:?}");
+            assert_eq!(
+                content.unwrap(),
+                b"generated newer native edit survives import"
+            );
+            assert!(captured.is_some());
+        } else {
+            if mode != 2 {
+                assert_eq!(recovered.imported, 1, "{recovered:?}");
+            }
+            assert!(completed_evidence);
+            assert_eq!(recovered.deferred, 0, "{recovered:?}");
+            assert_eq!(content.unwrap(), bytes);
+        }
+        assert_eq!(preserved_source, bytes);
+        if mode == 2 {
+            assert!(unrelated_progress);
+        }
+
+        if mode != 1 {
+            assert_eq!(native.last_write_time, source_stamp);
+            let os = native.cloud.unwrap();
+            assert_eq!(os.pinned, mode != 3);
+            if mode == 3 {
+                assert!(os.release_requested);
+                assert!(!os.resident);
+            }
+        }
         assert_eq!(pending, 0);
     }
     #[test]
@@ -3395,6 +3521,25 @@ mod tests {
             std::fs::read(session.coordinator.root().join(&files[2].relative_path)).is_err(),
             "uncached source bypassed account verification"
         );
+        let collision = root.with_file_name(format!(
+            "{}-collision",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        session.coordinator.disconnect().unwrap();
+        drop(session);
+        relocation::COLLIDE_AFTER_PREPARE.with(|f| f.set(true));
+        assert!(NativeSession::relocate(&private, &collision).is_err());
+        let mut session = NativeSession::resume(&private).unwrap();
+        assert_eq!(
+            std::fs::read(collision.join("generated-foreign-sentinel.txt")).unwrap(),
+            b"generated collision must remain untouched"
+        );
+        assert_eq!(
+            std::fs::read(session.coordinator.root().join(&files[0].relative_path)).unwrap(),
+            dataset.bytes(0)
+        );
+        std::fs::remove_file(collision.join("generated-foreign-sentinel.txt")).unwrap();
+        std::fs::remove_dir(collision).unwrap();
         let relocated = root.with_file_name(format!(
             "{}-relocated",
             root.file_name().unwrap().to_string_lossy()

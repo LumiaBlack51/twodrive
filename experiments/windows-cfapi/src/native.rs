@@ -1922,6 +1922,12 @@ pub struct LockedPlaceholder<'a> {
     identity: &'a [u8],
     size: usize,
 }
+#[cfg(feature = "native-test-hooks")]
+thread_local! {static INTERRUPT_LOCAL_TIME_BEFORE_PIN:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(feature = "native-test-hooks")]
+pub fn interrupt_local_time_before_pin_for_test() {
+    INTERRUPT_LOCAL_TIME_BEFORE_PIN.with(|f| f.set(true));
+}
 impl LockedPlaceholder<'_> {
     #[cfg(feature = "native-sync")]
     pub fn retain_pin_intent(&self) -> Result<()> {
@@ -1939,77 +1945,6 @@ impl LockedPlaceholder<'_> {
             },
             "retain copied pin intent",
         )
-    }
-    #[cfg(feature = "native-sync")]
-    pub fn preserve_verified_filetime(&self, filetime: u64) -> Result<()> {
-        let before = self.inspect()?;
-        if !before.os_in_sync || before.modified_bytes != 0 {
-            return Err("source timestamp preserves native edits".into());
-        }
-        let raw = unsafe { CfGetWin32HandleFromProtectedHandle(self.handle) };
-        let mut metadata = CF_FS_METADATA::default();
-        if unsafe {
-            GetFileInformationByHandleEx(
-                raw,
-                FileBasicInfo,
-                (&mut metadata.BasicInfo as *mut FILE_BASIC_INFO).cast(),
-                size_of::<FILE_BASIC_INFO>() as u32,
-            )
-        } == 0
-        {
-            return Err("source timestamp metadata unavailable".into());
-        }
-        metadata.FileSize = i64::try_from(self.size).map_err(|_| "source size overflow")?;
-        metadata.BasicInfo.LastWriteTime =
-            i64::try_from(filetime).map_err(|_| "source timestamp overflow")?;
-        metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
-            | FILE_ATTRIBUTE_HIDDEN
-            | FILE_ATTRIBUTE_SYSTEM
-            | FILE_ATTRIBUTE_ARCHIVE
-            | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
-        if metadata.BasicInfo.FileAttributes == 0 {
-            metadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
-        }
-        hr(
-            unsafe {
-                CfUpdatePlaceholder(
-                    self.handle,
-                    &metadata,
-                    ptr::null(),
-                    0,
-                    ptr::null(),
-                    0,
-                    CF_UPDATE_FLAG_MARK_IN_SYNC | CF_UPDATE_FLAG_VERIFY_IN_SYNC,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                )
-            },
-            "preserve verified source filetime without dehydration",
-        )?;
-        let pin = if before.pinned {
-            Some(CF_PIN_STATE_PINNED)
-        } else if before.release_requested {
-            Some(CF_PIN_STATE_UNPINNED)
-        } else if before.pin_known_unpinned {
-            Some(CF_PIN_STATE_UNSPECIFIED)
-        } else {
-            None
-        };
-        if let Some(pin) = pin {
-            hr(
-                unsafe { CfSetPinState(self.handle, pin, CF_SET_PIN_FLAG_NONE, ptr::null_mut()) },
-                "preserve pin around local timestamp metadata",
-            )?;
-        }
-        let after = self.inspect()?;
-        if !after.os_in_sync
-            || after.modified_bytes != 0
-            || after.logical_size != before.logical_size
-            || after.resident != before.resident
-        {
-            return Err("source timestamp changed native data state".into());
-        }
-        Ok(())
     }
     #[cfg(feature = "native-sync")]
     pub fn hydrate(&self) -> Result<()> {

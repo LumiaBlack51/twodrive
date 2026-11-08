@@ -222,6 +222,15 @@ impl Provider for MockProvider {
             remote.version += 1;
             return Ok(Self::metadata(&remote));
         }
+        if let Some(extra) = self.extras.lock().unwrap().get_mut(&entry.remote_id) {
+            ensure!(
+                extra.present && entry.etag == Self::metadata_id(&entry.remote_id, extra).etag,
+                "fixture auxiliary move conflict"
+            );
+            extra.path = path.into();
+            extra.version += 1;
+            return Ok(Self::metadata_id(&entry.remote_id, extra));
+        }
         let folder = folders
             .iter_mut()
             .find(|folder| folder.remote_id == entry.remote_id)
