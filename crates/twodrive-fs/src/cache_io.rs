@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use twodrive_core::{FileRecord, FileState};
+use twodrive_core::{Database, FileRecord, FileState};
 
 pub(crate) fn read_slice(path: &Path, offset: u64, size: u32) -> anyhow::Result<Vec<u8>> {
     let mut file = fs::File::open(path)?;
@@ -28,7 +28,39 @@ pub(crate) fn has_existing_cache(record: &FileRecord) -> bool {
             | FileState::Writing
             | FileState::Dirty
             | FileState::Uploading
-    ) && record.cache_path.as_deref().is_some_and(Path::exists)
+    ) && record.cache_path.as_deref().is_some_and(|path| {
+        fs::metadata(path).is_ok_and(|metadata| {
+            !matches!(record.state, FileState::Cached | FileState::Pinned)
+                || metadata.len() == record.metadata.size
+        })
+    })
+}
+
+pub(crate) fn reconcile_cached_record(
+    db: &Database,
+    record: &FileRecord,
+) -> anyhow::Result<FileRecord> {
+    if matches!(record.state, FileState::Cached | FileState::Pinned)
+        && let Some(path) = &record.cache_path
+        && fs::metadata(path).is_ok_and(|metadata| metadata.len() != record.metadata.size)
+    {
+        db.invalidate_cached_snapshot(record)?;
+        return db
+            .get_by_remote_id(&record.metadata.remote_id)?
+            .ok_or_else(|| anyhow::anyhow!("cache record disappeared"));
+    }
+    Ok(record.clone())
+}
+
+pub(crate) fn download_cache_path(
+    cache_dir: &Path,
+    remote_id: &str,
+    generation: i64,
+) -> std::path::PathBuf {
+    cache_dir.join(format!(
+        "{}-download-{generation}",
+        sanitize_cache_name(remote_id)
+    ))
 }
 
 pub(crate) fn sanitize_cache_name(remote_id: &str) -> String {

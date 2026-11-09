@@ -19,22 +19,21 @@ pub fn mount_mock(paths: AppPaths) -> anyhow::Result<()> {
     let db = Database::new(paths.db_path.clone());
     db.init()?;
     let backend = MockBackend::new();
-    let upload_concurrency = Config::load_or_create(&paths)?
-        .power
-        .ac_upload_concurrency
-        .max(1) as usize;
+    let config = Config::load_or_create(&paths)?;
+    let upload_concurrency = config.power.ac_upload_concurrency.max(1) as usize;
     let count = sync_metadata(&db, &backend)?;
     println!("twodrive: loaded {count} mock metadata entries");
     println!("twodrive: database {}", db.path().display());
     println!("twodrive: cache {}", paths.cache_dir.display());
     println!("twodrive: mounting {}", paths.mount_dir.display());
 
-    mount_backend(
+    mount_backend_with_retention(
         paths.mount_dir.clone(),
         db,
         paths.cache_dir.clone(),
         backend,
         upload_concurrency,
+        config.cache_retain_seconds()?,
     )?;
     Ok(())
 }
@@ -45,20 +44,19 @@ pub fn mount_graph(paths: AppPaths) -> anyhow::Result<()> {
     let db = Database::new(paths.db_path.clone());
     db.init()?;
     let backend = GraphBackend::from_paths(&paths)?;
-    let upload_concurrency = Config::load_or_create(&paths)?
-        .power
-        .ac_upload_concurrency
-        .max(1) as usize;
+    let config = Config::load_or_create(&paths)?;
+    let upload_concurrency = config.power.ac_upload_concurrency.max(1) as usize;
     println!("twodrive: database {}", db.path().display());
     println!("twodrive: cache {}", paths.cache_dir.display());
     println!("twodrive: mounting {}", paths.mount_dir.display());
 
-    mount_backend(
+    mount_backend_with_retention(
         paths.mount_dir.clone(),
         db,
         paths.cache_dir.clone(),
         backend,
         upload_concurrency,
+        config.cache_retain_seconds()?,
     )
 }
 
@@ -69,8 +67,27 @@ pub fn mount_backend<B: CloudBackend>(
     backend: B,
     upload_concurrency: usize,
 ) -> anyhow::Result<()> {
+    mount_backend_with_retention(
+        mount_dir,
+        db,
+        cache_dir,
+        backend,
+        upload_concurrency,
+        Config::default().cache_retain_seconds()?,
+    )
+}
+
+fn mount_backend_with_retention<B: CloudBackend>(
+    mount_dir: PathBuf,
+    db: Database,
+    cache_dir: PathBuf,
+    backend: B,
+    upload_concurrency: usize,
+    retain_seconds: i64,
+) -> anyhow::Result<()> {
     // No live handles exist yet; reconcile the durable local cache before serving requests.
     recover_interrupted_writes(&db)?;
+    let recovery_cache = cache_dir.clone();
     let fs = TwoDriveFs::new_with_upload_concurrency(db, cache_dir, backend, upload_concurrency)?;
     let (stop_tx, stop_rx) = mpsc::channel();
     let recovery_db = fs.db.clone();
@@ -84,6 +101,9 @@ pub fn mount_backend<B: CloudBackend>(
             }
             if let Err(err) = sync_delta_metadata(&recovery_db, recovery_backend.as_ref()) {
                 eprintln!("twodrive: metadata refresh deferred: {err:#}");
+            }
+            if let Err(err) = maintain_cache(&recovery_db, &recovery_cache, retain_seconds) {
+                eprintln!("twodrive: cache maintenance deferred: {err:#}");
             }
             match stop_rx.recv_timeout(Duration::from_secs(60)) {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -99,6 +119,12 @@ pub fn mount_backend<B: CloudBackend>(
     let _ = stop_tx.send(());
     let _ = recovery.join();
     result?;
+    Ok(())
+}
+
+fn maintain_cache(db: &Database, cache: &Path, retain_seconds: i64) -> anyhow::Result<()> {
+    db.prune_cache(retain_seconds)?;
+    db.prune_retired_cache(cache)?;
     Ok(())
 }
 

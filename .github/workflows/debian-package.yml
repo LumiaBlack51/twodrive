@@ -31,7 +31,7 @@ jobs:
       - name: Check artifacts, unchanged runtime payload and Lintian
         run: |
           set -euo pipefail
-          curl --fail --location --output /tmp/old-twodrive.deb https://github.com/LumiaBlack51/twodrive/releases/download/v0.2.14-1/twodrive_0.2.14-1_amd64.deb
+          curl --fail --location --retry 4 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 180 --retry-max-time 300 --output /tmp/old-twodrive.deb https://github.com/LumiaBlack51/twodrive/releases/download/v0.2.14-1/twodrive_0.2.14-1_amd64.deb
           if python3 scripts/test-debian-package.py /tmp/old-twodrive.deb > /tmp/old-package-regression.log 2>&1; then
             echo 'Old package unexpectedly passed dependency regression'; exit 1
           fi

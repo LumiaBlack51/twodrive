@@ -22,6 +22,45 @@ pub fn paths(directory: &Path) -> anyhow::Result<AppPaths> {
         token_path: state.dir.join("tokens.json"),
     })
 }
+
+/// Build the native cache owner only after the existing provider verifies the
+/// account/drive identity. Labels and caller-supplied identity strings are not
+/// accepted at this production composition boundary. No root is registered.
+pub fn open_local_session(
+    db: twodrive_core::Database,
+    private_cache: &Path,
+    account_state: &Path,
+    writable: bool,
+) -> anyhow::Result<crate::local_files::LocalFileBridge> {
+    let provider = OneDrive::open(account_state, writable)?;
+    let identity = provider.graph.readonly_identity(&mut || Ok(()))?;
+    ensure!(
+        !identity.account.is_empty() && !identity.drive.is_empty(),
+        "verified account and drive required"
+    );
+    open_pinned_session(db, private_cache, account_state, identity, writable)
+}
+/// Resume authority is supplied only by the coordinator's sealed configuration.
+/// Network access remains pinned even when the private cache is opened offline.
+pub(crate) fn open_pinned_session(
+    db: twodrive_core::Database,
+    private_cache: &Path,
+    account_state: &Path,
+    identity: twodrive_core::CloudIdentity,
+    writable: bool,
+) -> anyhow::Result<crate::local_files::LocalFileBridge> {
+    let binding = format!("onedrive:{}:{}", identity.account, identity.drive);
+    crate::local_files::LocalFileBridge::open_bound(
+        db,
+        private_cache,
+        crate::provider::Backend::new(crate::native_account::NativeAccount::new(
+            account_state.to_path_buf(),
+            identity,
+            writable,
+        )?),
+        &binding,
+    )
+}
 fn entry(m: twodrive_core::MetadataEntry) -> MetadataEntry {
     MetadataEntry {
         remote_id: m.remote_id,
@@ -115,7 +154,6 @@ impl CloudBackend for OneDrive {
     ) -> anyhow::Result<u64> {
         self.graph.download_to(id, writer, progress)
     }
-    #[cfg(target_os = "linux")]
     fn download_sized_to(
         &self,
         id: &str,
@@ -174,6 +212,25 @@ impl CloudBackend for OneDrive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_account_authority_cannot_open_or_recover_a_native_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let cache = root.join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let sentinel = cache.join("retained.bin");
+        std::fs::write(&sentinel, b"retained local data").unwrap();
+        let db = twodrive_core::Database::new(root.join("native.sqlite3"));
+        db.init().unwrap();
+        db.set_state_value("sentinel", "unchanged").unwrap();
+        assert!(open_local_session(db.clone(), &cache, &root.join("empty-account"), true).is_err());
+        assert!(db.get_state_value("local_cache_schema").unwrap().is_none());
+        assert_eq!(
+            db.get_state_value("sentinel").unwrap().as_deref(),
+            Some("unchanged")
+        );
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"retained local data");
+    }
     #[test]
     fn explicit_account_paths_never_use_stable_configuration() {
         let temp = tempfile::tempdir().unwrap();

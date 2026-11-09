@@ -19,6 +19,7 @@ struct DelayedBackend {
     active: AtomicUsize,
     max_active: AtomicUsize,
     slow_release: Option<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
+    overlap: Option<(std::sync::Mutex<usize>, std::sync::Condvar)>,
 }
 
 impl DelayedBackend {
@@ -28,6 +29,7 @@ impl DelayedBackend {
             active: AtomicUsize::new(0),
             max_active: AtomicUsize::new(0),
             slow_release: None,
+            overlap: None,
         }
     }
 }
@@ -67,11 +69,21 @@ impl CloudBackend for DelayedBackend {
                 .unwrap()
                 .recv_timeout(Duration::from_secs(15))?;
         }
-        thread::sleep(if path.contains("slow") {
-            Duration::from_millis(800)
+        if let Some((entered, ready)) = &self.overlap {
+            let mut count = entered.lock().unwrap();
+            *count += 1;
+            ready.notify_all();
+            let (count, _) = ready
+                .wait_timeout_while(count, Duration::from_secs(15), |count| *count < 2)
+                .unwrap();
+            anyhow::ensure!(*count >= 2, "second upload worker never entered");
         } else {
-            Duration::from_millis(100)
-        });
+            thread::sleep(if path.contains("slow") {
+                Duration::from_millis(800)
+            } else {
+                Duration::from_millis(100)
+            });
+        }
         let result = self.inner.upload_file_with_version(
             path,
             source_path,
@@ -300,7 +312,10 @@ fn known_folder_small_files_upload_concurrently() {
     paths.ensure().unwrap();
     let db = Database::new(paths.db_path.clone());
     db.init().unwrap();
-    let backend = DelayedBackend::new();
+    let mut backend = DelayedBackend::new();
+    // Observe two actual concurrent calls, independent of CI scheduling and
+    // SQLite fsync latency; a serial implementation times out and fails.
+    backend.overlap = Some((std::sync::Mutex::new(0), std::sync::Condvar::new()));
     let mut config = Config::default();
     config.power.ac_upload_concurrency = 4;
     let mut state = KnownFolderState::default();

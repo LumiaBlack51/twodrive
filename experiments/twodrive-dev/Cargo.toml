@@ -11,6 +11,7 @@ rust-version = "1.91"
 [features]
 default = []
 mount = ["dep:twodrive-fs", "dep:fuser"]
+native-sync = ["native-local-fixture", "twodrive-local-files/native-sync"]
 native-local-fixture = ["twodrive-local-files/native-local-fixture"]
 native-test-hooks = ["native-local-fixture", "twodrive-local-files/native-test-hooks"]
 

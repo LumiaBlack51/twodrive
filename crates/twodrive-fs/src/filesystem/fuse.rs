@@ -34,24 +34,49 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         };
 
         let path = join_cloud_path(parent_path, name);
-        let ino = if let Some(ino) = self.inodes.ino_for_path(&path) {
-            ino
-        } else if let Ok(Some(record)) = self.db.get_by_path(&path) {
-            self.inodes.insert_or_update(record)
-        } else {
-            reply.error(libc::ENOENT);
-            return;
+        // Prefer the current path owner. A retired identity cannot recreate a
+        // name just because an open descriptor still has valid attributes.
+        let record = match self.db.get_by_path(&path) {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                // Keep the existing idempotent-rename seam for a live identity
+                // moved by delta before the caller submits its own rename.
+                // Directory refresh removes that temporary old-name alias.
+                if let Some(ino) = self.inodes.ino_for_path(&path)
+                    && self.record_for_ino(ino).is_some()
+                    && let Some(attr) = self.attr_for_ino(ino)
+                {
+                    reply.entry(&attribute_ttl(&attr), &attr, 0);
+                    return;
+                }
+                reply.error(libc::ENOENT);
+                return;
+            }
+            Err(err) => {
+                eprintln!("twodrive lookup error: {err:#}");
+                reply.error(libc::EIO);
+                return;
+            }
         };
+        let ino = self
+            .inodes
+            .ino_for_path(&path)
+            .filter(|ino| {
+                self.inodes
+                    .record_for_ino(*ino)
+                    .is_some_and(|cached| cached.metadata.remote_id == record.metadata.remote_id)
+            })
+            .unwrap_or_else(|| self.inodes.insert_or_update(record));
 
         match self.attr_for_ino(ino) {
-            Some(attr) => reply.entry(&TTL, &attr, 0),
+            Some(attr) => reply.entry(&attribute_ttl(&attr), &attr, 0),
             None => reply.error(libc::ENOENT),
         }
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         match self.attr_for_ino(ino) {
-            Some(attr) => reply.attr(&TTL, &attr),
+            Some(attr) => reply.attr(&attribute_ttl(&attr), &attr),
             None => reply.error(libc::ENOENT),
         }
     }
@@ -92,12 +117,14 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
             self.inodes.replace_ino_record(ino, record);
         }
         if let Some(size) = size {
-            let result = if let Some(handle) = fh.and_then(|fh| self.write_handles.get(&fh)) {
-                OpenOptions::new()
-                    .write(true)
-                    .open(&handle.cache_path)
-                    .and_then(|file| file.set_len(size))
-                    .map_err(anyhow::Error::from)
+            let result = if let Some(fh) = fh.filter(|fh| self.write_handles.contains_key(fh)) {
+                self.begin_handle_write(fh).and_then(|()| {
+                    OpenOptions::new()
+                        .write(true)
+                        .open(&self.write_handles[&fh].cache_path)
+                        .and_then(|file| file.set_len(size))
+                        .map_err(anyhow::Error::from)
+                })
             } else {
                 self.truncate_without_handle(ino, size)
             };
@@ -111,7 +138,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
             }
         }
         match self.attr_for_ino(ino) {
-            Some(attr) => reply.attr(&TTL, &attr),
+            Some(attr) => reply.attr(&attribute_ttl(&attr), &attr),
             None => reply.error(libc::ENOENT),
         }
     }
@@ -182,6 +209,14 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         match self.record_for_ino(ino) {
             Some(record) if !record.metadata.is_dir => {
                 let record = self.refresh_record(&record);
+                let record = match reconcile_cached_record(&self.db, &record) {
+                    Ok(record) => record,
+                    Err(err) => {
+                        eprintln!("twodrive cache validation error: {err:#}");
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                };
                 if flags & libc::O_ACCMODE != libc::O_RDONLY {
                     match self.create_overwrite_upload(record, flags & libc::O_TRUNC != 0) {
                         Ok((_ino, fh, _attr)) => reply.opened(fh, 0),
@@ -223,13 +258,16 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                         ReadHandle {
                             open_attr: attr_for_record(ino, &record),
                             ino,
-                            cache_path: self
-                                .cache_dir
-                                .join(sanitize_cache_name(&record.metadata.remote_id)),
+                            cache_path: download_cache_path(
+                                &self.cache_dir,
+                                &record.metadata.remote_id,
+                                generation,
+                            ),
                             _cache_guard: Arc::new(Mutex::new(None)),
                             unlinked: false,
                             deferred_record: Some(record),
                             download_generation: generation,
+                            last_cache_touch: AtomicI64::new(0),
                         },
                     );
                     reply.opened(fh, 0);
@@ -267,6 +305,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                 return;
             }
             let reader = request_process_identity(req);
+            self.note_read_access(handle);
             let generation = handle.download_generation;
             let guard = Arc::clone(&handle._cache_guard);
             let db = self.db.clone();
@@ -379,6 +418,13 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
     ) {
         if offset < 0 {
             reply.error(libc::EINVAL);
+            return;
+        }
+        if !data.is_empty()
+            && let Err(err) = self.begin_handle_write(fh)
+        {
+            eprintln!("twodrive begin write error: {err:#}");
+            reply.error(libc::EIO);
             return;
         }
         let Some(handle) = self.write_handles.get(&fh) else {
@@ -626,7 +672,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         reply: ReplyCreate,
     ) {
         match self.create_upload_with_mode(parent, name, flags, mode & !umask) {
-            Ok((_ino, fh, attr)) => reply.created(&TTL, &attr, 0, fh, 0),
+            Ok((_ino, fh, attr)) => reply.created(&attribute_ttl(&attr), &attr, 0, fh, 0),
             Err(err) => {
                 eprintln!("twodrive create upload error: {err:#}");
                 reply.error(libc::EIO);

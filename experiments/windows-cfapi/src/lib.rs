@@ -1,7 +1,9 @@
 //! Windows adapter experiment. No protocol, credentials, Flutter or transport code.
 use twodrive_core::FileState;
+pub mod catalogue;
 pub mod fixtures;
 pub mod migration;
+pub mod names;
 
 // The production desktop dependency cannot compile registration/dehydration.
 #[cfg(all(windows, feature = "fixture-probe"))]

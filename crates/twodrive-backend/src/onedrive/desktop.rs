@@ -72,17 +72,17 @@ impl GraphBackend {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use tiny_http::{Response, Server};
     use twodrive_core::{AppPaths, TokenData, TokenStore, now_unix};
-    struct Sandbox(std::path::PathBuf);
+    pub(crate) struct Sandbox(std::path::PathBuf);
     impl Drop for Sandbox {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-    fn backend(server: &Server) -> (Sandbox, GraphBackend) {
+    pub(crate) fn backend(server: &Server) -> (Sandbox, GraphBackend) {
         let root =
             std::env::temp_dir().join(format!("td-graph-desktop-{:x}", rand::random::<u64>()));
         std::fs::create_dir(&root).unwrap();
@@ -105,6 +105,25 @@ mod tests {
         let mut graph = GraphBackend::from_paths(&p).unwrap();
         graph.test_endpoint = Some(format!("http://{}", server.server_addr()));
         (Sandbox(root), graph)
+    }
+    #[test]
+    fn metadata_root_uses_the_root_resource_without_an_empty_path_suffix() {
+        use crate::CloudBackend;
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (_sandbox, graph) = backend(&server);
+        let worker = std::thread::spawn(move || {
+            let request = server.recv().unwrap();
+            let path = request.url().to_string();
+            request
+                .respond(Response::from_string(
+                    r#"{"id":"actual-root","name":"root","folder":{},"eTag":"root-v1"}"#,
+                ))
+                .unwrap();
+            path
+        });
+        let metadata = graph.get_metadata_by_path("/").unwrap().unwrap();
+        assert_eq!(worker.join().unwrap(), "/v1.0/me/drive/root");
+        assert!(metadata.is_dir && metadata.path == "/" && metadata.remote_id == "actual-root");
     }
     #[test]
     fn shallow_directory_preserves_ids_versions_and_bounded_pagination() {

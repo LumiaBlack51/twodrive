@@ -46,6 +46,16 @@ where
     retry_impl(RequestOperation::Graph, || Ok(build()), check, false)?
         .ok_or_else(|| anyhow::anyhow!("missing HTTP response"))
 }
+pub(super) fn retry_request_built_checked<F>(
+    build: F,
+    check: &mut dyn FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<reqwest::blocking::Response>
+where
+    F: FnMut() -> anyhow::Result<RequestBuilder>,
+{
+    retry_impl(RequestOperation::Graph, build, check, false)?
+        .ok_or_else(|| anyhow::anyhow!("missing HTTP response"))
+}
 pub(super) fn retry_optional_request<F>(
     build: F,
 ) -> anyhow::Result<Option<reqwest::blocking::Response>>

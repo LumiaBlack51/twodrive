@@ -23,8 +23,10 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 unlinked: false,
                 deferred_record: None,
                 download_generation: 0,
+                last_cache_touch: AtomicI64::new(0),
             },
         );
+        self.note_read_access(&self.read_handles[&fh]);
         Ok(fh)
     }
 
@@ -34,11 +36,25 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         offset: u64,
         size: u32,
     ) -> anyhow::Result<Vec<u8>> {
+        if let Some(handle) = self.read_handles.get(&fh) {
+            use std::os::unix::fs::FileExt;
+            let guard = handle
+                ._cache_guard
+                .lock()
+                .map_err(|_| anyhow::anyhow!("read handle poisoned"))?;
+            let file = guard
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("read is still deferred"))?;
+            let mut bytes = vec![0; size as usize];
+            let count = file.read_at(&mut bytes, offset)?;
+            bytes.truncate(count);
+            self.note_read_access(handle);
+            return Ok(bytes);
+        }
         let cache_path = self
-            .read_handles
+            .write_handles
             .get(&fh)
             .map(|handle| &handle.cache_path)
-            .or_else(|| self.write_handles.get(&fh).map(|handle| &handle.cache_path))
             .ok_or_else(|| anyhow::anyhow!("open file handle does not exist"))?;
         read_slice(cache_path, offset, size)
     }
@@ -61,16 +77,51 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn release_read_handle(&mut self, fh: u64) -> anyhow::Result<()> {
+        let access = if let Some(handle) = self.read_handles.get(&fh)
+            && !handle.unlinked
+        {
+            // Close already commits release bookkeeping. Record the final access
+            // before dropping its cache lease, so eviction cannot overtake a
+            // successful touch. Accounting failure is reported, but FUSE will
+            // not send another release: always consume this final handle.
+            self.db.mark_cache_path_accessed(&handle.cache_path)
+        } else {
+            Ok(())
+        };
         let Some(handle) = self.read_handles.remove(&fh) else {
             return Ok(());
         };
         let cache_path = handle.unlinked.then(|| handle.cache_path.clone());
         drop(handle);
-        if let Some(cache_path) = cache_path {
-            self.cleanup_unlinked_cache(&cache_path)?;
+        let cleanup = cache_path
+            .as_ref()
+            .map_or(Ok(()), |path| self.cleanup_unlinked_cache(path));
+        let releases = self.db.finish_pending_releases();
+        access.and(cleanup).and(releases.map(|_| ()))
+    }
+
+    pub(super) fn note_read_access(&self, handle: &ReadHandle) {
+        if handle.unlinked {
+            return;
         }
-        self.db.finish_pending_releases()?;
-        Ok(())
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let previous = handle.last_cache_touch.load(Ordering::Relaxed);
+        if now >= previous && now - previous < 60 {
+            return;
+        }
+        handle.last_cache_touch.store(now, Ordering::Relaxed);
+        let db = self.db.clone();
+        let cache = handle.cache_path.clone();
+        // No SQLite write on every read chunk or in the read dispatcher. The
+        // open handle retains its lease, and close commits before releasing it.
+        self.read_pool.spawn(move || {
+            if let Err(err) = db.mark_cache_path_accessed(&cache) {
+                eprintln!("twodrive cache access update failed: {err:#}");
+            }
+        });
     }
 
     pub(super) fn cleanup_unlinked_cache(&self, cache_path: &Path) -> anyhow::Result<()> {
@@ -91,11 +142,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 .values()
                 .any(|handle| handle.cache_path == cache_path);
         if !still_open {
-            match fs::remove_file(cache_path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
-            }
+            self.db.remove_unreferenced_cache(cache_path)?;
         }
         Ok(())
     }

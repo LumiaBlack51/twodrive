@@ -21,7 +21,10 @@ mod auth;
 pub mod browse;
 mod desktop;
 mod http;
+mod integrity;
+pub use integrity::{FileIntegrity, IntegrityRequest, QuickXorHash};
 mod model;
+mod namespace;
 mod paths;
 pub mod readonly;
 mod upload;
@@ -86,6 +89,7 @@ impl GraphBackend {
         source_modified_unix: i64,
         remote_id: Option<&str>,
         if_match: Option<&str>,
+        source_digest: &str,
     ) -> anyhow::Result<Option<PersistedUploadSession>> {
         let sessions = self
             .upload_sessions
@@ -99,6 +103,7 @@ impl GraphBackend {
                     && session.source_modified_unix == source_modified_unix
                     && session.remote_id.as_deref() == remote_id
                     && session.if_match.as_deref() == if_match
+                    && session.source_digest.as_deref() == Some(source_digest)
             })
             .cloned())
     }
@@ -174,13 +179,17 @@ impl CloudBackend for GraphBackend {
 
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         let path = normalize_cloud_path(path);
-        let url = format!(
-            "https://graph.microsoft.com/v1.0/me/drive/root:/{}",
-            encode_graph_path(&path)
-        );
+        let url = graph_parent_lookup_url(&path);
+        #[cfg(test)]
+        let test_url = self
+            .test_endpoint
+            .as_ref()
+            .map(|base| format!("{base}{}", &url["https://graph.microsoft.com".len()..]));
+        #[cfg(test)]
+        let url = test_url.as_ref().unwrap_or(&url);
         let Some(response) = retry_optional_request(|| {
             let access_token = self.access_token()?;
-            Ok(self.client.get(&url).bearer_auth(access_token))
+            Ok(self.client.get(url.as_str()).bearer_auth(access_token))
         })?
         else {
             return Ok(None);
@@ -352,6 +361,7 @@ impl CloudBackend for GraphBackend {
     }
 
     fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+        validate_graph_file_path(path)?;
         let access_token = self.access_token()?;
         let (parent_path, name) = split_cloud_parent_name(path)?;
         let url = if parent_path == "/" {
@@ -379,6 +389,7 @@ impl CloudBackend for GraphBackend {
     }
 
     fn rename(&self, remote_id: &str, new_path: &str) -> anyhow::Result<MetadataEntry> {
+        validate_graph_file_path(new_path)?;
         let access_token = self.access_token()?;
         let (parent_path, name) = split_cloud_parent_name(new_path)?;
         let parent_url = graph_parent_lookup_url(&parent_path);
@@ -495,6 +506,7 @@ impl GraphBackend {
             .map(|value| value.as_secs() as i64)
             .unwrap_or_default();
         let session_key = normalize_cloud_path(path);
+        let source_digest = upload::source_digest(source_path)?;
         let persisted = self
             .matching_upload_session(
                 &session_key,
@@ -502,6 +514,7 @@ impl GraphBackend {
                 source_modified_unix,
                 remote_id,
                 if_match,
+                &source_digest,
             )?
             .filter(|session| session.create_only == create_only);
         let resumed = match persisted {
@@ -549,6 +562,7 @@ impl GraphBackend {
                     remote_id: remote_id.map(str::to_string),
                     if_match: if_match.map(str::to_string),
                     create_only,
+                    source_digest: Some(source_digest),
                 },
             )?;
             (session.upload_url, 0)
