@@ -1,0 +1,17 @@
+test_header_trickle_is_bounded (__main__.AcceptanceBoundaries.test_header_trickle_is_bounded) ... ok
+test_slow_trickle_cannot_reset_whole_request_deadline (__main__.AcceptanceBoundaries.test_slow_trickle_cannot_reset_whole_request_deadline) ... ok
+test_status_mismatch_is_failure (__main__.AcceptanceBoundaries.test_status_mismatch_is_failure) ... ok
+test_streamed_hash_and_length (__main__.AcceptanceBoundaries.test_streamed_hash_and_length) ... ok
+test_truncated_success_response_is_failure (__main__.AcceptanceBoundaries.test_truncated_success_response_is_failure) ... ok
+test_absent_partial_uploads_have_bounded_observation (__main__.ReviewRegressions.test_absent_partial_uploads_have_bounded_observation) ... ok
+test_cleanup_failure_fails_otherwise_successful_exercise (__main__.ReviewRegressions.test_cleanup_failure_fails_otherwise_successful_exercise) ... ok
+test_cleanup_failure_preserves_primary_error_and_is_recorded (__main__.ReviewRegressions.test_cleanup_failure_preserves_primary_error_and_is_recorded) ... ok
+test_confirmed_collection_is_cleaned_after_body_failure (__main__.ReviewRegressions.test_confirmed_collection_is_cleaned_after_body_failure) ... ok
+test_delayed_partial_commit_is_rejected (__main__.ReviewRegressions.test_delayed_partial_commit_is_rejected) ... ok
+test_lost_mkcol_response_records_pending_without_delete (__main__.ReviewRegressions.test_lost_mkcol_response_records_pending_without_delete) ... ok
+test_residual_shared_file_fails_attempt (__main__.ReviewRegressions.test_residual_shared_file_fails_attempt) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 5.449s
+
+OK

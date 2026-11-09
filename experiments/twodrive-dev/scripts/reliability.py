@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -22,6 +23,8 @@ from urllib.parse import quote
 import uuid
 
 CHUNK = bytes(range(256)) * 4096
+ABORT_OBSERVE_SECONDS = 1.0
+ABORT_POLL_SECONDS = .1
 
 
 class Resources:
@@ -221,18 +224,36 @@ def interrupted_uploads(gateway, prefix, results):
                 left -= len(data)
         finally:
             connection.close()
-        # A partial upload must never become a committed visible file.
-        response = gateway.request('GET', path, expected=(404,))
-        results.append({'case': f'interrupted-put-{percent}-percent',
-                        'status': 'passed', 'visible_after_abort': response['status']})
+        # A single 404 can race the server's unfinished PUT handler. This is
+        # bounded observation, not proof that a later commit is impossible.
+        observation = {'case': f'interrupted-put-{percent}-percent', 'status': 'failed',
+                       'scope': 'bounded-post-abort-observation',
+                       'observation_window_seconds': ABORT_OBSERVE_SECONDS,
+                       'poll_interval_seconds': ABORT_POLL_SECONDS, 'checks': 0,
+                       'server_completion_confirmed': False}
+        results.append(observation)
+        started = time.monotonic()
+        while True:
+            response = gateway.request('GET', path, expected=(404,))
+            observation['checks'] += 1
+            elapsed = time.monotonic() - started
+            if elapsed >= ABORT_OBSERVE_SECONDS:
+                break
+            time.sleep(min(ABORT_POLL_SECONDS, ABORT_OBSERVE_SECONDS-elapsed))
+        observation.update(status='passed', visible_after_abort=response['status'],
+                           observed_seconds=round(elapsed, 6))
 
 
 def exercise(gateway, directory, args, results):
     prefix = '/td-reliability-' + uuid.uuid4().hex
-    gateway.request('MKCOL', prefix, expected=(201,))
     created = {prefix}
-    cleanup_ok = False
+    owned = False
+    cleanup = {'case': 'owned_remote_collection_cleanup', 'collection': prefix,
+               'ownership': 'unconfirmed', 'status': 'pending'}
     try:
+        gateway.request('MKCOL', prefix, expected=(201,))
+        owned = True
+        cleanup['ownership'] = 'confirmed-create-response'
         if args.faults:
             interrupted_uploads(gateway, prefix, results)
         for name, source in corpus(directory, args.full, args.small_count):
@@ -282,12 +303,23 @@ def exercise(gateway, directory, args, results):
         listing = gateway.request('PROPFIND', prefix, headers={'Depth': '1'}, expected=(207,))
         assert b'multistatus' in listing['preview']
     finally:
+        primary_error = sys.exc_info()[0] is not None
         try:
-            gateway.request('DELETE', prefix, expected=(200, 204))
-            gateway.request('GET', prefix, expected=(404,))
-            cleanup_ok = True
+            if owned:
+                cleanup['status'] = 'failed'
+                gateway.request('DELETE', prefix, expected=(200, 204))
+                gateway.request('GET', prefix, expected=(404,))
+                cleanup['status'] = 'passed'
+            else:
+                # Random naming alone is not ownership evidence after a lost
+                # reply or collision. Preserve the locator; never blind DELETE.
+                cleanup['reason'] = 'creation-not-confirmed; manual-review-required'
+        except Exception as error:
+            cleanup['error_type'] = type(error).__name__
+            if not primary_error:
+                raise
         finally:
-            results.append({'case': 'owned_remote_collection_cleanup', 'status': 'passed' if cleanup_ok else 'failed'})
+            results.append(cleanup)
 
 
 def run_attempt(args, directory, results):
@@ -367,6 +399,9 @@ def run_attempt(args, directory, results):
             entry['initial_transports'] = re.findall(r'\btransport=(direct-udp|relay|negotiating)\b', text)
             entry['owned_processes_stopped'] = all(p.poll() is not None for p in processes)
             entry['shared_files_remaining'] = sum(p.is_file() for p in (directory/'share').rglob('*'))
+            if entry['shared_files_remaining']:
+                entry['status'] = 'failed'
+                entry['cleanup_error'] = 'shared-files-remain-after-owned-process-exit'
             if args.network == 'relay-only' and entry['initial_transports'] != ['relay']:
                 entry['status'] = 'failed'
                 entry['assertion'] = 'forced relay initial path not confirmed'
