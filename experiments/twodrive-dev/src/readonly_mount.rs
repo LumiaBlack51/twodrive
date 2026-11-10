@@ -287,6 +287,12 @@ impl RemoteFs {
         self.check().map_err(|_| FsError::GeneralFailure)?;
         if let Some(writer) = &self.0.writer {
             if let Some((entry, _)) = writer
+                .excluded_file(path)
+                .map_err(|_| FsError::GeneralFailure)?
+            {
+                return Ok(entry);
+            }
+            if let Some((entry, _)) = writer
                 .editor_file(path)
                 .map_err(|_| FsError::GeneralFailure)?
             {
@@ -516,6 +522,17 @@ impl RemoteFs {
         }
     }
     fn materialize(&self, entry: MetadataEntry) -> anyhow::Result<Arc<Cached>> {
+        if let Some(writer) = &self.0.writer
+            && let Some((current, mut source)) = writer.excluded_file(&entry.path)?
+        {
+            ensure!(same(&entry, &current), "本地排除文件已改变");
+            let mut file = tempfile::NamedTempFile::new_in(self.0.directory.path())?;
+            std::io::copy(&mut source, &mut file)?;
+            return Ok(Arc::new(Cached {
+                meta: current,
+                file,
+            }));
+        }
         if let Some(writer) = &self.0.writer
             && let Some((current, bytes)) = writer.editor_file(&entry.path)?
         {

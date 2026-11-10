@@ -105,7 +105,9 @@ impl Provider for NativeAccount {
         Capabilities {
             upload: self.writable,
             conditional_upload: self.writable,
-            ..Default::default()
+            mkdir: self.writable,
+            rename: self.writable,
+            delete: self.writable,
         }
     }
     fn list_directory(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {

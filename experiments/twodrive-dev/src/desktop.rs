@@ -29,6 +29,8 @@ use twodrive_dev::{
 
 #[path = "desktop_backup.rs"]
 mod backup;
+#[path = "desktop_native_runtime.rs"]
+mod cfapi_runtime;
 #[path = "desktop_connections.rs"]
 mod connections;
 #[path = "desktop_local_files.rs"]
@@ -207,6 +209,7 @@ struct App {
     inactive: HashMap<String, connections::Parked>,
     jobs: connections::Jobs,
     native_fixture: local_files::NativeFixture,
+    native_runtime: cfapi_runtime::Runtime,
     args: Args,
     state: State,
     config: Config,
@@ -701,6 +704,9 @@ impl App {
         Ok(
             json!({"providers":providers::catalog(),"capabilities":self.capabilities(),"route_fallback":self.network.fallback(),"paused":self.state.dir.join("paused").exists(),"backup":backup,"backup_failed":backup_failed,"mount_activity":mount_activity,
               "version":env!("CARGO_PKG_VERSION"),"sharing":sharing,"local_files":self.native_fixture.capabilities(),
+            "build":{"core_version":twodrive_core::VERSION,"edition":"Windows · Linux 0.2.24 集成版","revision":option_env!("TWODRIVE_BUILD_REVISION").unwrap_or("local")},
+            "sync_policy":twodrive_dev::sync_policy::SyncPolicy::load(&self.state.dir)?,
+            "cfapi":self.native_runtime.status(&self.state)?,
             "connected":self.backend.is_some(),"profile":self.connected.as_ref().map(|p|&p.id),
             "multi_connection":true,"storage_usage":true,"connections":self.config.profiles.iter().filter(|p|self.online(&p.id)).map(|p|json!({"id":p.id,"revision":p.revision,"account_name":self.account_name(p)})).collect::<Vec<_>>(),
             "mounted":self.mounted.is_some(),"mount_failed":mount_dead,"gateway_failed":gateway_dead,"mount_support":mount_support,
@@ -739,6 +745,22 @@ impl App {
             );
         }
         match req.op.as_str() {
+            "native_prepare" | "native_start" | "native_stop" => {
+                let p = self.profile(string(a, "profile")?)?;
+                ensure!(
+                    a["revision"].as_str() == Some(&p.revision),
+                    "连接配置已改变"
+                );
+                self.native_runtime
+                    .request(&req.op, a, &p, &self.state, &cancel)
+            }
+            "save_sync_policy" => {
+                let policy: twodrive_dev::sync_policy::SyncPolicy =
+                    serde_json::from_value(a.clone())?;
+                policy.validate()?;
+                self.state.save("sync-policy.json", &policy)?;
+                Ok(json!({"restart_required":true}))
+            }
             "local_items" | "local_read" | "local_dehydrate" | "local_pin" | "local_unpin"
             | "local_offline" | "local_reconnect" | "local_stop" => {
                 self.native_fixture.request(&req.op, a)
@@ -794,6 +816,11 @@ impl App {
                 ensure!(
                     matches!(p.network_route.as_str(), "auto" | "direct" | "system"),
                     "invalid network route"
+                );
+                let native = self.native_runtime.status(&self.state)?;
+                ensure!(
+                    native["profile"].as_str() != Some(&p.id) || native["running"] != true,
+                    "请先停止此账户的 CFAPI 原生同步"
                 );
                 ensure!(!self.online(&p.id), "请先断开连接再编辑配置");
                 ensure!(
@@ -859,6 +886,7 @@ impl App {
                 Ok(json!({}))
             }
             "quit" => {
+                self.native_runtime.stop(&self.state)?;
                 self.disconnect_all()?;
                 self.hosting.stop();
                 Ok(json!({}))
@@ -1023,6 +1051,7 @@ pub fn run() -> anyhow::Result<()> {
         inactive: HashMap::new(),
         jobs: HashMap::new(),
         native_fixture: local_files::NativeFixture::default(),
+        native_runtime: cfapi_runtime::Runtime::default(),
     };
     if let Some(id) = &app.args.backup_worker {
         let p = app.profile(id)?;
@@ -1064,6 +1093,16 @@ pub fn run() -> anyhow::Result<()> {
     let _lock = app.state.run_lock()?;
     if let Some(root) = &app.args.native_local_fixture_root {
         app.native_fixture = local_files::NativeFixture::start(root)?;
+    }
+    if app.args.native_local_fixture_root.is_none()
+        && let Err(error) = app
+            .native_runtime
+            .resume_desired(&app.config.profiles, &app.state)
+    {
+        eprintln!(
+            "CFAPI startup: {}",
+            twodrive_backend::diagnostics::safe_error(&error)
+        );
     }
     let out = Arc::new(Mutex::new(std::io::stdout()));
     let cancellations: Cancellations = Arc::new(Mutex::new(HashMap::new()));
@@ -1260,6 +1299,7 @@ mod tests {
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
+            native_runtime: cfapi_runtime::Runtime::default(),
         };
         let out = Arc::new(Mutex::new(std::io::stdout()));
         let call = |app: &mut App, op: &str, args: Value| {
@@ -1351,6 +1391,7 @@ mod tests {
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
+            native_runtime: cfapi_runtime::Runtime::default(),
         };
         assert_eq!(app.capabilities()["upload"], false);
         assert_eq!(
@@ -1395,6 +1436,7 @@ mod tests {
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
+            native_runtime: cfapi_runtime::Runtime::default(),
         };
         let directory = app.mount_state(&active);
         fs::create_dir_all(&directory).unwrap();
@@ -1470,6 +1512,7 @@ mod tests {
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
+            native_runtime: cfapi_runtime::Runtime::default(),
         };
         let session = json!({"kind":app.connected.as_ref().unwrap().kind,
             "revision":"active-revision","account_name":"Actual signed in person",
@@ -1585,6 +1628,7 @@ mod tests {
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
+            native_runtime: cfapi_runtime::Runtime::default(),
         };
         let source = temp.path().join("source");
         fs::write(&source, b"opaque IPC bytes").unwrap();

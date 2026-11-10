@@ -64,12 +64,25 @@ pub(super) fn run(state: PathBuf, seconds: u64) -> anyhow::Result<()> {
     let mut next_remote = start;
     let mut next_residency = start;
     let mut previous = String::new();
+    let mut last_report = Instant::now();
+    let status = twodrive_dev::state::State::new(session.state_directory().to_owned())?;
+    let mut summary = serde_json::to_value(session.coordinator.summary()?)?;
+    status.save("native-status.json", &serde_json::json!({"phase":"running","summary":summary,"updated_unix":twodrive_core::now_unix()}))?;
     println!(
         "{}",
-        serde_json::json!({"phase":"running","cloud_mutation_consumers":true,"summary":session.coordinator.summary()?})
+        serde_json::json!({"phase":"running","cloud_mutation_consumers":true,"summary":summary})
     );
     let outcome = (|| -> anyhow::Result<()> {
         while !cancelled() {
+            if session
+                .state_directory()
+                .parent()
+                .is_some_and(|p| p.join("paused").exists())
+            {
+                status.save("native-status.json", &serde_json::json!({"phase":"paused","summary":summary,"updated_unix":twodrive_core::now_unix()}))?;
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
             let local_started = Instant::now();
             let local = session.coordinator.synchronize_once();
             let mut local = match local {
@@ -110,7 +123,16 @@ pub(super) fn run(state: PathBuf, seconds: u64) -> anyhow::Result<()> {
                 };
                 next_residency = Instant::now() + Duration::from_secs(10);
             }
-            let value=serde_json::json!({"phase":"sync","local":local,"remote":remote,"residency":residency}).to_string();
+            if last_report.elapsed() >= Duration::from_secs(10) {
+                summary = serde_json::to_value(session.coordinator.summary()?)?;
+            }
+            let mut report = serde_json::json!({"phase":"sync","local":local,"remote":remote,"residency":residency,"summary":summary});
+            let value = report.to_string();
+            if value != previous || last_report.elapsed() >= Duration::from_secs(10) {
+                report["updated_unix"] = serde_json::json!(twodrive_core::now_unix());
+                status.save("native-status.json", &report)?;
+                last_report = Instant::now();
+            }
             if value != previous {
                 println!("{value}");
                 previous = value;
@@ -132,5 +154,9 @@ pub(super) fn run(state: PathBuf, seconds: u64) -> anyhow::Result<()> {
         "{}",
         serde_json::json!({"phase":"stopped","registration_retained":true})
     );
+    status.save(
+        "native-status.json",
+        &serde_json::json!({"phase":"stopped","updated_unix":twodrive_core::now_unix()}),
+    )?;
     outcome
 }

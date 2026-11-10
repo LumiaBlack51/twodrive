@@ -16,6 +16,8 @@ import 'native_local_files.dart';
 import 'connection_card.dart';
 import 'mount_card.dart';
 import 'workspace_navigation.dart';
+import 'cfapi_page.dart';
+import 'sync_policy_card.dart';
 
 String bytes(num value) {
   if (value < 1024) {
@@ -461,10 +463,12 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const Padding(
+                      Padding(
                         padding: EdgeInsets.only(bottom: 12, top: 3),
                         child: Text(
-                          '文件与同步',
+                          c.status['build']?['core_version'] is String
+                              ? 'Windows · ${c.status['build']['core_version']}'
+                              : '文件与同步',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.blueGrey),
                         ),
@@ -643,6 +647,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                       ),
                       WorkspacePage.sharing => SharingPage(client: c),
                       WorkspacePage.settings => settingsPage(),
+                      WorkspacePage.cfapi => CfapiPage(client: c),
                     },
                   ),
                   if (c.updates.available)
@@ -1048,6 +1053,17 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     final network = (c.status['network'] as List?)?.cast<String>() ?? [];
     return ListView(
       children: [
+        if (c.status['build'] is Map)
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.verified_outlined),
+              title: Text('共享引擎 ${c.status['build']['core_version']}'),
+              subtitle: Text(
+                '${c.status['build']['edition']}\n构建 ${c.status['build']['revision']}',
+              ),
+            ),
+          ),
+        if (c.status['sync_policy'] is Map) SyncPolicyCard(client: c),
         Card(
           color: Colors.white,
           child: Padding(
@@ -1056,7 +1072,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '软件更新 · ${c.updates.current}',
+                  'Windows 开发通道 · ${c.updates.current}',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,

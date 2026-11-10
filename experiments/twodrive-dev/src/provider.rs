@@ -188,6 +188,7 @@ pub struct Backend {
     paused: Option<PathBuf>,
     writable: bool,
     write_guard: Option<(PathBuf, String)>,
+    policy: Arc<crate::sync_policy::SyncPolicy>,
 }
 impl Backend {
     pub fn empty_directory_version_bound(
@@ -210,7 +211,6 @@ impl Backend {
         (|| {
             self.check_pause()?;
             self.check_write()?;
-            ensure!(self.capabilities().mkdir, "directory creation unavailable");
             valid_path(path)?;
             ensure!(parent.is_dir, "namespace parent is not a directory");
             Ok::<_, anyhow::Error>(())
@@ -227,7 +227,6 @@ impl Backend {
         (|| {
             self.check_pause()?;
             self.check_write()?;
-            ensure!(self.capabilities().rename, "namespace move unavailable");
             valid_path(path)?;
             ensure!(
                 !entry.etag.is_empty() && parent.is_dir && entry.path != "/",
@@ -242,7 +241,6 @@ impl Backend {
         (|| {
             self.check_pause()?;
             self.check_write()?;
-            ensure!(self.capabilities().delete, "namespace delete unavailable");
             ensure!(
                 !entry.etag.is_empty() && entry.path != "/",
                 "conditional namespace delete lacks a version"
@@ -258,11 +256,22 @@ impl Backend {
             paused: None,
             writable: true,
             write_guard: None,
+            policy: Arc::default(),
         }
     }
     pub fn with_pause_file(mut self, path: PathBuf) -> Self {
         self.paused = Some(path);
         self
+    }
+    pub fn with_sync_policy(mut self, policy: crate::sync_policy::SyncPolicy) -> Self {
+        self.policy = Arc::new(policy);
+        self
+    }
+    pub fn sync_policy(&self) -> &crate::sync_policy::SyncPolicy {
+        &self.policy
+    }
+    pub(crate) fn check_local_write(&self) -> anyhow::Result<()> {
+        self.check_write()
     }
     pub fn with_write_access(mut self, writable: bool, guard: Option<(PathBuf, String)>) -> Self {
         self.writable = writable;

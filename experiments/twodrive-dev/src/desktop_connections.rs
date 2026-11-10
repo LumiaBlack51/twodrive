@@ -615,6 +615,7 @@ mod tests {
             network: Arc::default(),
             hosting: sharing::Hosting::default(),
             native_fixture: local_files::NativeFixture::default(),
+            native_runtime: cfapi_runtime::Runtime::default(),
             inactive: HashMap::new(),
             jobs: HashMap::new(),
         };

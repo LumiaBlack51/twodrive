@@ -1,4 +1,5 @@
 //! Domain state and compatible local persistence for TwoDrive.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod config;
 mod credentials;
 mod database;

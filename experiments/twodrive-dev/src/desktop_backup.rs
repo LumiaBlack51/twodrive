@@ -307,6 +307,12 @@ pub fn run(
                             .file_name()
                             .into_string()
                             .map_err(|_| anyhow::anyhow!("文件名不是 UTF-8"))?;
+                        if backend
+                            .sync_policy()
+                            .excludes_backup_entry(&name, kind.is_dir())
+                        {
+                            continue;
+                        }
                         ensure!(!name.contains(['\\', '\0']), "文件名不能映射到远端路径");
                         let source = item.path().canonicalize()?;
                         ensure!(source.starts_with(&root), "备份路径离开所选目录");

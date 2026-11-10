@@ -18,3 +18,6 @@ extern crate twodrive_cfapi_probe as twodrive_local_files;
 #[path = "../../twodrive-dev/src/native_local_fixture.rs"]
 mod native_local_fixture;
 fn main() {}
+
+#[path = "../../twodrive-dev/src/sync_policy.rs"]
+mod sync_policy;

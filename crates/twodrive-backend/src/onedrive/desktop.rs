@@ -266,7 +266,13 @@ pub(crate) mod tests {
         );
     }
 
-    fn saved_create(graph: &GraphBackend, server: &Server, create_only: bool, size: u64) {
+    fn saved_create(
+        graph: &GraphBackend,
+        server: &Server,
+        create_only: bool,
+        size: u64,
+        source: &std::path::Path,
+    ) {
         graph
             .save_upload_session(
                 "/file".into(),
@@ -274,6 +280,7 @@ pub(crate) mod tests {
                     upload_url: format!("http://{}/private-session", server.server_addr()),
                     source_size: size,
                     source_modified_unix: 1,
+                    source_digest: Some(super::super::upload::source_digest(source).unwrap()),
                     remote_id: None,
                     if_match: None,
                     create_only,
@@ -283,12 +290,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn rebuilt_backup_cannot_resume_changed_same_size_or_legacy_unbound_bytes() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("source");
+        std::fs::write(&source, b"data").unwrap();
+        saved_create(&graph, &server, true, 4, &source);
+        std::fs::write(&source, b"evil").unwrap();
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(&source, b"data").unwrap();
+        graph
+            .upload_sessions
+            .lock()
+            .unwrap()
+            .sessions
+            .get_mut("/file")
+            .unwrap()
+            .source_digest = None;
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            server.try_recv().unwrap().is_none(),
+            "unbound bytes must never query or mutate the original upload session"
+        );
+    }
+
+    #[test]
     fn desktop_backup_resumes_only_the_original_create_session_after_snapshot_rebuild() {
         let server = Server::http("127.0.0.1:0").unwrap();
         let (sandbox, graph) = backend(&server);
         let source = sandbox.0.join("rebuilt-snapshot");
         std::fs::write(&source, b"data").unwrap();
-        saved_create(&graph, &server, true, 4);
+        saved_create(&graph, &server, true, 4, &source);
         let serving = std::thread::spawn(move || {
             let q = server.recv().unwrap();
             assert_eq!(q.method().as_str(), "GET");
@@ -346,7 +388,7 @@ pub(crate) mod tests {
                 .is_none()
         );
         for (owned, size) in [(false, 4), (true, 5)] {
-            saved_create(&graph, &server, owned, size);
+            saved_create(&graph, &server, owned, size, &source);
             assert!(
                 graph
                     .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
@@ -358,7 +400,7 @@ pub(crate) mod tests {
             server.try_recv().unwrap().is_none(),
             "unowned source queried remote"
         );
-        saved_create(&graph, &server, true, 4);
+        saved_create(&graph, &server, true, 4, &source);
         let serving = std::thread::spawn(move || {
             for body in [
                 r#"{"id":"other","name":"file","size":4,"file":{},"eTag":"other-version"}"#,
@@ -395,7 +437,7 @@ pub(crate) mod tests {
         let (sandbox, graph) = backend(&server);
         let source = sandbox.0.join("source");
         std::fs::write(&source, b"data").unwrap();
-        saved_create(&graph, &server, true, 4);
+        saved_create(&graph, &server, true, 4, &source);
         let serving = std::thread::spawn(move || {
             let q = server.recv().unwrap();
             assert_eq!(q.method().as_str(), "GET");

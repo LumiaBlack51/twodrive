@@ -38,8 +38,10 @@ class _ProfileDialogState extends State<ProfileDialog> {
   Json? pickedItem;
   Json? get provider =>
       widget.providers.where((p) => p['id'] == kind).firstOrNull;
-  List<Json> get providerFields =>
-      ((provider?['fields'] as List?) ?? []).cast<Json>().where((f) => f['internal'] != true).toList();
+  List<Json> get providerFields => ((provider?['fields'] as List?) ?? [])
+      .cast<Json>()
+      .where((f) => f['internal'] != true)
+      .toList();
   List<String> credentialFields(Json action) =>
       ((action['credential_fields'] as List?) ?? [])
           .cast<String>()
@@ -111,7 +113,15 @@ class _ProfileDialogState extends State<ProfileDialog> {
       'id': widget.original?['id'] ?? '',
       'kind': kind,
       'network_route': route,
-      'writable': writable,
+      'writable':
+          [
+            'upload',
+            'mkdir',
+            'rename',
+            'delete',
+          ].every((key) => provider?['capabilities']?[key] == false)
+          ? false
+          : writable,
       'name': fields['name']!.text.trim(),
       'mount_path': fields['mount_path']!.text.trim(),
       for (final f in providerFields.where(

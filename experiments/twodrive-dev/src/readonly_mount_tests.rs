@@ -1785,3 +1785,65 @@ fn native_statfs_and_gio_return_while_cloud_quota_is_stalled() {
         "native directory navigation waited for an unrelated held content read"
     );
 }
+
+#[test]
+fn linux_office_owner_and_regex_exclusions_are_durable_local_files_without_cloud_transfers() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(b"cloud content stays unchanged");
+    let policy: crate::sync_policy::SyncPolicy =
+        serde_json::from_value(serde_json::json!({"exclude_name_regexes":["(?i)\\.bak$"]}))
+            .unwrap();
+    let data = vec![42u8; 128 * 1024];
+    let spool = root.path().join("recovery");
+    let backend = || Backend::new(fixture.clone()).with_sync_policy(policy.clone());
+    let c = client();
+    let bridge = Bridge::start_writable(backend(), root.path(), &spool).unwrap();
+    for path in ["/~%24report.docx", "/notes.BAK"] {
+        assert_eq!(
+            request(&c, &bridge, "PUT", path)
+                .body(data.clone())
+                .send()
+                .unwrap()
+                .status(),
+            201
+        );
+        let response = request(&c, &bridge, "GET", path).send().unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.bytes().unwrap().as_ref(), data.as_slice());
+    }
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        crate::mount_write::recovery_status(&spool).unwrap()["files"],
+        0
+    );
+    assert_eq!(root_count(&c, &bridge), 3);
+    drop(bridge);
+    let bridge = Bridge::start_writable(backend(), root.path(), &spool).unwrap();
+    for path in ["/~%24report.docx", "/notes.BAK"] {
+        assert_eq!(
+            request(&c, &bridge, "GET", path)
+                .send()
+                .unwrap()
+                .bytes()
+                .unwrap()
+                .as_ref(),
+            data.as_slice()
+        );
+        assert_eq!(
+            request(&c, &bridge, "DELETE", path)
+                .send()
+                .unwrap()
+                .status(),
+            204
+        );
+        assert_eq!(
+            request(&c, &bridge, "GET", path).send().unwrap().status(),
+            404
+        );
+    }
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture.data.lock().unwrap().0,
+        b"cloud content stays unchanged"
+    );
+}

@@ -476,6 +476,9 @@ impl GraphBackend {
         }) else {
             return Ok(None);
         };
+        if saved.source_digest.as_deref() != Some(upload::source_digest(source)?.as_str()) {
+            return Ok(None);
+        }
         let Some(item) = self.get_metadata_by_path(path)? else {
             return Ok(None);
         };

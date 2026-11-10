@@ -4,6 +4,20 @@
 
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
+
+## TD-20261110-03：Windows 客户端未推进到 Linux 最新核心，CFAPI 缺少界面入口
+
+- 日期：2026-11-10（Asia/Shanghai）
+- 状态：集成与验证中
+- 症状：用户请求按 Linux 最新版推进 Windows，旧部署仍显示相同界面。
+- 根因与证据：旧候选基于 fork 837f7f2，共享 core/backend 仍为 0.2.14；Linux main 00d797a 已为 0.2.24。dev fe84028 的 CFAPI 持续运行代码未被旧包编译或接到管理界面。
+- 修复：合入完整 upstream/dev 与 upstream/main，保留多账户/四网盘适配。Windows 挂载复用稳定版 NameExclusions，Office ~$ 文件及自定义排除文件保存为持久本地文件，不创建上传活动；备份按目录名跳过整棵子树。新增排除设置和 CFAPI 页面，打包 native-sync 运行组件，提供独立 OneDrive 原生目录准备、启动、安全停止与统计。CFAPI 使用上游独立所有者、DPAPI 身份和恢复日志。
+- 合并保护：同名同内容的 4 个共享回归去重；断点续传增加源摘要绑定，拒绝同大小替换和缺少摘要的旧会话，并用无网络回归验证。新 namespace 写接口保留 fork 写权限守卫；NativeAccount 声明其实际目录创建/移动/删除能力，避免正确的守卫阻断原生同步。SMB 仍只读并保留取消。
+- 验证进度：Flutter 111 项通过、1 项平台专用跳过；共享 core/backend/完整性 136 项通过。新增回归通过真实 loopback HTTP 检查临时文件与正则排除的写、读、重启、删除，禁止云端上传实现被调用。实际 CFAPI 夹具和账户目录验证单独记录。
+- 边界：Linux FUSE 无法在本机 Windows 运行；CFAPI 当前支持 OneDrive，其他提供者继续 WinFsp。CFAPI 冲突保留/推迟，排除设置面向 WinFsp 挂载和备份；原生运行保留上游 Office 临时文件规则。包含本地排除文件的父目录移动暂时拒绝，以免丢失本地命名空间。
+- 本地恢复：部署前检查活动写入并保全配置/队列/未同步内容；保留一套已验证回退程序。无既有用户文件删除或外国同步根注销。
+
+
 ## TD-20261109-02：旧回执与逻辑 ID 复用的新 preparing 发布互相阻挡
 
 - 日期：2026-11-09（Asia/Shanghai）

@@ -41,6 +41,7 @@ pub(crate) struct Writer {
     observed: Mutex<HashMap<String, Version>>,
     mutation: Mutex<()>,
     editor_locks: Option<Arc<editor_locks::EditorLocks>>,
+    local_excluded: crate::local_upload_exclusions::LocalExcluded,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -208,6 +209,9 @@ impl Writer {
             state,
             observed: Mutex::new(observed),
             mutation: Mutex::default(),
+            local_excluded: crate::local_upload_exclusions::LocalExcluded::new(
+                &directory.join("local-excluded"),
+            )?,
             editor_locks: local_locks
                 .then(|| editor_locks::EditorLocks::new(&directory.join("editor-locks")))
                 .transpose()?,
@@ -230,10 +234,19 @@ impl Writer {
             .as_ref()
             .map_or(Ok(None), |locks| locks.file(path))
     }
+    pub(crate) fn excluded_file(
+        &self,
+        path: &str,
+    ) -> anyhow::Result<Option<(MetadataEntry, File)>> {
+        self.local_excluded.file(path)
+    }
     pub(crate) fn editor_entries(&self, parent: &str) -> anyhow::Result<Vec<MetadataEntry>> {
-        self.editor_locks
+        let mut entries = self
+            .editor_locks
             .as_ref()
-            .map_or_else(|| Ok(Vec::new()), |locks| locks.entries(parent))
+            .map_or_else(|| Ok(Vec::new()), |locks| locks.entries(parent))?;
+        entries.extend(self.local_excluded.entries(parent)?);
+        Ok(entries)
     }
     pub(crate) fn editor_hidden(&self) -> anyhow::Result<std::collections::HashSet<String>> {
         self.editor_locks
@@ -337,8 +350,17 @@ impl Writer {
     }
     pub(crate) fn put(&self, id: &str, path: &str) -> anyhow::Result<bool> {
         let content = self.state.dir.join(format!("{id}.content"));
-        let local_only = self.editor_locks.is_some() && editor_locks::matches(path);
-        let result = if let Some(locks) = self
+        self.backend.check_local_write()?;
+        let excluded = self.backend.sync_policy().excludes_file(path);
+        let local_only = excluded || (self.editor_locks.is_some() && editor_locks::matches(path));
+        let result = if excluded || self.local_excluded.file(path)?.is_some() {
+            self.local_excluded.put(path, &content).and_then(|()| {
+                self.local_excluded
+                    .file(path)?
+                    .map(|(m, _)| m)
+                    .context("本地文件未发布")
+            })
+        } else if let Some(locks) = self
             .editor_locks
             .as_ref()
             .filter(|_| editor_locks::matches(path))
@@ -407,6 +429,14 @@ impl Writer {
         Ok(())
     }
     pub(crate) fn delete(&self, path: &str) -> anyhow::Result<bool> {
+        self.backend.check_local_write()?;
+        ensure!(
+            !self.local_excluded.has_children(path)?,
+            "目录仍含本地排除文件，请先处理这些文件"
+        );
+        if self.local_excluded.delete(path)? {
+            return Ok(true);
+        }
         if let Some(locks) = &self.editor_locks
             && locks.delete(path)?
         {
@@ -455,6 +485,23 @@ impl Writer {
         Ok(())
     }
     pub(crate) fn rename(&self, path: &str, to: &str) -> anyhow::Result<()> {
+        self.backend.check_local_write()?;
+        ensure!(
+            !self.local_excluded.has_children(path)?,
+            "目录仍含本地排除文件，请先处理这些文件"
+        );
+        if self.local_excluded.file(path)?.is_some() {
+            ensure!(
+                self.backend.sync_policy().excludes_file(to),
+                "请将本地排除文件另存为普通文件后上传"
+            );
+            ensure!(self.local_excluded.rename(path, to)?, "本地源文件不存在");
+            return Ok(());
+        }
+        ensure!(
+            !self.backend.sync_policy().excludes_file(to),
+            "不能将云端文件改名为排除文件；请另存本地副本"
+        );
         ensure!(
             self.editor_file(path)?.is_none()
                 && self.editor_file(to)?.is_none()

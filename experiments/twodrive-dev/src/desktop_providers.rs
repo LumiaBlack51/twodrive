@@ -210,7 +210,8 @@ pub fn connect(
     let mut connection = connect_raw(&effective, args, cancel, network)?;
     connection.backend = connection
         .backend
-        .with_write_access(effective.writable, None);
+        .with_write_access(effective.writable, None)
+        .with_sync_policy(twodrive_dev::sync_policy::SyncPolicy::load(&args.state)?);
     Ok(connection)
 }
 /// Cloud accounts edit by default, including legacy profiles saved as read-only.
@@ -268,6 +269,9 @@ pub fn restore(p: &Profile, recipe: &Value, paused: &Path) -> anyhow::Result<Bac
     };
     Ok(backend
         .with_write_access(effective.writable, None)
+        .with_sync_policy(twodrive_dev::sync_policy::SyncPolicy::load(
+            paused.parent().context("state directory missing")?,
+        )?)
         .with_pause_file(paused.to_path_buf()))
 }
 /// Recreate an owned connection using existing credentials only. Unlike worker
@@ -312,7 +316,8 @@ pub fn resume(
     );
     connection.backend = connection
         .backend
-        .with_write_access(effective.writable, None);
+        .with_write_access(effective.writable, None)
+        .with_sync_policy(twodrive_dev::sync_policy::SyncPolicy::load(&args.state)?);
     Ok(connection)
 }
 pub fn session(connection: &Connection, p: &Profile) -> Value {

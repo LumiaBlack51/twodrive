@@ -7,7 +7,8 @@ enum WorkspacePage {
   connections('连接', Icons.dns_outlined),
   backup('备份', Icons.backup_outlined),
   sharing('共享', Icons.share_outlined),
-  settings('设置', Icons.tune);
+  settings('设置', Icons.tune),
+  cfapi('原生同步', Icons.cloud_sync_outlined);
 
   const WorkspacePage(this.label, this.icon);
   final String label;

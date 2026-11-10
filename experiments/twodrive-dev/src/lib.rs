@@ -5,6 +5,7 @@ mod delta_http;
 pub mod discovery;
 pub mod google;
 pub mod local_files;
+mod local_upload_exclusions;
 pub mod model;
 pub mod mount_write;
 mod native_account;
@@ -24,6 +25,7 @@ pub mod rclone_drive;
 pub mod readonly_mount;
 pub mod smb;
 pub mod state;
+pub mod sync_policy;
 pub mod test_agent;
 pub mod webdav;
 

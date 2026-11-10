@@ -68,3 +68,6 @@ fn main() -> anyhow::Result<()> {
 fn main() {
     eprintln!("requires Windows and native-test-hooks");
 }
+
+#[path = "../../twodrive-dev/src/sync_policy.rs"]
+mod sync_policy;
