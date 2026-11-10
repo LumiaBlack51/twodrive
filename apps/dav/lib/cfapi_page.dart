@@ -175,7 +175,13 @@ class _CfapiPageState extends State<CfapiPage> {
                         style: const TextStyle(color: Colors.deepOrange),
                       ),
                     ),
-                  Text(progress['phase'] == 'paused' ? '已暂停自动同步' : running ? '正在监测本地与云端变化' : '原生目录保留，等待启动'),
+                  Text(
+                    progress['phase'] == 'paused'
+                        ? '已暂停自动同步'
+                        : running
+                        ? '正在监测本地与云端变化'
+                        : '原生目录保留，等待启动',
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     '文件 ${summary['catalogue_files'] ?? '—'} · 目录 ${summary['catalogue_directories'] ?? '—'} · 待处理 ${summary['durable_work_items'] ?? '—'}',

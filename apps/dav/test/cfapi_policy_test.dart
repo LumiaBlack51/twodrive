@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
+import 'package:twodrive_dav/main.dart';
 import 'package:twodrive_dav/cfapi_page.dart';
 import 'package:twodrive_dav/sync_policy_card.dart';
 
@@ -51,6 +52,22 @@ class Client extends StorageClient {
 }
 
 void main() {
+  testWidgets('native folder text survives background engine busy transitions', (tester) async {
+    tester.view.physicalSize = const Size(1200,850);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetDevicePixelRatio);
+    final c = Client();
+    await tester.pumpWidget(DavApp(client:c));
+    await tester.tap(find.text('原生同步')); await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), r'D:\TwoDrive\OneDrive-Native');
+    c.busy=true; c.notifyListeners(); await tester.pump();
+    c.busy=false; c.notifyListeners(); await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, r'D:\TwoDrive\OneDrive-Native');
+    await tester.tap(find.text('准备 CFAPI 原生目录')); await tester.pumpAndSettle();
+    expect(c.calls.last.$2['root'],r'D:\TwoDrive\OneDrive-Native');
+    await tester.pumpWidget(const SizedBox()); c.dispose();
+  });
+
   testWidgets('CFAPI root lifecycle binds selected account and revision', (
     tester,
   ) async {
