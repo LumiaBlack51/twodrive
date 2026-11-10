@@ -118,7 +118,7 @@ impl GraphBackend {
         let base = endpoint(&["drives", &identity.drive, "root", "delta"])?;
         let previous = db.cloud_delta(identity)?;
         let mut replace = previous.is_none();
-        let mut url = previous.unwrap_or_else(|| format!("{base}?$top=100"));
+        let mut url = previous.unwrap_or_else(|| format!("{base}?$top=500&$select=id,name,parentReference,folder,file,size,eTag,lastModifiedDateTime,deleted,remoteItem,package"));
         let mut seen = HashSet::new();
         let mut pages = 0;
         db.cloud_begin(identity)?;
@@ -137,7 +137,9 @@ impl GraphBackend {
                     replace = true;
                     db.cloud_begin(identity)?;
                     seen.clear();
-                    url = format!("{base}?$top=100");
+                    url = format!(
+                        "{base}?$top=500&$select=id,name,parentReference,folder,file,size,eTag,lastModifiedDateTime,deleted,remoteItem,package"
+                    );
                     continue;
                 }
                 other => other?,

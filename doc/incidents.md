@@ -5,6 +5,15 @@
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
 
+## TD-20261110-04：真实 OneDrive 原生目录首次索引被 256 KiB 元数据页上限拒绝
+
+- 日期：2026-11-10（Asia/Shanghai）；状态：修复验证中。
+- 证据：真实账户只读 delta 已暂存 10,000 项，下一页返回 metadata_page_too_large；尚未提交游标、生成原生根或上传内容。browse_json 对所有元数据响应统一 take(256 KiB+1)，并未区分整盘 delta 的批量数据。
+- 修复计划：保持有限响应预算，扩大至 4 MiB；delta 显式只选择索引所需字段，减少下载地址等无关数据，并使用 500 项分页。微软 Graph v1.0 文档明确支持 $select/$top（https://learn.microsoft.com/en-us/graph/api/driveitem-delta?view=graph-rest-1.0）。保留完整下一页/游标和账号身份检查、原子提交。原生准备加独立所有者锁，允许后台准备同时保留现有四网盘。
+- 回归：合成 512 KiB 元数据页必须可读；超过 4 MiB 仍拒绝且不回显响应。旧上限实际失败 metadata_page_too_large；新实现通过，backend 共 69 项通过，完整性 2 项通过，native-sync/native-test-hooks 全 target 严格 Clippy 通过。真实账户后台重试进行中。
+- 边界：metadata_page_too_large 是本地响应预算错误，不认定服务限流；全部准备为元数据读取，未回收或覆盖用户文件。
+
+
 ## TD-20261110-03：Windows 客户端未推进到 Linux 最新核心，CFAPI 缺少界面入口
 
 - 日期：2026-11-10（Asia/Shanghai）

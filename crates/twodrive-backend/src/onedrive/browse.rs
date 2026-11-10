@@ -161,10 +161,10 @@ impl GraphBackend {
             use std::io::Read;
             let mut bytes = Vec::new();
             response
-                .take(256 * 1024 + 1)
+                .take(4 * 1024 * 1024 + 1)
                 .read_to_end(&mut bytes)
                 .map_err(|_| anyhow::anyhow!("network_unavailable"))?;
-            anyhow::ensure!(bytes.len() <= 256 * 1024, "metadata_page_too_large");
+            anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "metadata_page_too_large");
             return serde_json::from_slice(&bytes)
                 .map_err(|_| anyhow::anyhow!("invalid_graph_metadata"));
         }
@@ -337,6 +337,34 @@ pub(super) mod tests {
         let mut backend = GraphBackend::from_paths(&paths).unwrap();
         backend.test_endpoint = Some(format!("http://{}", server.server_addr()));
         backend
+    }
+
+    #[test]
+    fn large_metadata_page_retains_a_bounded_response_budget() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let backend = backend(&server);
+        let worker = std::thread::spawn(move || {
+            for size in [512 * 1024, 4 * 1024 * 1024 + 1] {
+                let q = server.recv().unwrap();
+                q.respond(Response::from_string(
+                    serde_json::json!({"value":[],"generated_metadata": "x".repeat(size)})
+                        .to_string(),
+                ))
+                .unwrap();
+            }
+        });
+        let v = backend
+            .browse_json("https://graph.microsoft.com/v1.0/me/drive", &mut || Ok(()))
+            .unwrap();
+        assert_eq!(v["generated_metadata"].as_str().unwrap().len(), 512 * 1024);
+        assert_eq!(
+            backend
+                .browse_json("https://graph.microsoft.com/v1.0/me/drive", &mut || Ok(()))
+                .unwrap_err()
+                .to_string(),
+            "metadata_page_too_large"
+        );
+        worker.join().unwrap();
     }
 
     #[test]

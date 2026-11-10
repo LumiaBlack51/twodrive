@@ -108,6 +108,8 @@ mod enabled {
                 return self.status(state);
             }
             if op == "native_prepare" {
+                let setup = State::new(state.dir.join("native-setup-owner"))?;
+                let _setup_owner = setup.run_lock()?;
                 ensure!(
                     Self::configuration(state)?.is_none(),
                     "CFAPI 目录已配置，请启动现有目录"
