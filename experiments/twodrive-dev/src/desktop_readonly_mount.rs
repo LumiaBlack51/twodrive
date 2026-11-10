@@ -339,15 +339,13 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     if writable && dirty_cache(&persistent.dir)? == 0 && recovery.join("observed.json").exists() {
         fs::remove_file(recovery.join("observed.json"))?;
     }
-    let bridge = if cfg!(target_os = "linux") && matches!(p.kind.as_str(), "icloud" | "baidu") {
+    let bridge = if matches!(p.kind.as_str(), "icloud" | "baidu") {
         Bridge::start_indexed(
             backend,
             &cache.dir,
             writable.then_some(recovery.as_path()),
             p.kind == "icloud",
         )?
-    } else if writable && p.kind == "icloud" {
-        Bridge::start_writable_editor_locks(backend, &cache.dir, &recovery)?
     } else if writable {
         Bridge::start_writable(backend, &cache.dir, &recovery)?
     } else {

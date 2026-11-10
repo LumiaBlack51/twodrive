@@ -77,6 +77,20 @@ class MountClient extends StorageClient {
 
 void main() {
   setUpAll(loadPreviewFonts);
+  testWidgets(
+    'Windows exposes the automatic mount preference',
+    (tester) async {
+      final c = MountClient();
+      await tester.pumpWidget(DavApp(client: c));
+      await tester.tap(find.text('设置').first);
+      await tester.pumpAndSettle();
+      expect(find.text('连接后自动挂载'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+    variant: TargetPlatformVariant({TargetPlatform.windows}),
+  );
   testWidgets('Linux component help describes FUSE without a Windows driver', (
     tester,
   ) async {

@@ -77,6 +77,15 @@ void main() {
       client.dispose();
     }
   });
+  test('disabled automatic mount preserves a connected account', () async {
+    final client = MountClient();
+    await client.setAutoMountOnConnect(false);
+    await client.connect();
+    expect(client.operations, isNot(contains('mount')));
+    expect(client.connected, isTrue);
+    expect(client.mounted, isFalse);
+    client.dispose();
+  });
   test('mount failure preserves connected account and reports error', () async {
     final client = MountClient(mountFails: true);
     await client.connect();

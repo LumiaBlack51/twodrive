@@ -1132,7 +1132,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
               child: Text('本机文件所有者不可用。原生操作已关闭，请保留目录与恢复日志。'),
             ),
           ),
-        if (Platform.isLinux && c.mountSupported)
+        if (c.mountSupported)
           Card(
             color: Colors.white,
             child: SwitchListTile(

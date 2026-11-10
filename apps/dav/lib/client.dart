@@ -732,11 +732,7 @@ class StorageClient extends ChangeNotifier {
         }
         _directoryStale = result['entries'] is! List;
         if (!_directoryStale) _directoryChecked = DateTime.now();
-        if (Platform.isLinux &&
-            autoMountOnConnect &&
-            connected &&
-            canMount &&
-            !mounted) {
+        if (autoMountOnConnect && connected && canMount && !mounted) {
           activity = '已连接，正在自动挂载';
           activeId = ++_id;
           notifyListeners();
