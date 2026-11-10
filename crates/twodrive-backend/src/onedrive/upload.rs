@@ -5,6 +5,7 @@ use super::paths::{encode_graph_path, percent_encode_path_segment};
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{CONTENT_RANGE, IF_MATCH};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -99,6 +100,22 @@ pub(super) struct PersistedUploadSession {
     pub(super) if_match: Option<String>,
     #[serde(default)]
     pub(super) create_only: bool,
+    #[serde(default)]
+    pub(super) source_digest: Option<String>,
+}
+
+pub(super) fn source_digest(path: &Path) -> anyhow::Result<String> {
+    let mut source = fs::File::open(path)?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
 }
 
 #[derive(Debug, Deserialize)]

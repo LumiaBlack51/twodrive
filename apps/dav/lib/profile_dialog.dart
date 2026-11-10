@@ -39,7 +39,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
   Json? get provider =>
       widget.providers.where((p) => p['id'] == kind).firstOrNull;
   List<Json> get providerFields =>
-      ((provider?['fields'] as List?) ?? []).cast<Json>();
+      ((provider?['fields'] as List?) ?? []).cast<Json>().where((f) => f['internal'] != true).toList();
   List<String> credentialFields(Json action) =>
       ((action['credential_fields'] as List?) ?? [])
           .cast<String>()
@@ -528,9 +528,13 @@ class _ProfileDialogState extends State<ProfileDialog> {
                       child: Text('仅直连（绕过代理）'),
                     ),
                   if (networkModes.contains('system'))
-                    const DropdownMenuItem(
+                    DropdownMenuItem(
                       value: 'system',
-                      child: Text('使用系统路由和代理'),
+                      child: Text(
+                        (provider?['network_labels'] as Map?)?['system']
+                                as String? ??
+                            '使用系统路由和代理',
+                      ),
                     ),
                 ],
                 onChanged: runningAction

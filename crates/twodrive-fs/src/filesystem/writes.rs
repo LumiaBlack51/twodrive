@@ -99,6 +99,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                     None,
                 )),
                 uploaded: false,
+                changed: true,
                 created_new_record: true,
                 unlinked: false,
                 base_etag: None,
@@ -142,10 +143,12 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         if truncate {
             cache_guard.set_len(0)?;
         }
-        self.db
-            .mark_cached(&record.metadata.remote_id, &cache_path)?;
-        self.db
-            .mark_state(&record.metadata.remote_id, FileState::Writing)?;
+        if truncate {
+            self.db
+                .mark_cached(&record.metadata.remote_id, &cache_path)?;
+            self.db
+                .mark_state(&record.metadata.remote_id, FileState::Writing)?;
+        }
         let updated = self
             .db
             .get_by_remote_id(&record.metadata.remote_id)?
@@ -163,14 +166,17 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 path: record.metadata.path,
                 record_remote_id: record.metadata.remote_id,
                 cache_path,
-                activity: Some(ActivityGuard::start(
-                    &self.cache_dir,
-                    "upload",
-                    &updated.metadata.path,
-                    &updated.metadata.name,
-                    None,
-                )),
+                activity: truncate.then(|| {
+                    ActivityGuard::start(
+                        &self.cache_dir,
+                        "upload",
+                        &updated.metadata.path,
+                        &updated.metadata.name,
+                        None,
+                    )
+                }),
                 uploaded: false,
+                changed: truncate,
                 created_new_record: false,
                 unlinked: false,
                 base_etag,
@@ -179,12 +185,48 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         Ok((ino, fh, attr_for_record(ino, &updated)))
     }
 
+    pub(super) fn begin_handle_write(&mut self, fh: u64) -> anyhow::Result<()> {
+        let handle = self
+            .write_handles
+            .get_mut(&fh)
+            .ok_or_else(|| anyhow::anyhow!("write handle does not exist"))?;
+        if handle.changed || handle.unlinked {
+            return Ok(());
+        }
+        let record = self
+            .db
+            .get_by_remote_id(&handle.record_remote_id)?
+            .ok_or_else(|| anyhow::anyhow!("write target disappeared"))?;
+        if record.cache_path.as_ref() != Some(&handle.cache_path)
+            || record_upload_etag(&record) != handle.base_etag
+        {
+            anyhow::bail!("write target changed since open; reopen before writing");
+        }
+        if !self.db.begin_cached_write(&record)? {
+            anyhow::bail!(
+                "write target changed while claiming its baseline; reopen before writing"
+            );
+        }
+        handle.changed = true;
+        handle.activity = Some(ActivityGuard::start(
+            &self.cache_dir,
+            "upload",
+            &record.metadata.path,
+            &record.metadata.name,
+            None,
+        ));
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn upload_handle(&mut self, fh: u64) -> anyhow::Result<()> {
         let Some(handle) = self.write_handles.get_mut(&fh) else {
             return Ok(());
         };
         if handle.uploaded {
+            return Ok(());
+        }
+        if !handle.changed {
             return Ok(());
         }
         if handle.unlinked {
@@ -289,6 +331,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             return Ok(());
         };
         if handle.uploaded {
+            return Ok(());
+        }
+        if !handle.changed {
             return Ok(());
         }
         if handle.unlinked {

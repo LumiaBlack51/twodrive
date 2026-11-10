@@ -12,3 +12,6 @@ twodrive-core.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 fuser.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true

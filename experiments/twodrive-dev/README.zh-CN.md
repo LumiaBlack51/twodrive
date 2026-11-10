@@ -117,7 +117,7 @@ python3 scripts/smoke.py --binary target/release/twodrive-dev --network relay-on
 
 smoke 创建两套临时设备状态和文件，结束时只卸载自己的挂载；不操作现有服务或 OneDrive。`relay-only` 需要真实公共基础设施。默认自动测试不访问公共中继。
 
-WebDAV 按完整元数据快照轮询，默认最大 100,000 条、单响应 16 MiB；无原生 delta 和持久远端文件 ID，移动使路径 ID 改变。自建服务器仅导出普通文件/目录，隐藏符号链接，不允许 capability 外部访问。PUT 最多 8 GiB（`--max-upload` 可调整），完整接收后同步并原子替换；中断不覆盖原文件。暂不支持断点 PUT、PATCH 和 Content-Range。网络写请求串行保护条件检查；本机其他进程写入不受此锁约束。外部 WebDAV 的原子性由对方决定。
+WebDAV 按完整元数据快照轮询，默认最大 100,000 条、单响应 16 MiB；无原生 delta 和持久远端文件 ID，移动使路径 ID 改变。自建服务器仅导出普通文件/目录，隐藏符号链接，不允许 capability 外部访问。PUT 最多 8 GiB（`--max-upload` 可调整），完整接收后同步并原子替换；中断不覆盖原文件。配对后端对已有版本的文件自动协商二进制增量上传（含 PDF、Word、PowerPoint），保留完整 PUT 回退；桌面设备共享高级选项可勾选“始终整文件上传”，CLI 可用 --full-upload。只发送 PUT 的第三方 WebDAV 客户端仍上传全文件。暂不支持断点 PUT 和 Content-Range。详见[增量协议、前端接口与验证边界](../../doc/peer-delta-upload.md)。网络写请求串行保护条件检查；本机其他进程写入不受此锁约束。外部 WebDAV 的原子性由对方决定。
 
 Unix 私有目录 0700、文件 0600；Windows 继承目录 ACL，请使用当前用户的私有状态目录。静态文件不做磁盘加密。本机 QUIC、公共中继和真实异地 NAT 是不同验证范围；实际结果见故障记录与 PR，不把模拟云端或同机测试当成真实 OneDrive/异地 NAT 端到端证明。
 

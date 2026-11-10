@@ -52,6 +52,33 @@ impl Database {
                 path TEXT NOT NULL,
                 queued_unix INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS retired_cache (
+                cache_path TEXT PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS completed_cloud_deletes (
+                cloud_remote_id TEXT PRIMARY KEY,
+                completed_unix INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS native_event_log (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                binding TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_native_event_binding ON native_event_log(binding,sequence);
+            CREATE TABLE IF NOT EXISTS native_watch_state (
+                binding TEXT PRIMARY KEY,
+                epoch INTEGER NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 0,
+                rescan_required INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS native_observation_log (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                binding TEXT NOT NULL,
+                epoch INTEGER NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_native_observation_binding
+                ON native_observation_log(binding,sequence);
             "#,
         )?;
         ensure_column(

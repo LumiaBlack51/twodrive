@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "scope": "same-host-two-processes",
+  "independent_nat_established": false,
+  "network_mode": "lan",
+  "continuous_path_evidence": false,
+  "attempts": [
+    {
+      "status": "passed",
+      "files": [
+        {
+          "file": "empty.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "upload_seconds": 0.018028,
+          "download_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "download_seconds": 0.003389,
+          "download_MiB_s": 0.0,
+          "create_collision": "passed"
+        },
+        {
+          "file": "中文 空格/long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 4099,
+          "sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "upload_seconds": 0.024978,
+          "download_sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "download_seconds": 0.006759,
+          "download_MiB_s": 0.578,
+          "range": "passed"
+        },
+        {
+          "file": "nested/a/b/small.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 65537,
+          "sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "upload_seconds": 0.011971,
+          "download_sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "download_seconds": 0.008234,
+          "download_MiB_s": 7.591,
+          "range": "passed"
+        },
+        {
+          "case": "owned_remote_collection_cleanup",
+          "status": "passed"
+        }
+      ],
+      "path_coverage": "initial-only",
+      "whole_transfer_transport": "unverified",
+      "connect_seconds": 0.991636,
+      "resource_samples": [
+        {
+          "seconds": 0.0,
+          "role": "server",
+          "cpu_seconds": 0.0625,
+          "rss_bytes": 19623936,
+          "peak_rss_bytes": 19623936
+        },
+        {
+          "seconds": 0.0,
+          "role": "client",
+          "cpu_seconds": 0.09375,
+          "rss_bytes": 19795968,
+          "peak_rss_bytes": 19795968
+        }
+      ],
+      "initial_transports": [
+        "direct-udp"
+      ],
+      "owned_processes_stopped": true,
+      "shared_files_remaining": 0,
+      "seconds": 1.442463
+    }
+  ],
+  "resume_supported": false,
+  "cpu_memory_sampling": "1s-Windows-owned-backends",
+  "started_utc": "2026-10-26T05:15:45Z",
+  "binary_sha256": "b1185b615eb63b266cc30baf3cfb7dbf8c5b1746e68117dcece92b1af034de17",
+  "seconds": 1.450278,
+  "passed": 1,
+  "failed": 0,
+  "soak_duration_met": false
+}

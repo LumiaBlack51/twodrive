@@ -126,6 +126,19 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 .then_some(*fh)
         });
         if let Some(target) = self.db.get_by_path(&new_path)? {
+            if target.metadata.remote_id == record.metadata.remote_id {
+                // A cloud refresh may already have moved this identity while
+                // the source directory still exposes its old inode. Refresh
+                // the names without replacing the file or unlinking handles.
+                self.refresh_child_records(&parent_path);
+                self.refresh_child_records(&newparent_path);
+                for handle in self.write_handles.values_mut().filter(|handle| {
+                    handle.record_remote_id == record.metadata.remote_id && !handle.unlinked
+                }) {
+                    handle.path = new_path.clone();
+                }
+                return Ok(());
+            }
             if target.metadata.is_dir || record.metadata.is_dir {
                 anyhow::bail!("cannot replace directories during rename");
             }
@@ -175,6 +188,14 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             }
             self.upload_pool
                 .enqueue(updated.metadata.remote_id.clone())?;
+            if target.cache_path != updated.cache_path
+                && let Some(cache) = &target.cache_path
+                && let Err(err) = self.cleanup_unlinked_cache(cache)
+            {
+                // The rename has committed. The durable retirement queue will
+                // retry cleanup; never report a completed save as a failure.
+                eprintln!("twodrive: superseded cache cleanup deferred: {err:#}");
+            }
             return Ok(());
         }
 

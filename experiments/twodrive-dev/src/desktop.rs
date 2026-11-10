@@ -495,13 +495,13 @@ impl App {
         self.network = Arc::default();
         Ok(())
     }
-    fn connect(&mut self, id: &str, cancel: &AtomicBool) -> anyhow::Result<Value> {
+    fn connect(&mut self, id: &str, cancel: Arc<AtomicBool>) -> anyhow::Result<Value> {
         self.open_connection(id, cancel, false)
     }
     fn open_connection(
         &mut self,
         id: &str,
-        cancel: &AtomicBool,
+        cancel: Arc<AtomicBool>,
         resume: bool,
     ) -> anyhow::Result<Value> {
         self.refresh_inactive();
@@ -520,12 +520,13 @@ impl App {
                 &self
                     .saved_session(&p)
                     .context("没有可恢复的登录，请手动连接")?,
-                cancel,
+                &cancel,
                 network.clone(),
             )?
         } else {
-            providers::connect(&p, &self.args, cancel, network.clone())?
+            providers::connect(&p, &self.args, &cancel, network.clone())?
         };
+        connection.backend.set_operation_cancel(cancel.clone());
         let entries = connection.backend.list_directory_checked("/", &mut || {
             ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
             Ok(())
@@ -625,7 +626,8 @@ impl App {
                     .as_ref()
                     .is_some_and(providers::uses_readonly_bridge)
                 || (c.backup() && c.rename && c.delete));
-        value["mount"] = json!(self.backend.is_some() && supported_mount);
+        value["mount"] =
+            json!(self.backend.as_ref().is_some_and(|b| b.supports_mount()) && supported_mount);
         value
     }
     fn status(&mut self) -> anyhow::Result<Value> {
@@ -836,7 +838,7 @@ impl App {
                 self.config = next;
                 Ok(json!({}))
             }
-            "connect" => self.connect(string(a, "id")?, &cancel),
+            "connect" => self.connect(string(a, "id")?, cancel.clone()),
             "select" => self.select_profile(a),
             "resume" => {
                 let p = self.profile(string(a, "id")?)?;
@@ -844,7 +846,7 @@ impl App {
                     a["revision"].as_str() == Some(&p.revision),
                     "连接配置已改变，请刷新后重试"
                 );
-                self.open_connection(&p.id, &cancel, true)
+                self.open_connection(&p.id, cancel.clone(), true)
             }
             "disconnect" => {
                 let id = a["id"]

@@ -479,6 +479,7 @@ impl FileContext {
         out: &Output,
     ) -> anyhow::Result<Value> {
         ensure!(!cancel.load(Ordering::Relaxed), "操作已取消");
+        self.backend.set_operation_cancel(cancel.clone());
         let a = &req.args;
         if req.op == "quota" {
             let quota = self.backend.storage_usage(&mut || {
@@ -684,8 +685,8 @@ mod tests {
     fn selecting_retained_connections_keeps_identity_data_and_other_connection_online() {
         let root = tempfile::tempdir().unwrap();
         let mut app = fixture(root.path());
-        let cancel = AtomicBool::new(false);
-        assert_eq!(app.connect("a", &cancel).unwrap()["retained"], true);
+        let cancel = Arc::new(AtomicBool::new(false));
+        assert_eq!(app.connect("a", cancel.clone()).unwrap()["retained"], true);
         assert!(app.online("a") && app.online("b"));
         for (id, revision, bytes) in [
             ("a", "rev-a", b"account-one"),
@@ -699,7 +700,7 @@ mod tests {
             assert_eq!(data, bytes);
         }
         assert!(app.file_context(&args("a", "rev-b")).is_err());
-        assert!(app.connect("missing", &cancel).is_err());
+        assert!(app.connect("missing", cancel.clone()).is_err());
         assert_eq!(app.connected.as_ref().unwrap().id, "a");
         app.disconnect_profile("b").unwrap();
         assert!(app.online("a"));
