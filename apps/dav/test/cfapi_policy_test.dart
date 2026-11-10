@@ -51,7 +51,70 @@ class Client extends StorageClient {
   }
 }
 
+class ProgressClient extends Client {
+  int refreshes = 0;
+  @override
+  Future<void> refreshStatus() async {
+    refreshes++;
+    status['cfapi'] = {
+      'supported': true,
+      'configured': true,
+      'running': true,
+      'profile': 'one',
+      'root': r'C:\Native',
+      'progress': {
+        'phase': 'sync',
+        'summary': {
+          'catalogue_files': 12,
+          'catalogue_directories': 3,
+          'durable_work_items': 0,
+        },
+      },
+    };
+    notifyListeners();
+  }
+}
+
 void main() {
+  testWidgets(
+    'visible native page refreshes progress without directory IO and stops when hidden',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 850);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final c = ProgressClient()..setView(visible: true);
+      c.status['cfapi'] = {
+        'supported': true,
+        'configured': true,
+        'running': true,
+        'profile': 'one',
+        'root': r'C:\Native',
+      };
+      await tester.pumpWidget(DavApp(client: c));
+      await tester.tap(find.text('原生同步'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pump();
+      expect(c.refreshes, 1);
+      expect(find.text('文件 12 · 目录 3 · 待处理 0'), findsOneWidget);
+      expect(c.calls, isEmpty);
+      c.setView(visible: false);
+      await tester.pump(const Duration(seconds: 20));
+      expect(c.refreshes, 1);
+      c.setView(visible: true);
+      c.busy = true;
+      await tester.pump(const Duration(seconds: 10));
+      expect(c.refreshes, 1);
+      c.busy = false;
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 20));
+      expect(c.refreshes, 1);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
   testWidgets(
     'ordinary CFAPI scope shows excluded service objects explicitly',
     (tester) async {

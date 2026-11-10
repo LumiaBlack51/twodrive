@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'client.dart';
@@ -15,6 +16,8 @@ class _CfapiPageState extends State<CfapiPage> {
   final root = TextEditingController();
   bool working = false;
   String? error;
+  Timer? statusTimer;
+  bool refreshing = false;
   @override
   void initState() {
     super.initState();
@@ -23,6 +26,30 @@ class _CfapiPageState extends State<CfapiPage> {
         .firstOrNull;
     profileId = first?['id'] as String?;
     suggestRoot(first);
+    statusTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      final c = widget.client;
+      final native = c.status['cfapi'] as Map? ?? {};
+      if (!mounted ||
+          working ||
+          refreshing ||
+          !c.viewVisible ||
+          !c.available ||
+          c.busy ||
+          c.quitting ||
+          !(native['configured'] == true ||
+              native['preparing'] == true ||
+              native['running'] == true)) {
+        return;
+      }
+      refreshing = true;
+      try {
+        await c.refreshStatus();
+      } catch (_) {
+        // The shared status reader records and presents its error.
+      } finally {
+        refreshing = false;
+      }
+    });
   }
 
   void suggestRoot(Json? profile) {
@@ -34,6 +61,7 @@ class _CfapiPageState extends State<CfapiPage> {
 
   @override
   void dispose() {
+    statusTimer?.cancel();
     root.dispose();
     super.dispose();
   }
