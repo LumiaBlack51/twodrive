@@ -1,0 +1,35 @@
+test_delayed_partial_commit_is_rejected (__main__.ReviewRegressions.test_delayed_partial_commit_is_rejected) ... FAIL
+test_residual_shared_file_fails_attempt (__main__.ReviewRegressions.test_residual_shared_file_fails_attempt) ... FAIL
+test_lost_mkcol_response_records_pending_without_delete (__main__.ReviewRegressions.test_lost_mkcol_response_records_pending_without_delete) ... FAIL
+
+======================================================================
+FAIL: test_delayed_partial_commit_is_rejected (__main__.ReviewRegressions.test_delayed_partial_commit_is_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<repo>\experiments\twodrive-dev\scripts\test-reliability.py", line 182, in test_delayed_partial_commit_is_rejected
+    with self.assertRaises(AssertionError):
+AssertionError: AssertionError not raised
+
+======================================================================
+FAIL: test_residual_shared_file_fails_attempt (__main__.ReviewRegressions.test_residual_shared_file_fails_attempt)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<repo>\experiments\twodrive-dev\scripts\test-reliability.py", line 207, in test_residual_shared_file_fails_attempt
+    self.assertEqual(result['status'], 'failed')
+AssertionError: 'passed' != 'failed'
+- passed
++ failed
+
+
+======================================================================
+FAIL: test_lost_mkcol_response_records_pending_without_delete (__main__.ReviewRegressions.test_lost_mkcol_response_records_pending_without_delete)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<repo>\experiments\twodrive-dev\scripts\test-reliability.py", line 222, in test_lost_mkcol_response_records_pending_without_delete
+    self.assertEqual(len(results), 1)
+AssertionError: 0 != 1
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.524s
+
+FAILED (failures=3)

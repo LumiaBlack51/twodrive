@@ -1,0 +1,30 @@
+case,status,scope,evidence
+local-no-relay-five-connections,passed-with-limits,same-host; VPN process precondition unmet,local-lan.json
+local-auto-five-connections,passed-with-limits,same-host; not independent NAT,local-public.json
+local-relay-only-five-connections,passed-with-limits,initial relay only; no continuous evidence,local-relay.json
+two-real-devices-independent-NAT,environment-blocked,second device unavailable,
+proxy-VPN-clean-preflight,environment-blocked,processes still detected after stop attempts,
+actual-egress-CGNAT,untested,no verified public exit,
+continuous-path,untested,initial output only,
+empty-unicode-space-long-nested-files,passed-with-limits,same-host,local-corpus-retry.json
+1000-small-files,passed-with-limits,sequential not concurrent,local-corpus-retry.json
+100MiB-and-1GiB,passed-with-limits,subsequent retries only; retain first timeout,local-corpus-retry.json
+first-large-sequence,failed,operation timeout; root cause unknown,local-corpus-first.json
+PUT-GET-SHA256-Range-MOVE-DELETE,passed-with-limits,same-host,local-corpus-retry.json
+create-collision,passed-with-limits,HTTP 412 create-only,local-lan.json
+PROPFIND,passed-with-limits,207 multistatus; no large listing,local-lan.json
+partial-PUT-0-50-99,passed-with-limits,request disconnect; not network disconnect,local-faults.json
+stopped-server,passed-with-limits,HTTP 502 at 15.038s; no recovery,local-faults.json
+read-only,passed-with-limits,smoke PUT 403; not OS permissions,test-log.txt
+resume,untested,unsupported PUT continuation per guide,
+client-exit-server-exit-network-loss-recovery,untested,start-middle-near-complete not covered,
+disk-full-OS-denied-concurrency,untested,no isolated injection,
+UDP-blocked-relay-down,untested,no injection,
+loss-delay-jitter-reorder,untested,no injection,
+two-hour-stability,untested,no two-hour run,
+owned-file-process-cleanup,passed-with-limits,no per-port leak inspection,local-corpus-first.json
+CPU-memory,passed-with-limits,1s Windows samples; no long-term conclusion,local-corpus-retry.json
+desktop-runtime,environment-blocked,no Flutter or desktop build,
+frontend-backend-boundary,passed-with-limits,source inspection only; no production change,README.zh-CN.md
+mount-adapter,untested,separate scope; no Windows virtual drive claim,
+runner-guards,passed,synthetic HTTP regression only,test-log.txt
