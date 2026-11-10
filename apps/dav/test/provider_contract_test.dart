@@ -235,6 +235,8 @@ void main() {
         },
       ];
       await tester.pumpWidget(DavApp(client: c));
+      await tester.tap(find.text('文件').first);
+      await tester.pumpAndSettle();
       expect(find.text('上传'), findsNothing);
       expect(find.byTooltip('新建文件夹'), findsNothing);
       await tester.tap(find.byType(PopupMenuButton<String>));

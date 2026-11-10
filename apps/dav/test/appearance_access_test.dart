@@ -82,6 +82,8 @@ void main() {
       },
     );
     await tester.pumpWidget(DavApp(client: c));
+    await tester.tap(find.text('文件').first);
+    await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('connection-access')), findsNothing);
     expect(find.text('只读'), findsNothing);
     expect(find.text('断开'), findsOneWidget);

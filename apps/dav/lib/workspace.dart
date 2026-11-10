@@ -18,6 +18,7 @@ import 'mount_card.dart';
 import 'workspace_navigation.dart';
 import 'cfapi_page.dart';
 import 'sync_policy_card.dart';
+import 'overview_page.dart';
 
 String bytes(num value) {
   if (value < 1024) {
@@ -54,7 +55,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   final tray = StatusTray();
   bool panel = false;
   bool presenting = false;
-  int page = 0;
+  int page = WorkspacePage.overview.index;
   String filter = '';
   String _traySignature = '';
   Future<void> _trayWork = Future.value();
@@ -171,7 +172,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     if (mounted) refreshWorkspace();
   }
 
-  Future<void> showManagement([int destination = 0]) async {
+  Future<void> showManagement([int? destination]) async {
     if (presenting) return;
     presenting = true;
     c.setView(visible: false);
@@ -184,7 +185,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       if (!mounted) return;
       setState(() {
         panel = false;
-        page = destination;
+        page = destination ?? WorkspacePage.overview.index;
       });
       await windowManager.setAlwaysOnTop(false);
       await windowManager.setSkipTaskbar(false);
@@ -438,7 +439,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       body: Row(
         children: [
           Container(
-            width: 190,
+            width: 210,
             color: Colors.white,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -448,19 +449,29 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                     key: const ValueKey('navigation'),
                     children: [
                       const Padding(
-                        padding: EdgeInsets.fromLTRB(22, 16, 20, 8),
-                        child: Icon(
-                          Icons.cloud_outlined,
-                          size: 32,
-                          color: Color(0xff326bd6),
-                        ),
-                      ),
-                      const Text(
-                        'TwoDrive',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 23,
-                          fontWeight: FontWeight.w700,
+                        padding: EdgeInsets.fromLTRB(22, 20, 16, 4),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.cloud_outlined,
+                              size: 28,
+                              color: Color(0xff326bd6),
+                            ),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'TwoDrive',
+                                  style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       Padding(
@@ -473,7 +484,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           style: TextStyle(color: Colors.blueGrey),
                         ),
                       ),
-                      for (final destination in WorkspacePage.values)
+                      for (final destination in WorkspacePage.sidebar)
                         Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -497,7 +508,9 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                 Padding(
                   padding: const EdgeInsets.all(20),
                   child: Text(
-                    c.connected ? '● 已连接' : '○ 未连接',
+                    c.connectedProfiles.isNotEmpty
+                        ? '● ${c.connectedProfiles.length} 个账号已连接'
+                        : '○ 未连接',
                     style: TextStyle(
                       color: c.connected ? Colors.teal : Colors.blueGrey,
                     ),
@@ -538,7 +551,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           icon: const Icon(Icons.refresh),
                         ),
                       const SizedBox(width: 12),
-                      if (page != WorkspacePage.cfapi.index)
+                      if (page != WorkspacePage.cfapi.index &&
+                          page != WorkspacePage.overview.index)
                         FilledButton.tonalIcon(
                           onPressed:
                               c.busy || c.selected == null || !c.available
@@ -554,7 +568,9 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   Padding(
                     padding: const EdgeInsets.only(top: 6, bottom: 20),
                     child: Text(
-                      page == WorkspacePage.cfapi.index
+                      page == WorkspacePage.overview.index
+                          ? 'Windows · 账户、文件与同步状态'
+                          : page == WorkspacePage.cfapi.index
                           ? 'OneDrive · Windows CFAPI'
                           : c.connected
                           ? '${c.profile?['name'] ?? c.providerLabel} · ${c.account}'
@@ -640,6 +656,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                     ),
                   Expanded(
                     child: switch (WorkspacePage.values[page]) {
+                      WorkspacePage.overview => OverviewPage(
+                        client: c,
+                        onNavigate: navigateTo,
+                        onOpenMount: (id) => openMount(id),
+                      ),
                       WorkspacePage.files => filesPage(),
                       WorkspacePage.transfers => transfersPage(),
                       WorkspacePage.connections => connectionsPage(),
@@ -665,7 +686,15 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                       ),
                     ),
                   const SizedBox(height: 10),
-                  if (c.mounts.isNotEmpty)
+                  if (page == WorkspacePage.overview.index)
+                    Text(
+                      'TwoDrive ${c.status['build']?['core_version'] ?? ''} · Windows CFAPI',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.blueGrey,
+                      ),
+                    )
+                  else if (c.mounts.isNotEmpty)
                     ConstrainedBox(
                       key: const ValueKey('mounted-folders'),
                       constraints: const BoxConstraints(maxHeight: 100),

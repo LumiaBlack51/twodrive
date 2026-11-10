@@ -145,7 +145,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Dashboard'));
     await tester.pump();
-    expect(destination, 0);
+    expect(destination, 7);
     await tester.pump();
     expect(find.byType(PopupMenuItem<String>), findsNothing);
     await tester.pumpWidget(const SizedBox());

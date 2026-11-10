@@ -8,9 +8,21 @@ enum WorkspacePage {
   backup('备份', Icons.backup_outlined),
   sharing('共享', Icons.share_outlined),
   settings('设置', Icons.tune),
-  cfapi('原生同步', Icons.cloud_sync_outlined);
+  cfapi('原生同步', Icons.cloud_sync_outlined),
+  overview('同步总览', Icons.dashboard_outlined);
 
   const WorkspacePage(this.label, this.icon);
   final String label;
   final IconData icon;
+
+  static const sidebar = [
+    overview,
+    files,
+    transfers,
+    connections,
+    backup,
+    sharing,
+    cfapi,
+    settings,
+  ];
 }

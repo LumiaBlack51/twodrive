@@ -25,7 +25,7 @@ Future<void> main(List<String> args) async {
 
   final root = File(Platform.resolvedExecutable).parent.path;
   final client = StorageClient()
-    ..setView(visible: !args.contains('--background'), files: true);
+    ..setView(visible: !args.contains('--background'));
   final fixtureRoot = option('--native-local-fixture-root', '');
   runApp(DavApp(client: client, desktop: true));
   await client.start(

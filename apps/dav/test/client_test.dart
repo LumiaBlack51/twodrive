@@ -301,6 +301,8 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final c = FakeClient()..available = true;
     await tester.pumpWidget(DavApp(client: c));
+    await tester.tap(find.text('文件').first);
+    await tester.pumpAndSettle();
     expect(find.text('连接你的文件'), findsOneWidget);
     expect(find.textContaining('选择存储提供者'), findsOneWidget);
     expect(find.text('上传'), findsNothing);
@@ -364,6 +366,8 @@ void main() {
       },
     ];
     await tester.pumpWidget(DavApp(client: c));
+    await tester.tap(find.text('文件').first);
+    await tester.pumpAndSettle();
     expect(find.text('只读'), findsNothing);
     expect(find.text('上传'), findsNothing);
     await tester.tap(find.byType(PopupMenuButton<String>));

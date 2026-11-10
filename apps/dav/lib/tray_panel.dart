@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'workspace_navigation.dart';
 import 'client.dart';
 import 'storage_usage.dart';
 
@@ -235,7 +236,9 @@ class TrayPanel extends StatelessWidget {
                                   onSelected: (value) async {
                                     switch (value) {
                                       case 'dashboard':
-                                        await onManage();
+                                        await onManage(
+                                          WorkspacePage.overview.index,
+                                        );
                                       case 'pause':
                                         await c.pauseToggle();
                                       case 'signout':

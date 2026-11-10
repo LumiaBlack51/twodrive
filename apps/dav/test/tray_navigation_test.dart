@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/main.dart';
 import 'package:twodrive_dav/tray_panel.dart';
+import 'package:twodrive_dav/workspace_navigation.dart';
 
 void main() {
   testWidgets(
@@ -25,7 +26,7 @@ void main() {
       final labels = navigation
           .map((item) => (item.title! as Text).data!)
           .toList();
-      expect(labels, ['文件', '传输', '连接', '备份', '共享', '设置', '原生同步']);
+      expect(labels, ['同步总览', '文件', '传输', '连接', '备份', '共享', '原生同步', '设置']);
       int? destination;
       await tester.pumpWidget(
         MaterialApp(
@@ -53,7 +54,7 @@ void main() {
       }
       await tester.tap(find.text('Dashboard'));
       await tester.pumpAndSettle();
-      expect(destination, 0);
+      expect(destination, WorkspacePage.overview.index);
       expect(find.byType(PopupMenuItem<String>), findsNothing);
       await tester.pumpWidget(const SizedBox());
       client.dispose();
