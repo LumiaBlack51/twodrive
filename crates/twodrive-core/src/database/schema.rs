@@ -87,9 +87,16 @@ impl Database {
             "cloud_remote_id",
             "ALTER TABLE files ADD COLUMN cloud_remote_id TEXT",
         )?;
-        conn.execute(
-            "UPDATE files SET cloud_remote_id = remote_id WHERE cloud_remote_id IS NULL AND remote_id NOT LIKE 'local-upload-%'",
-            [],
+        // Only legacy rows need this backfill. A later ownership handoff may
+        // intentionally detach a former cloud ID from a local backup forever.
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             UPDATE files SET cloud_remote_id = remote_id
+             WHERE cloud_remote_id IS NULL AND remote_id NOT LIKE 'local-upload-%'
+                 AND state <> 'local_only'
+                 AND NOT EXISTS (SELECT 1 FROM app_state WHERE key = 'cloud_identity_v1_migrated');
+             INSERT OR IGNORE INTO app_state(key, value) VALUES ('cloud_identity_v1_migrated', '1');
+             COMMIT;",
         )?;
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_files_cloud_remote_id ON files(cloud_remote_id) WHERE cloud_remote_id IS NOT NULL",

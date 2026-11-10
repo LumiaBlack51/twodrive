@@ -71,6 +71,10 @@ observations, not universal performance guarantees. The machine was not powered 
 
 ## Upgrade
 
+2026-11-01 update: from 0.2.23, known-folder progress is migrated to
+`known-folders-state.sqlite3`; preserve it as well as the retained legacy JSON
+snapshot. See the [current known-folder behavior](usage.md#optional-known-folder-uploads).
+
 Stop the daemon before replacing its binary. Back up SQLite (including any WAL/SHM files),
 `known-folders-state.json` and `upload-sessions.json`; keep the existing cache intact. Install the
 binary, Nautilus extension and service scheduling changes, then restart the daemon. Restart Nautilus

@@ -38,13 +38,14 @@ For the Linux regression that models a slow shared disk-sync queue, run
 the disposable core test process. This is a controlled contention test, not a
 replay of a particular Windows host or a real OneDrive test.
 
+Before changing shared package versions, refresh both the root `Cargo.lock` and
+`experiments/twodrive-dev/Cargo.lock`. Run
+`python3 scripts/check-local-package-locks.py` before pushing release preparation;
+the native Linux workflow and Debian source preparation enforce this check.
+
 Environment-dependent mounted tests are ignored by default; a normal test run does not establish that they passed. Inspect their requirements and use isolated FUSE mounts. Mock tests are not evidence of live Graph behavior.
 
-All release `.deb` packages on **main and dev** must follow the [Debian packaging policy](doc/debian-packaging.md), using `dpkg-buildpackage` and debhelper. Manual `dpkg-deb --build` release packaging is prohibited; retain and verify complete source and binary manifests.
-
-For the `.deb`, install the prerequisites in [debian/README.source](debian/README.source), provision the upstream dependency cache with `cargo fetch --locked`, then run `bash scripts/build-deb.sh`. Package compilation and tests run offline through debhelper; binary/debug packages and upload manifests are copied to `dist/debian/`. This upstream preparation does not yet provide Debian's complete packaged Rust dependency closure. See [distribution preparation and validation](doc/distribution-preparation.md).
-
-For source installation, run `cargo build --workspace --release`, follow the [sign-in guide](doc/getting-started.md) using `target/release/twodrive` to configure/sign in, then inspect and run [scripts/install-desktop-integration.sh](scripts/install-desktop-integration.sh). **The installer starts the user service**; do not run it just to test. Check service and `PATH` precedence before mixing package/source installs.
+All release `.deb` packages on **main and dev** must follow the [Debian packaging policy](doc/debian-packaging.md). Build from a clean committed tree with [scripts/build-deb.sh](scripts/build-deb.sh), after installing the prerequisites in [debian/README.source](debian/README.source). The helper prepares locked dependency sources, then uses `dpkg-buildpackage`/debhelper; retain and verify the complete source/binary manifests in `dist/debian/`. Manual `dpkg-deb --build` release packaging is prohibited. For source installation, run `cargo build --workspace --release`, follow the [sign-in guide](doc/getting-started.md) using `target/release/twodrive` to configure/sign in, then inspect and run [scripts/install-desktop-integration.sh](scripts/install-desktop-integration.sh). **The installer starts the user service**; do not run it just to test. Check service and `PATH` precedence before mixing package/source installs.
 
 ## Test without a real OneDrive
 
@@ -95,6 +96,8 @@ New cloud/provider integrations must follow the [provider, authentication, uploa
 Use a focused branch and pull request. Explain behavior, data risks, and tests actually run; add regressions for reproducible bugs. Never report skipped/unrun tests as passing.
 
 The `main` branch requires a pull request, an up-to-date branch, successful `Native checks (Linux)` and `Native checks (Windows)` from GitHub Actions, and resolved review conversations. These rules also apply to administrators; force pushes and branch deletion are blocked. No approving review is mandatory, so the repository owner can merge their own pull requests after the checks pass.
+
+Both `main` and `dev` also require the **Debian packaging policy** check through the repository ruleset.
 
 Keep the required check names unique across workflows and run them on every pull request. Do not add a path-filtered workflow as a required check: a skipped workflow can leave unrelated pull requests waiting indefinitely.
 

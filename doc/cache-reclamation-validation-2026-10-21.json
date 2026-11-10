@@ -1,0 +1,132 @@
+{
+  "version": "0.2.18-1",
+  "source_commit": "e50b90763d90db95db053661d818ebcdac6f792d",
+  "fix_commit": "ab31687faf272eb12cc6dae60cd6a57d340e8931",
+  "merge_commit": "e4dc4ca8a97b3d99504a8faa262fe18f6180a458",
+  "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/40",
+  "tag": "v0.2.18-1",
+  "ci_checks": [
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942640/job/119171921912",
+      "name": "Debian package",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942578/job/119171421210",
+      "name": "test (ubuntu-latest, --features mount, target/release/twodrive-dev)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942450/job/119171420148",
+      "name": "Debian packaging policy",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942304/job/119171420021",
+      "name": "Native checks (Windows)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942322/job/119171420071",
+      "name": "windows",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942578/job/119171421453",
+      "name": "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942304/job/119171419496",
+      "name": "Native checks (Linux)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39584942322/job/119171420364",
+      "name": "linux",
+      "state": "SUCCESS"
+    }
+  ],
+  "debian": {
+    "workflow_run": 39584942640,
+    "artifact_id": 12339921119,
+    "build": "dpkg-buildpackage and debhelper; repository debian/",
+    "compilation_network": "offline",
+    "signatures": "unsigned project artifacts, not an upload to the Debian archive",
+    "compiler_dependency_override": "upstream Ubuntu/rustup CI uses dpkg-buildpackage -d; native dependencies are provisioned",
+    "lintian_errors": 0,
+    "lintian_warnings": [
+      "debian-changelog-line-too-long (2 lines)",
+      "newer-standards-version (installed checker)"
+    ],
+    "source_binary_debug_buildinfo_changes_hashes_verified": true,
+    "upstream_source_files_match_tag": 303,
+    "disposable_install_upgrade_remove_purge": "passed in CI"
+  },
+  "local_tests": {
+    "default_rust_passed": 188,
+    "default_rust_ignored": 10,
+    "explicit_fuse_passed": 9,
+    "nautilus_python_passed": 25,
+    "settings_python_passed": 4,
+    "release_guard_passed": 6,
+    "workspace_lock_tests_passed": 2,
+    "strict_clippy_and_fmt": true,
+    "isolated_daemon_retention_with_60s_cadence": "passed; synthetic MockBackend",
+    "delivered_debian_binary_fuse_smoke_and_retention": "passed",
+    "private_database_copy_existing_rows_unchanged": true
+  },
+  "local_update": {
+    "status": "verified",
+    "running_daemon_matches_package": true,
+    "installed_cli_matches_package": true,
+    "config_credentials_unchanged": true,
+    "unit_unchanged": true,
+    "queue_identities_unchanged": true,
+    "integrity": "ok",
+    "pinned_sample_read_unchanged": true
+  },
+  "office_extension": {
+    "release": "https://github.com/LumiaBlack51/twodrive-office/releases/tag/v0.2.1",
+    "pull_request": "https://github.com/LumiaBlack51/twodrive-office/pull/1",
+    "python_tests": 31,
+    "node_tests": 18,
+    "native_application": "ONLYOFFICE Desktop 10.0.0; isolated synthetic PPTX/DOCX/XLSX"
+  },
+  "boundaries": {
+    "real_onedrive_office_cloud_edit_round_trip": false,
+    "replayed_all_historical_1959_saves": false,
+    "unknown_existing_cache_or_explicit_recovery_automatically_deleted": false,
+    "all_native_fuse_tests_use": "isolated MockBackend fixtures"
+  },
+  "date": "2026-10-21 Asia/Shanghai",
+  "post_release_local_maintenance": {
+    "integrity": "ok",
+    "queue_identities_unchanged_from_start": true,
+    "pin_records_unchanged": true,
+    "missing_current_cache_refs": 0,
+    "configuration_except_token_unchanged": true,
+    "original_recovery_hashes_unchanged": true,
+    "background_token_refresh": {
+      "expiry_advanced": true,
+      "required_fields_present": true,
+      "permissions_0600": true,
+      "manually_replaced_or_logged_in": false
+    },
+    "latest_rollback_matches_previous_running_program": true,
+    "running_cli_version": "twodrive 0.2.18",
+    "running_daemon_matches_release": true,
+    "service_active": "active",
+    "mount_active": true,
+    "audited_data_allocation_before": 51279433728,
+    "audited_data_allocation_after": 3750518784,
+    "audited_data_net_reduction_bytes": 47528914944,
+    "main_data_allocated_bytes": 306458624,
+    "active_cache_allocated_bytes": 27222016,
+    "build_validation_allocated_bytes_removed": 10089099264,
+    "obsolete_program_files_removed": 67,
+    "obsolete_program_logical_bytes_removed": 615507000,
+    "temporary_old_cache_archive_absent": true,
+    "original_user_retain_for_unchanged": "30d"
+  }
+}

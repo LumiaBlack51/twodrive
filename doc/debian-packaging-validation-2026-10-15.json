@@ -1,0 +1,135 @@
+{
+  "package_version": "0.2.14-2",
+  "application_version": "0.2.14",
+  "source_commit": "408370942c39473688813935e46579fa84e9bbe8",
+  "main_merge_commit": "e003ec2eb4438677b58abcaa928b8cfa30018e42",
+  "main_merge_tree_matches_tested_source": true,
+  "dev_policy_pr": "https://github.com/LumiaBlack51/twodrive/pull/25",
+  "dev_policy_merge_commit": "4942f2ded44cdb805c397c90b932ca06c23dae0e",
+  "required_policy_ruleset": 25148176,
+  "checked_at_utc": "2026-10-15T09:16:32.795968+00:00",
+  "ci_checks": [
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178838/job/116336102523",
+      "name": "Debian package"
+    },
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178864/job/116336016135",
+      "name": "Debian packaging policy"
+    },
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178859/job/116336016739",
+      "name": "test (ubuntu-latest, --features mount, target/release/twodrive-dev)"
+    },
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178926/job/116336016266",
+      "name": "Native checks (Windows)"
+    },
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178895/job/116336016237",
+      "name": "windows"
+    },
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178926/job/116336016761",
+      "name": "Native checks (Linux)"
+    },
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178895/job/116336016638",
+      "name": "linux"
+    },
+    {
+      "bucket": "pass",
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/38709178859/job/116336016053",
+      "name": "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)"
+    }
+  ],
+  "artifacts": {
+    "twodrive-dbgsym_0.2.14-2_amd64.ddeb": {
+      "size": 40694988,
+      "sha256": "aeafc81f0fa81d846ee8bd70c9fb4183f7c55daf0714e6d1e44c57abe8699c68"
+    },
+    "twodrive_0.2.14-2.debian.tar.xz": {
+      "size": 46032,
+      "sha256": "5499bce78abe4fb95be1e0d5e2f4c17355e636eda2d6c028495695da0c2eac78"
+    },
+    "twodrive_0.2.14-2.dsc": {
+      "size": 1428,
+      "sha256": "9f203b6ba3f9493af8370536db50b16cec905cadf08c238cedcb04b195b68093"
+    },
+    "twodrive_0.2.14-2_amd64.buildinfo": {
+      "size": 13161,
+      "sha256": "ebeb298d973e5b187415a8f284841711fa9d5a4d266514b2d5a96913dc5c3b58"
+    },
+    "twodrive_0.2.14-2_amd64.changes": {
+      "size": 2845,
+      "sha256": "957d101e0ae0277b2e2d8f5a356953f786939e83a76b78e00f89a9096ab4c210"
+    },
+    "twodrive_0.2.14-2_amd64.deb": {
+      "size": 2786142,
+      "sha256": "e8bef619fb3253c2cbd2ebb2a08dd703763306a19992cad83728deb0b6875859"
+    },
+    "twodrive_0.2.14.orig-vendor.tar.xz": {
+      "size": 33593560,
+      "sha256": "4e81ee14a35846ecec3c3acb4d34ed348a2ea6c9ae69e0dba04319b4a5d97c62"
+    },
+    "twodrive_0.2.14.orig.tar.xz": {
+      "size": 1592412,
+      "sha256": "a80729ca7e42a9ca0abb5e2b4636e1f1561b8f28747f43681f5f5b1469659ef3"
+    }
+  },
+  "validation": {
+    "default_rust_tests": 171,
+    "explicit_fuse_regressions": 7,
+    "nautilus_tests": 25,
+    "settings_tests": 4,
+    "release_guard_tests": 6,
+    "vendor_files_verified": 16043,
+    "debian_profile_lintian_errors": 0,
+    "lintian_warning": "newer-standards-version 4.7.4; checker knows 4.6.2",
+    "runtime_integration_files_compared": 11,
+    "python_shebang_normalization_allowed": true,
+    "old_package_missing_libc_dependency_reproduced": true,
+    "old_to_new_install_remove_reinstall_purge_preserves_synthetic_state": true,
+    "full_extracted_dsc_rebuild_and_tests_without_network_or_cargo_cache": true,
+    "all_dsc_changes_buildinfo_sha256_members_verified": true,
+    "final_ci_package_mock_daemon_smoke": true,
+    "private_existing_database_snapshot_schema_and_data_unchanged": true
+  },
+  "laptop_validation": {
+    "package_version": "0.2.14-2",
+    "application_version": "twodrive 0.2.14",
+    "package_sha256": "e8bef619fb3253c2cbd2ebb2a08dd703763306a19992cad83728deb0b6875859",
+    "running_daemon_matches_package": true,
+    "user_unit_unchanged": true,
+    "configuration_unchanged": true,
+    "credential_file_present": true,
+    "credential_file_byte_unchanged": true,
+    "database_integrity": "ok",
+    "mount_available": true,
+    "installation_layout": "existing per-user paths retained"
+  },
+  "verification_limits": [
+    "Mock storage and isolated FUSE are not real OneDrive end-to-end tests.",
+    "Live laptop service/mount and state preservation verified; no new real cloud write/read/delete end-to-end test.",
+    "Historical pre-existing rejected deletion remains retained; packaging does not resolve its remote refusal.",
+    "Ubuntu upstream CI/rebuild uses an explicitly provisioned rustup compiler and dpkg -d; official Debian archive dependency/copyright review, sbuild/piuparts/sponsorship remain separate.",
+    "Unsigned upstream project artifacts; not accepted into the official Debian archive."
+  ],
+  "release": {
+    "tagName": "v0.2.14-2",
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.14-2",
+    "publishedAt": "2026-10-15T09:16:54Z",
+    "isDraft": false,
+    "isPrerelease": false,
+    "asset_count": 11,
+    "latest_verified": true,
+    "all_remote_assets_verified_before_and_after_publication": true
+  }
+}

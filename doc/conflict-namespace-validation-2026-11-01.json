@@ -1,0 +1,296 @@
+{
+  "incident": "TD-20261101-05",
+  "date": "2026-11-01",
+  "version": "0.2.21-1",
+  "source_commit": "758f0c8a49e86e4dbf755424c4b643323b749955",
+  "implementation_pr": "https://github.com/LumiaBlack51/twodrive/pull/53",
+  "regression_evidence": {
+    "source_commit": "758f0c8a49e86e4dbf755424c4b643323b749955",
+    "rust_default_passed": 216,
+    "rust_ignored": 11,
+    "fuse_explicit_passed": 10,
+    "nautilus_passed": 25,
+    "settings_passed": 4,
+    "fmt": true,
+    "strict_clippy": true,
+    "workspace_build": true,
+    "local_locks": true,
+    "mock_daemon_smoke": true,
+    "old_failures": {
+      "mounted_recovery": "retired source remains visible after recovery",
+      "retired_inode": "record_for_ino(ino).is_none() assertion failed",
+      "reused_path": "different identities shared an inode"
+    },
+    "candidate_adjustments": [
+      "read descriptor size tracks in-place writes",
+      "retain live delta-move idempotent rename seam",
+      "provide required built CLI for release-cancel regression"
+    ],
+    "production_race_replayed": false,
+    "validated_at": 1793518390.701004
+  },
+  "dot_review": {
+    "url": "https://github.com/LumiaBlack51/twodrive/pull/53#issuecomment-6555041399",
+    "actionable_findings": 0,
+    "runtime_tests_by_dot": false
+  },
+  "production_recovery": {
+    "original_name_restored_through_mount": true,
+    "cloud_id_preserved": true,
+    "bytes": 63870,
+    "server_hashes_equal_local": true,
+    "status_cached_synced": true,
+    "metadata_operation_pending": false
+  },
+  "boundaries": [
+    "FUSE races use a mock backend; no production deletion/upload race replay.",
+    "Real cloud verification checks the restored name, size and server-provided hashes, not a fresh full download.",
+    "The actor that deleted the historic cloud object remains unconfirmed."
+  ],
+  "source_main_merge": "d2bc242720d51f427723214851d6f6c292a8c1af",
+  "artifact_validation": {
+    "source_commit": "758f0c8a49e86e4dbf755424c4b643323b749955",
+    "manifest_references": [
+      {
+        "manifest": "twodrive_0.2.21-1.dsc",
+        "member": "twodrive_0.2.21.orig-vendor.tar.xz",
+        "sha256": "9c3a4ba61ed1a125d98cf9fca936a9df85081ea97dbe23948b4691d10960855f",
+        "bytes": 33595196
+      },
+      {
+        "manifest": "twodrive_0.2.21-1.dsc",
+        "member": "twodrive_0.2.21.orig.tar.xz",
+        "sha256": "35e8d356d71d016afb03778646cb1b62da5058ffcecf9716b76986b05598b36f",
+        "bytes": 1652328
+      },
+      {
+        "manifest": "twodrive_0.2.21-1.dsc",
+        "member": "twodrive_0.2.21-1.debian.tar.xz",
+        "sha256": "2e50fe6fec6af666c48dc746d30637ea8c4cb1816f3dfefc749efac9ff3ab927",
+        "bytes": 47188
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.buildinfo",
+        "member": "twodrive_0.2.21-1.dsc",
+        "sha256": "eb96e91084ca145c96ee710cfed135ea5b9bf830c239822046e00b73ec4f2a0e",
+        "bytes": 1428
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.buildinfo",
+        "member": "twodrive-dbgsym_0.2.21-1_amd64.ddeb",
+        "sha256": "8b08dd517d3e9057b23f430ed244af2c61cb08b6ebc064fc9a0ec4fb83e17f88",
+        "bytes": 41023376
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.buildinfo",
+        "member": "twodrive_0.2.21-1_amd64.deb",
+        "sha256": "2e697af6dac0f35f725baeaad46fe3176bd55f736cdd9f01e53f217d3920b892",
+        "bytes": 2849438
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.changes",
+        "member": "twodrive_0.2.21-1.dsc",
+        "sha256": "eb96e91084ca145c96ee710cfed135ea5b9bf830c239822046e00b73ec4f2a0e",
+        "bytes": 1428
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.changes",
+        "member": "twodrive_0.2.21.orig-vendor.tar.xz",
+        "sha256": "9c3a4ba61ed1a125d98cf9fca936a9df85081ea97dbe23948b4691d10960855f",
+        "bytes": 33595196
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.changes",
+        "member": "twodrive_0.2.21.orig.tar.xz",
+        "sha256": "35e8d356d71d016afb03778646cb1b62da5058ffcecf9716b76986b05598b36f",
+        "bytes": 1652328
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.changes",
+        "member": "twodrive_0.2.21-1.debian.tar.xz",
+        "sha256": "2e50fe6fec6af666c48dc746d30637ea8c4cb1816f3dfefc749efac9ff3ab927",
+        "bytes": 47188
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.changes",
+        "member": "twodrive-dbgsym_0.2.21-1_amd64.ddeb",
+        "sha256": "8b08dd517d3e9057b23f430ed244af2c61cb08b6ebc064fc9a0ec4fb83e17f88",
+        "bytes": 41023376
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.changes",
+        "member": "twodrive_0.2.21-1_amd64.buildinfo",
+        "sha256": "35565e85d2df652b2dab531b3ed3c87ed7196392e21d23fd80543f5d746fe3eb",
+        "bytes": 13170
+      },
+      {
+        "manifest": "twodrive_0.2.21-1_amd64.changes",
+        "member": "twodrive_0.2.21-1_amd64.deb",
+        "sha256": "2e697af6dac0f35f725baeaad46fe3176bd55f736cdd9f01e53f217d3920b892",
+        "bytes": 2849438
+      }
+    ],
+    "upstream_files_equal": 307,
+    "tracked_debian_files_equal": 16,
+    "copyright_prefix_equal": true,
+    "generated_license_notices_present": true,
+    "artifact_zip": {
+      "id": 13075750656,
+      "bytes": 79205112,
+      "sha256": "1d8fa13ef7ed0cb3903c1b07af41269ef37b844b8e3b03cf8498bb0eaacf7314",
+      "crc_valid": true
+    },
+    "binaries": {
+      "twodrive": {
+        "sha256": "08fc3b7a39a2cf5d6e5e47ce6d6aafd5541f8fc12d1dcb45ff86a6027ced3eea",
+        "version": "twodrive 0.2.21",
+        "bytes": 6238392
+      },
+      "twodrive-daemon": {
+        "sha256": "789eef9a5f4d45023f90ed62fa598d0c16e0138b787046f38e2f7f2df2c98252",
+        "version": "twodrive-daemon 0.2.21",
+        "bytes": 5889120
+      }
+    },
+    "vendor_checksums_verified": 16043,
+    "package_policy_checks_passed": true,
+    "ci_lifecycle_passed": true,
+    "runtime_files_compared_in_ci": 11,
+    "lintian": {
+      "errors": 0,
+      "warnings": [
+        "newer-standards-version: package 4.7.4, checker current 4.6.2"
+      ]
+    },
+    "package_daemon_smoke_passed": true
+  },
+  "ci_workflow_runs": [
+    {
+      "id": 41285194569,
+      "conclusion": "success"
+    },
+    {
+      "id": 41285194608,
+      "conclusion": "success"
+    },
+    {
+      "id": 41285194571,
+      "conclusion": "success"
+    },
+    {
+      "id": 41285194580,
+      "conclusion": "success"
+    },
+    {
+      "id": 41285194590,
+      "conclusion": "success"
+    }
+  ],
+  "local_deployment": {
+    "version": "0.2.21",
+    "running_daemon_matches_package": true,
+    "service_active": true,
+    "mount_active": true,
+    "sqlite_integrity": "ok",
+    "configuration_credentials_service_bytes_preserved": true,
+    "watcher_checkpoint_json_preserved": true,
+    "pending_work_identities_preserved": true,
+    "no_content_upload_failures": true,
+    "readonly_pdf_restart_explicitly_approved": true
+  },
+  "verified_at": "2026-11-01T07:56:53.627136+00:00",
+  "unsigned_project_artifacts": true,
+  "release": {
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.21-1",
+    "tag": "v0.2.21-1",
+    "published_at": "2026-11-01T07:57:00Z",
+    "stable": true,
+    "draft": false,
+    "post_publication_guard_passed": true,
+    "verified_asset_count": 11,
+    "assets": [
+      {
+        "name": "SHA256SUMS",
+        "bytes": 960,
+        "digest": "sha256:c80155fd3c2312432f7449c7c9233c3d6e158561683c89da9ed4dc3557745739",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive-dbgsym_0.2.21-1_amd64.ddeb",
+        "bytes": 41023376,
+        "digest": "sha256:8b08dd517d3e9057b23f430ed244af2c61cb08b6ebc064fc9a0ec4fb83e17f88",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21-1.debian.tar.xz",
+        "bytes": 47188,
+        "digest": "sha256:2e50fe6fec6af666c48dc746d30637ea8c4cb1816f3dfefc749efac9ff3ab927",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21-1.dsc",
+        "bytes": 1428,
+        "digest": "sha256:eb96e91084ca145c96ee710cfed135ea5b9bf830c239822046e00b73ec4f2a0e",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21-1_amd64.buildinfo",
+        "bytes": 13170,
+        "digest": "sha256:35565e85d2df652b2dab531b3ed3c87ed7196392e21d23fd80543f5d746fe3eb",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21-1_amd64.changes",
+        "bytes": 2848,
+        "digest": "sha256:3aad38c1936e955de0025438ad303589660cc92e6dd3cfd0f666d6f777ec2806",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21-1_amd64.deb",
+        "bytes": 2849438,
+        "digest": "sha256:2e697af6dac0f35f725baeaad46fe3176bd55f736cdd9f01e53f217d3920b892",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21-1_amd64.deb.sha256",
+        "bytes": 94,
+        "digest": "sha256:d23761c6a322275e434a0e83b20e9b4a5d4272038063e5197acb0a2634103c4a",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21.orig-vendor.tar.xz",
+        "bytes": 33595196,
+        "digest": "sha256:9c3a4ba61ed1a125d98cf9fca936a9df85081ea97dbe23948b4691d10960855f",
+        "state": "uploaded"
+      },
+      {
+        "name": "twodrive_0.2.21.orig.tar.xz",
+        "bytes": 1652328,
+        "digest": "sha256:35e8d356d71d016afb03778646cb1b62da5058ffcecf9716b76986b05598b36f",
+        "state": "uploaded"
+      },
+      {
+        "name": "verification.json",
+        "bytes": 7011,
+        "digest": "sha256:3f03cd12ae5c738656240e74017cce19c637907d017d00030a04f8f81d44d34b",
+        "state": "uploaded"
+      }
+    ]
+  },
+  "cleanup": {
+    "owned_allocated_bytes_unique": 4404244480,
+    "unique_inodes": 28247,
+    "owned_roots_removed": 11,
+    "core_temporary_targets_removed": true,
+    "scope": "build cache, CI copies, mock sandboxes, failed mounted fixture, logs and one-off helpers; documentation checkout removed after merge",
+    "whole_disk_free_space_delta": false,
+    "verified_fallback_version": "0.2.20",
+    "obsolete_0.2.19_programs_removed": 2,
+    "historical_unsynced_and_recovery_material_preserved": true
+  },
+  "read_timeout": {
+    "incident": "TD-20261101-06",
+    "post_publication_read_recovered": true,
+    "underlying_network_cause_confirmed": false
+  }
+}

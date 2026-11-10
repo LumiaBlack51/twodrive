@@ -30,6 +30,8 @@ use twodrive_backend::DeltaResult;
 
 #[path = "deletion_tests.rs"]
 mod deletion_tests;
+#[path = "office_owner_tests.rs"]
+mod office_owner_tests;
 
 #[derive(Debug)]
 struct FailingBackend {
@@ -392,7 +394,10 @@ fn first_real_write_marks_writing_and_untouched_sibling_cannot_publish_partial_c
         .unwrap();
     let (_, spectator, _) = test.fs.create_overwrite_upload(current, false).unwrap();
     test.fs.begin_handle_write(writer).unwrap();
-    assert!(test.fs.write_handles[&writer].activity.is_some());
+    assert!(
+        test.fs.write_handles[&writer].activity.is_none(),
+        "local writes are not network transfers"
+    );
     let cache = test.fs.write_handles[&writer].cache_path.clone();
     write_slice(&cache, 0, b"new content").unwrap();
     test.fs.queue_upload_handle(spectator).unwrap();

@@ -1,20 +1,122 @@
-twodrive (0.2.14+dev0.1.6-1) unstable; urgency=medium
+twodrive (0.2.24-1) unstable; urgency=medium
 
-  * Package the dev branch metadata-writer contention fix for GNOME.
-  * Build complete offline quilt source and binary artifacts with debhelper.
-  * Include locked vendor sources, dependency licenses and debug symbols.
-  * Validate upgrade/removal/purge preserve user data and service opt-in.
-  * Use a distinct upstream version for the Development source snapshot.
+  * Keep Office owner and regex-excluded files durable and local in FUSE.
+  * Preserve reads, exclusive creates, unlink and temporary-save promotion.
+  * Show upload activity only at cloud transfer calls, with network progress.
+  * Share validated filename regex exclusions with known-folder uploads.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
 
- -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 15 Oct 2026 21:00:00 +0800
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 08 Nov 2026 16:22:00 +0800
 
-twodrive (0.2.14-2) UNRELEASED; urgency=medium
+twodrive (0.2.23-1) unstable; urgency=medium
 
-  * Build with debhelper instead of manually assembling the binary archive.
-  * Generate shared-library/Python dependencies and use system SQLite.
-  * Add source format, DEP-5 copyright, manual pages and installed smoke test.
-  * Keep package builds offline and leave user services disabled on install.
-  * Preserve earlier hand-built package history separately from this packaging
-    changelog; retain its original author names and placeholder contacts.
+  * Apply known-folder exclusions to descendants, events and persisted uploads.
+  * Persist upload results incrementally and migrate legacy JSON transactionally.
+  * Coalesce editor saves and defer hot changes with sliding time budgets.
+  * Discover bounded project roots only after churn thresholds are reached.
+  * Bound watcher ingress and recover dropped events through filtered scans.
+  * Resolve existing cloud directories and distinguish subsecond local saves.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
 
- -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 15 Oct 2026 16:00:00 +0800
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 18:48:27 +0800
+
+twodrive (0.2.22-1) unstable; urgency=medium
+
+  * Keep untouched writable opens clean and skip their release upload.
+  * Begin write state/activity only on write or truncation.
+  * Preserve pending states when opening without changing content.
+  * Guard delayed writes against a replaced cache or remote version.
+  * Cover inactive sibling handles and isolated FUSE open/write/close.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 18:30:00 +0800
+
+twodrive (0.2.21-1) unstable; urgency=medium
+
+  * Retire stale FUSE paths after background conflict recovery.
+  * Keep open descriptors valid without reviving removed directory entries.
+  * Allocate separate inodes when different local identities reuse a path.
+  * Preserve replacement path ownership during stale inode updates/removal.
+  * Cover cached lookups, open-reader sizes and recreated-name isolation.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 15:30:00 +0800
+
+twodrive (0.2.20-1) unstable; urgency=medium
+
+  * Coalesce exact clean delta echoes before binding renamed initial uploads.
+  * Prevent late upload cleanup from deleting cloud IDs with active local owners.
+  * Preserve a pending cloud move when an atomic save replaces renamed content.
+  * Validate rename/folder names before authentication and network requests.
+  * Reconcile missing bound upload targets instead of retrying stale IDs forever.
+  * Preserve unsynced local edits as conflict copies without restoring deleted
+    originals or overwriting newer same-name cloud objects.
+  * Complete missing-original conflict recovery atomically, preserving newer
+    saves and concurrent deletion recovery.
+  * Add remote-deletion, restart, replacement and active-writer regressions.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sun, 01 Nov 2026 13:45:00 +0800
+
+twodrive (0.2.19-1) unstable; urgency=medium
+
+  * Preserve cached Linux trash metadata and payloads beyond cache retention.
+  * Recheck current trash paths before automatic eviction to cover moves.
+  * Keep explicit release, restore and trash removal behavior intact.
+  * Cover root trash layouts, cache boundaries and isolated daemon retention.
+  * Retain offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 22 Oct 2026 09:22:34 +0800
+
+twodrive (0.2.18-1) unstable; urgency=medium
+
+  * Reclaim superseded save caches after durable references and open users finish.
+  * Persist retired cache paths across restart; preserve untracked recovery data.
+  * Apply configured cache retention in the daemon and recheck recent access.
+  * Cover atomic replacement, upload/delete protection and automatic retention.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Wed, 21 Oct 2026 18:08:00 +0800
+
+twodrive (0.2.17-1) unstable; urgency=medium
+
+  * Invalidate cached bytes and in-flight downloads on remote version changes.
+  * Revalidate FUSE file sizes and keep reads on their opened cache descriptor.
+  * Reject inconsistent cache lengths and remote edits during downloads.
+  * Preserve local writes, conflict copies and same-version metadata echoes.
+  * Add remote-update, download-publication and mounted ZIP regressions.
+  * Retain standard offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Mon, 19 Oct 2026 17:28:40 +0800
+
+twodrive (0.2.16-1) unstable; urgency=medium
+
+  * Preserve file identity when a repeated rename follows a cloud-completed move.
+  * Validate replacement preconditions within the SQLite write transaction and
+    roll back source deletion when the target cannot be updated.
+  * Add cached-inode, open-handle and actual FUSE regression coverage.
+  * Keep the stable README focused on shipped GNOME/Linux functionality.
+  * Retain standard offline dpkg-buildpackage/debhelper source and binary builds.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Sat, 17 Oct 2026 18:21:04 +0800
+
+twodrive (0.2.15-1) unstable; urgency=medium
+
+  * Serialize metadata updates across Database clones to prevent same-instance
+    writers exhausting SQLite lock waits under shared storage contention.
+  * Preserve read concurrency, SQLite timeout, database schema and recovery data.
+  * Add failure-release and controlled slow-sync regressions, and repeat native
+    Windows database tests at higher concurrency.
+  * Keep standard offline Debian source/binary builds and desktop integration.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 15 Oct 2026 20:43:56 +0800
+
+twodrive (0.2.14-2) unstable; urgency=medium
+
+  * Migrate stable packaging to dpkg-buildpackage and debhelper.
+  * Generate ELF/Python dependencies, manuals, conffiles and debug symbols.
+  * Include locked dependency sources for offline source-package rebuilds.
+  * Preserve the 0.2.14 engine, desktop integration and user data.
+  * Link distribution SQLite with generated runtime version dependencies.
+  * Keep service activation opt-in and add package/upgrade regression checks.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 15 Oct 2026 20:00:00 +0800

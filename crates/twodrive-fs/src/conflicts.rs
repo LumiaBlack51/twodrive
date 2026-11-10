@@ -26,8 +26,25 @@ pub(crate) fn preserve_conflict_copy<B: CloudBackend>(
     if !db.begin_conflict_upload(original, &conflict_path, cache_path)? {
         anyhow::bail!("conflict generation was removed before upload");
     }
-    let conflict =
-        backend.upload_file_with_version(&conflict_path, cache_path, None, None, on_progress)?;
+    let mut activity = crate::activity::ActivityGuard::start(
+        cache_path.parent().unwrap_or(Path::new(".")),
+        "upload",
+        &conflict_path,
+        conflict_path.rsplit('/').next().unwrap_or(""),
+        Some(original.metadata.size),
+    );
+    let result = backend.upload_file_with_version(
+        &conflict_path,
+        cache_path,
+        None,
+        None,
+        &mut |done, total| {
+            activity.set_progress(done, Some(total));
+            on_progress(done, total)
+        },
+    );
+    drop(activity);
+    let conflict = result?;
     if db.complete_deleted_upload(&original.metadata.remote_id, &conflict)? {
         return Ok(conflict);
     }

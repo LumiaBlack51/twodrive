@@ -53,17 +53,23 @@ pub(super) fn sync_known_folder_paths<B: CloudBackend>(
     state: &mut KnownFolderState,
 ) -> anyhow::Result<()> {
     let mut jobs = Vec::new();
+    let mut removed = false;
     for path in pending {
         let Some(root) = roots.iter().find(|root| path.starts_with(&root.local)) else {
             continue;
         };
         if !path.exists() {
             state.remove_path(path);
+            removed = true;
             continue;
         }
         collect_local_path(config, root, path, state, &mut jobs)?;
     }
-    process_known_folder_uploads(paths, backend, db, config, jobs, state)
+    process_known_folder_uploads(paths, backend, db, config, jobs, state)?;
+    if removed {
+        state.save(&paths.data_dir)?;
+    }
+    Ok(())
 }
 
 pub(super) fn sync_known_folder_root<B: CloudBackend>(
@@ -97,7 +103,16 @@ pub(super) fn baseline_known_folder_path(
     path: &Path,
     state: &mut KnownFolderState,
 ) -> anyhow::Result<()> {
-    if should_skip(path, config) {
+    baseline_path(config, path, path, state)
+}
+
+fn baseline_path(
+    config: &Config,
+    root: &Path,
+    path: &Path,
+    state: &mut KnownFolderState,
+) -> anyhow::Result<()> {
+    if should_skip(path.strip_prefix(root).unwrap_or(path), config) {
         return Ok(());
     }
     let metadata = match fs::symlink_metadata(path) {
@@ -110,7 +125,7 @@ pub(super) fn baseline_known_folder_path(
     }
     if metadata.is_dir() {
         for entry in fs::read_dir(path)? {
-            baseline_known_folder_path(config, &entry?.path(), state)?;
+            baseline_path(config, root, &entry?.path(), state)?;
         }
     } else if metadata.is_file() {
         state
@@ -128,7 +143,7 @@ pub(super) fn collect_local_path(
     state: &KnownFolderState,
     jobs: &mut Vec<KnownFolderUploadJob>,
 ) -> anyhow::Result<()> {
-    if should_skip(path, config) {
+    if should_skip(path.strip_prefix(&root.local).unwrap_or(path), config) {
         return Ok(());
     }
     let metadata = match fs::symlink_metadata(path) {
@@ -188,16 +203,45 @@ pub(super) fn parent_cloud_path(path: &str) -> Option<String> {
 }
 
 pub(super) fn should_skip(path: &Path, config: &Config) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
+    path.components().any(|part| {
+        part.as_os_str()
+            .to_str()
+            .is_some_and(|name| skip_name(name, config))
+    })
+}
+
+pub(super) fn should_skip_source(path: &Path, config: &Config) -> bool {
+    let root = config
+        .known_folders
+        .folders
+        .iter()
+        .filter_map(|folder| twodrive_core::expand_known_folder_home(&folder.local).ok())
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.components().count());
+    should_skip(
+        root.as_ref()
+            .and_then(|root| path.strip_prefix(root).ok())
+            .unwrap_or(path),
+        config,
+    )
+}
+
+fn skip_name(name: &str, config: &Config) -> bool {
+    if config
+        .known_folders
+        .exclude_names
+        .iter()
+        .any(|excluded| name == excluded)
+    {
+        return true;
+    }
     if matches!(name, "." | "..") {
         return true;
     }
     if name.starts_with(".") && name != "." {
         return true;
     }
-    if name.starts_with("~$")
+    if config.sync.exclude_name_regexes.matches(name)
         || name.ends_with('~')
         || name.ends_with(".swp")
         || name.ends_with(".swo")

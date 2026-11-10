@@ -1,6 +1,18 @@
 use super::*;
 
 impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
+    fn init(
+        &mut self,
+        _req: &Request<'_>,
+        config: &mut fuser::KernelConfig,
+    ) -> Result<(), libc::c_int> {
+        // O_TRUNC belongs to the open writer. Without this capability the
+        // kernel first sends a handle-less truncate, which can publish an
+        // empty generation before the application's first write/open finishes.
+        let _ = config.add_capabilities(fuser::consts::FUSE_ATOMIC_O_TRUNC);
+        Ok(())
+    }
+
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
         match filesystem_stats(&self.cache_dir) {
             Ok(stats) => reply.statfs(
@@ -436,11 +448,6 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
             Ok(()) => {
                 self.inodes
                     .set_size(handle.ino, offset as u64 + data.len() as u64);
-                if let Some(handle) = self.write_handles.get_mut(&fh)
-                    && let Some(activity) = &mut handle.activity
-                {
-                    activity.set_progress(offset as u64 + data.len() as u64, None);
-                }
                 reply.written(data.len() as u32);
             }
             Err(err) => {

@@ -45,4 +45,6 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - run: cargo build -p twodrive-windows --bin twodrive-engine --locked
+      - run: python3 scripts/test-windows-ipc.py --engine target/debug/twodrive-engine
       - run: python3 -m unittest discover -s packaging/nautilus -p 'test_*.py'
