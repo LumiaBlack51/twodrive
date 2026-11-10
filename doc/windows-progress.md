@@ -2,6 +2,10 @@
 
 ## 当前接续点
 
+2026-11-10：Windows 桌面已完整整合 Linux 0.2.24 main 与 Windows 最新 dev，
+新增 CFAPI 管理页、挂载排除和大目录可靠性修复。本机部署及真实账户验证见
+[本轮整合说明](windows-linux-0.2.24-integration.md)；以下保留各阶段历史边界。
+
 2026-10-07：按用户要求整理当前完整 Windows 预览、登录、浏览、持久索引与下载缓存改动提交 PR。
 提交前重新运行 Linux workspace 测试（127 passed、6 ignored）和 Clippy/fmt/diff 检查通过；
 此前 Windows/Flutter/真实账户验收为 2026-09-17 记录，本次未将其表述为重新执行。

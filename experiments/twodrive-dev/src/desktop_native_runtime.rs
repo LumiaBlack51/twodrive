@@ -133,6 +133,9 @@ mod enabled {
                     "CFAPI 目录必须是现有本机目录下尚不存在的子目录"
                 );
                 let parent = root.parent().unwrap().canonicalize()?;
+                twodrive_local_files::native::verify_unregistered(&parent).map_err(|error| {
+                    anyhow::anyhow!("CFAPI 目录预检失败，请选择其他本机目录：{error}")
+                })?;
                 let root = parent.join(root.file_name().context("CFAPI root name missing")?);
                 let private = state.dir.canonicalize()?;
                 let account =
@@ -306,6 +309,44 @@ mod enabled {
             }
             self.child = None;
             Ok(())
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        #[ignore = "explicit read-only probe of an unsupported CFAPI parent; no root registration"]
+        fn unsupported_cfapi_parent_is_rejected_before_account_access() {
+            let parent = std::path::PathBuf::from(
+                std::env::var_os("TWODRIVE_TEST_NATIVE_UNSUPPORTED_PARENT")
+                    .expect("explicit unsupported parent required"),
+            );
+            let root = parent.join(format!(
+                "twodrive-preflight-{:032x}",
+                rand::random::<u128>()
+            ));
+            let private = tempfile::tempdir().unwrap();
+            let state = State::new(private.path().to_path_buf()).unwrap();
+            let profile = Profile {
+                kind: "onedrive".into(),
+                ..Profile::default()
+            };
+            let error = Runtime::default()
+                .request(
+                    "native_prepare",
+                    &json!({"root":root}),
+                    &profile,
+                    &state,
+                    &AtomicBool::new(false),
+                )
+                .unwrap_err();
+            assert!(
+                error.to_string().starts_with("CFAPI 目录预检失败"),
+                "{error}"
+            );
+            assert!(!root.exists());
+            assert!(!state.dir.join("native-desktop.json").exists());
+            assert!(!state.dir.join("native-catalogue-").exists());
         }
     }
 }

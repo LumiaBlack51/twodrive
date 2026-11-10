@@ -53,6 +53,9 @@ struct Owner {
     root: PathBuf,
     epoch: i64,
     gate: Mutex<()>,
+    // Idle, without an open transaction. Retain the WAL across short operations;
+    // close it while the owner and directory leases below are still held.
+    _connection_anchor: Mutex<rusqlite::Connection>,
     _lock: File,
     _directories: Vec<File>,
 }
@@ -227,6 +230,7 @@ impl CacheJournal {
             root,
             epoch,
             gate: Mutex::new(()),
+            _connection_anchor: Mutex::new(conn),
             _lock: owner_lock,
             _directories: directories,
         })))

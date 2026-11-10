@@ -132,6 +132,8 @@ pub(super) fn get(
         .optional()?)
 }
 fn baseline_valid(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<bool> {
+    // Keep the normally empty operation queue outermost; allowing SQLite to
+    // reorder this join scans every file on each publication even with no work.
     Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM files f JOIN local_native_projections p ON p.local_id=f.remote_id
         WHERE p.local_id=?1 AND f.cloud_remote_id=p.cloud_id AND f.path=p.path AND f.etag=p.etag
         AND f.size=p.size AND f.modified_unix=p.modified_unix AND f.is_dir=p.directory
@@ -139,7 +141,7 @@ fn baseline_valid(conn: &rusqlite::Connection, id: &str) -> anyhow::Result<bool>
         AND NOT EXISTS(SELECT 1 FROM local_cache_journal WHERE local_id=f.remote_id)
         AND NOT EXISTS(SELECT 1 FROM local_native_dirty WHERE cloud_id=f.remote_id OR cloud_id=f.cloud_remote_id)
         AND NOT EXISTS(SELECT 1 FROM pending_deletes WHERE local_id=f.remote_id OR remote_id=f.remote_id OR cloud_remote_id=f.cloud_remote_id OR path=f.path)
-        AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations op JOIN files parent ON parent.remote_id=op.local_id WHERE f.path=parent.path OR substr(f.path,1,length(parent.path)+1)=parent.path||'/')
+        AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations op CROSS JOIN files parent WHERE parent.remote_id=op.local_id AND (f.path=parent.path OR substr(f.path,1,length(parent.path)+1)=parent.path||'/'))
         AND NOT EXISTS(SELECT 1 FROM native_event_log WHERE binding=p.root_binding))",[id],|row|row.get(0))?)
 }
 impl CacheJournal {
@@ -405,5 +407,132 @@ impl CacheJournal {
     }
     pub fn native_capture_binding(&self, id: &str) -> anyhow::Result<Option<NativeCaptureBinding>> {
         capture(&journal_connection(&self.0.db)?, id)
+    }
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    #[test]
+    fn owned_journal_retains_committed_wal_and_reopens_same_publication() {
+        let private = tempfile::tempdir().unwrap();
+        let path = private.path().join("catalog.sqlite3");
+        let db = Database::new(&path);
+        db.init().unwrap();
+        db.upsert_metadata(&MetadataEntry::new_file("leaf", "/leaf", 1, 0, "v1"))
+            .unwrap();
+        let cache = private.path().join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let journal = CacheJournal::open(db.clone(), &cache, &"a".repeat(64)).unwrap();
+        journal
+            .prepare_native_projection("leaf", "generated-root", &[7; 32])
+            .unwrap();
+        journal
+            .complete_native_projection("leaf", "generated-root", &[7; 32], 7, 42)
+            .unwrap();
+        let wal = std::path::PathBuf::from(format!("{}-wal", path.display()));
+        assert!(
+            wal.is_file(),
+            "a live owner should retain its committed WAL between short operations"
+        );
+        {
+            let conn = journal_connection(&db).unwrap();
+            assert_eq!(
+                conn.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                get(&conn, "leaf")
+                    .unwrap()
+                    .unwrap()
+                    .native_file_id
+                    .as_deref(),
+                Some("000000000000002a")
+            );
+        }
+        drop(journal);
+        let reopened = CacheJournal::open(db, &cache, &"a".repeat(64)).unwrap();
+        let projection = reopened.native_projection_for_id("leaf").unwrap().unwrap();
+        assert_eq!(projection.state, "published");
+        assert_eq!(projection.volume_serial, Some(7));
+        assert_eq!(
+            projection.native_file_id.as_deref(),
+            Some("000000000000002a")
+        );
+        assert!(!reopened.native_work_pending().unwrap());
+    }
+    #[test]
+    fn large_catalogue_publication_budget_preserves_pending_parent_guards() {
+        let private = tempfile::tempdir().unwrap();
+        let db = Database::new(private.path().join("catalog.sqlite3"));
+        db.init().unwrap();
+        let mut metadata = (0..20_000)
+            .map(|i| {
+                MetadataEntry::new_file(
+                    format!("generated-{i}"),
+                    format!("/Other/file-{i}"),
+                    1,
+                    0,
+                    "v1",
+                )
+            })
+            .collect::<Vec<_>>();
+        metadata.extend([
+            MetadataEntry::new_dir("parent", "/Parent", 0, "v1"),
+            MetadataEntry::new_dir("other", "/ParentLike", 0, "v1"),
+            MetadataEntry::new_file("leaf", "/Parent/leaf", 1, 0, "v1"),
+        ]);
+        db.upsert_metadata_batch(&metadata).unwrap();
+        let cache = private.path().join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        let journal = CacheJournal::open(db.clone(), &cache, &"a".repeat(64)).unwrap();
+        journal
+            .prepare_native_projection("leaf", "generated-root", &[7; 32])
+            .unwrap();
+        let conn = db.connect().unwrap();
+        let ticks = std::cell::Cell::new(0usize);
+        extern "C" fn budget(data: *mut std::ffi::c_void) -> std::ffi::c_int {
+            // SQLite invokes this synchronously on this connection's test thread.
+            let ticks = unsafe { &*(data as *const std::cell::Cell<usize>) };
+            ticks.set(ticks.get() + 1);
+            i32::from(ticks.get() >= 10)
+        }
+        // Bound VM work, not elapsed wall time: unrelated catalogue size must
+        // not turn an empty pending-operation guard into a full table scan.
+        unsafe {
+            rusqlite::ffi::sqlite3_progress_handler(
+                conn.handle(),
+                1000,
+                Some(budget),
+                (&ticks as *const std::cell::Cell<usize>).cast_mut().cast(),
+            );
+        }
+        let clean = baseline_valid(&conn, "leaf");
+        unsafe {
+            rusqlite::ffi::sqlite3_progress_handler(conn.handle(), 0, None, std::ptr::null_mut());
+        }
+        assert!(
+            clean.is_ok(),
+            "publication exceeded 10,000 VM steps: {clean:?}"
+        );
+        assert!(clean.unwrap());
+        conn.execute("INSERT INTO pending_metadata_operations(local_id,kind,path,queued_unix) VALUES('parent','rename','/New',0)",[]).unwrap();
+        assert!(
+            !baseline_valid(&conn, "leaf").unwrap(),
+            "ancestor work remains a veto"
+        );
+        conn.execute("DELETE FROM pending_metadata_operations", [])
+            .unwrap();
+        conn.execute("INSERT INTO pending_metadata_operations(local_id,kind,path,queued_unix) VALUES('other','rename','/Else',0)",[]).unwrap();
+        assert!(
+            baseline_valid(&conn, "leaf").unwrap(),
+            "sibling prefixes are distinct"
+        );
+        conn.execute("INSERT INTO pending_metadata_operations(local_id,kind,path,queued_unix) VALUES('leaf','rename','/Else/leaf',0)",[]).unwrap();
+        assert!(
+            !baseline_valid(&conn, "leaf").unwrap(),
+            "same-file work remains a veto"
+        );
     }
 }
