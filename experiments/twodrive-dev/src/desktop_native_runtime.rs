@@ -65,14 +65,23 @@ mod enabled {
                 .is_some_and(|p| p.try_wait().ok().flatten().is_none());
             let root = Self::configuration(state)?;
             let running = running || root.as_ref().is_some_and(Self::event_running);
+            let configured = root
+                .as_ref()
+                .is_some_and(|r| r.state.join("desktop-ready.json").is_file());
             let progress = root.as_ref().and_then(|r| {
                 State::new(r.state.clone())
                     .ok()?
                     .read::<Value>("native-status.json")
                     .ok()
             });
+            let exclusions = root.as_ref().and_then(|r| {
+                State::new(r.state.clone())
+                    .ok()?
+                    .read::<Value>("native-exclusions.json")
+                    .ok()
+            });
             Ok(
-                json!({"supported":true,"provider":"onedrive","configured":root.is_some(),"running":running,"profile":root.as_ref().map(|r|&r.profile),"root":root.as_ref().map(|r|&r.root),"progress":progress}),
+                json!({"supported":true,"provider":"onedrive","configured":configured,"preparing":root.is_some() && !configured,"running":running,"profile":root.as_ref().map(|r|&r.profile),"root":root.as_ref().map(|r|&r.root),"progress":progress,"exclusions":exclusions}),
             )
         }
         fn binary() -> anyhow::Result<std::path::PathBuf> {
@@ -171,7 +180,7 @@ mod enabled {
                         auto_start: false,
                     },
                 )?;
-                let mut session = NativeSession::create(CreateNativeSession {
+                let mut session = NativeSession::create_ordinary(CreateNativeSession {
                     account,
                     expected_owner: identity.account.clone(),
                     catalogue,
@@ -181,6 +190,7 @@ mod enabled {
                 ensure!(session.owner_matches(&identity), "CFAPI 账号身份不匹配");
                 session.coordinator.verify_bootstrap_inventory()?;
                 session.coordinator.disconnect()?;
+                State::new(native_state.clone())?.save("desktop-ready.json", &true)?;
                 state.save(
                     "native-desktop.json",
                     &Root {
@@ -207,7 +217,9 @@ mod enabled {
             let identity = provider.graph.readonly_identity(&mut || Ok(()))?;
             let mut session = NativeSession::resume(&root.state)?;
             ensure!(session.owner_matches(&identity), "CFAPI 登录账号已改变");
+            session.coordinator.verify_bootstrap_inventory()?;
             session.coordinator.disconnect()?;
+            State::new(root.state.clone())?.save("desktop-ready.json", &true)?;
             drop(session);
             let log = std::fs::OpenOptions::new()
                 .append(true)

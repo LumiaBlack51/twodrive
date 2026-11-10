@@ -753,6 +753,16 @@ fn baidu_adapter_feeds_authenticated_mount_bridge_with_quota_and_ranges() {
             .status(),
         403
     );
-    let quota = c.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), &root).bearer_auth(&bridge.token).header("Depth","0").body("<D:propfind xmlns:D=\"DAV:\"><D:prop><D:quota-used-bytes/><D:quota-available-bytes/></D:prop></D:propfind>").send().unwrap().text().unwrap();
-    assert!(quota.contains(">200<") && quota.contains(">800<"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let quota = c.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), &root).bearer_auth(&bridge.token).header("Depth","0").body("<D:propfind xmlns:D=\"DAV:\"><D:prop><D:quota-used-bytes/><D:quota-available-bytes/></D:prop></D:propfind>").send().unwrap().text().unwrap();
+        if quota.contains(">200<") && quota.contains(">800<") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "asynchronous quota never published the fixture result"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }

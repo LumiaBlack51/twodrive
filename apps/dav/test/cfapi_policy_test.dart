@@ -52,21 +52,75 @@ class Client extends StorageClient {
 }
 
 void main() {
-  testWidgets('native folder text survives background engine busy transitions', (tester) async {
-    tester.view.physicalSize = const Size(1200,850);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize); addTearDown(tester.view.resetDevicePixelRatio);
-    final c = Client();
-    await tester.pumpWidget(DavApp(client:c));
-    await tester.tap(find.text('原生同步')); await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), r'D:\TwoDrive\OneDrive-Native');
-    c.busy=true; c.notifyListeners(); await tester.pump();
-    c.busy=false; c.notifyListeners(); await tester.pumpAndSettle();
-    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, r'D:\TwoDrive\OneDrive-Native');
-    await tester.tap(find.text('准备 CFAPI 原生目录')); await tester.pumpAndSettle();
-    expect(c.calls.last.$2['root'],r'D:\TwoDrive\OneDrive-Native');
-    await tester.pumpWidget(const SizedBox()); c.dispose();
-  });
+  testWidgets(
+    'ordinary CFAPI scope shows excluded service objects explicitly',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 850);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final c = Client();
+      c.status['cfapi'] = {
+        'supported': true,
+        'configured': true,
+        'profile': 'one',
+        'root': r'D:\TwoDrive\OneDrive-Native',
+        'exclusions': {'ordinary_only': true, 'excluded_objects': 1},
+      };
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: CfapiPage(client: c)),
+        ),
+      );
+      expect(find.textContaining('1 项特殊对象'), findsOneWidget);
+      expect(find.textContaining('原挂载'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
+
+  testWidgets(
+    'native folder text survives background engine busy transitions',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 850);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final c = Client()..selected = 'other';
+      c.profiles.add({
+        'id': 'other',
+        'kind': 'baidu',
+        'name': 'Baidu',
+        'revision': 'other-revision',
+      });
+      c.status.addAll({'connected': true, 'profile': 'other'});
+      await tester.pumpWidget(DavApp(client: c));
+      await tester.tap(find.text('原生同步'));
+      await tester.pumpAndSettle();
+      expect(find.text('断开'), findsNothing);
+      expect(find.text('OneDrive · Windows CFAPI'), findsOneWidget);
+      await tester.enterText(
+        find.byType(TextField),
+        r'D:\TwoDrive\OneDrive-Native',
+      );
+      c.busy = true;
+      c.notifyListeners();
+      await tester.pump();
+      c.busy = false;
+      c.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        r'D:\TwoDrive\OneDrive-Native',
+      );
+      await tester.tap(find.text('准备 CFAPI 原生目录'));
+      await tester.pumpAndSettle();
+      expect(c.calls.last.$2['root'], r'D:\TwoDrive\OneDrive-Native');
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
 
   testWidgets('CFAPI root lifecycle binds selected account and revision', (
     tester,

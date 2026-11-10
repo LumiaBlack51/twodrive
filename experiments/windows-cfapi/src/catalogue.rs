@@ -30,6 +30,56 @@ pub struct NamespacePlan {
     pub paths_at_least_260_utf16: usize,
 }
 impl NamespacePlan {
+    /// Explicit ordinary-object mode. Unknown service objects and their whole
+    /// subtrees remain outside this independent root. Existing owned objects
+    /// can never disappear through this filter.
+    pub fn build_ordinary(
+        items: &[IndexedItem],
+        expected_root: &str,
+        root_utf16: usize,
+        protected: &HashSet<String>,
+        compare_names: impl FnMut(&str, &str) -> Result<Ordering, String>,
+    ) -> Result<(Self, usize), String> {
+        if items.is_empty() || items.len() > 1_000_000 {
+            return Err("invalid catalogue planning bounds".into());
+        }
+        let mut ids = HashSet::new();
+        let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut excluded = HashSet::new();
+        for item in items {
+            if item.id.is_empty() || !ids.insert(item.id.as_str()) {
+                return Err("unsupported or duplicate catalogue identity".into());
+            }
+            if let Some(parent) = &item.parent {
+                children.entry(parent).or_default().push(&item.id);
+            }
+            if !matches!(item.kind.as_str(), "file" | "folder") {
+                excluded.insert(item.id.clone());
+            }
+        }
+        let mut queue: VecDeque<String> = excluded.iter().cloned().collect();
+        while let Some(parent) = queue.pop_front() {
+            for child in children.get(parent.as_str()).into_iter().flatten() {
+                if excluded.insert((*child).to_owned()) {
+                    queue.push_back((*child).to_owned());
+                }
+            }
+        }
+        if excluded.contains(expected_root) || excluded.iter().any(|id| protected.contains(id)) {
+            return Err(
+                "unsupported namespace overlaps an owned object; local data retained".into(),
+            );
+        }
+        let kept = items
+            .iter()
+            .filter(|i| !excluded.contains(&i.id))
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok((
+            Self::build(&kept, expected_root, root_utf16, compare_names)?,
+            excluded.len(),
+        ))
+    }
     /// `root_utf16` counts the intended absolute target without a trailing
     /// separator. The planner performs no root, account, file or cloud mutation.
     pub fn build(
@@ -160,6 +210,49 @@ mod tests {
         NamespacePlan::build(items, root, 25, |a, b| {
             Ok(a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()))
         })
+    }
+    #[test]
+    fn ordinary_scope_excludes_whole_special_subtrees_but_never_owned_data() {
+        let root = item("root", None, "root", true);
+        let mut special = item("special", Some("root"), "service-object", true);
+        special.kind = "unsupported".into();
+        let child = item("child", Some("special"), "retained.txt", false);
+        let normal = item("normal", Some("root"), "normal.txt", false);
+        let items = vec![root, special, child, normal];
+        assert!(plan(&items).is_err(), "strict planning remains strict");
+        let compare = |a: &str, b: &str| Ok(a.cmp(b));
+        let (selected, count) =
+            NamespacePlan::build_ordinary(&items, "root", 25, &HashSet::new(), compare).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(
+            selected
+                .entries
+                .iter()
+                .map(|e| e.item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["normal"]
+        );
+        for id in ["special", "child"] {
+            assert!(
+                NamespacePlan::build_ordinary(
+                    &items,
+                    "root",
+                    25,
+                    &HashSet::from([id.into()]),
+                    compare
+                )
+                .is_err()
+            );
+        }
+        let mut duplicate = items.clone();
+        duplicate.push(items[1].clone());
+        assert!(
+            NamespacePlan::build_ordinary(&duplicate, "root", 25, &HashSet::new(), compare)
+                .is_err()
+        );
+        assert!(
+            NamespacePlan::build_ordinary(&items, "special", 25, &HashSet::new(), compare).is_err()
+        );
     }
     #[test]
     fn planning_is_parent_first_and_rejects_cycles_or_native_collisions() {

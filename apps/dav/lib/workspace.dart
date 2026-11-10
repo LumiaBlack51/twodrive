@@ -538,21 +538,25 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           icon: const Icon(Icons.refresh),
                         ),
                       const SizedBox(width: 12),
-                      FilledButton.tonalIcon(
-                        onPressed: c.busy || c.selected == null || !c.available
-                            ? null
-                            : c.connected
-                            ? c.disconnect
-                            : c.connect,
-                        icon: Icon(c.connected ? Icons.link_off : Icons.link),
-                        label: Text(c.connected ? '断开' : '连接'),
-                      ),
+                      if (page != WorkspacePage.cfapi.index)
+                        FilledButton.tonalIcon(
+                          onPressed:
+                              c.busy || c.selected == null || !c.available
+                              ? null
+                              : c.connected
+                              ? c.disconnect
+                              : c.connect,
+                          icon: Icon(c.connected ? Icons.link_off : Icons.link),
+                          label: Text(c.connected ? '断开' : '连接'),
+                        ),
                     ],
                   ),
                   Padding(
                     padding: const EdgeInsets.only(top: 6, bottom: 20),
                     child: Text(
-                      c.connected
+                      page == WorkspacePage.cfapi.index
+                          ? 'OneDrive · Windows CFAPI'
+                          : c.connected
                           ? '${c.profile?['name'] ?? c.providerLabel} · ${c.account}'
                           : c.profile?['name'] as String? ?? '添加存储账号或已配对设备',
                       style: const TextStyle(color: Colors.blueGrey),

@@ -16,6 +16,23 @@ class _CfapiPageState extends State<CfapiPage> {
   bool working = false;
   String? error;
   @override
+  void initState() {
+    super.initState();
+    final first = widget.client.profiles
+        .where((p) => p['kind'] == 'onedrive')
+        .firstOrNull;
+    profileId = first?['id'] as String?;
+    suggestRoot(first);
+  }
+
+  void suggestRoot(Json? profile) {
+    final mount = profile?['mount_path'] as String?;
+    if (mount != null && mount.isNotEmpty) {
+      root.text = '${mount.replaceFirst(RegExp(r'[\\/]+$'), '')}-Native';
+    }
+  }
+
+  @override
   void dispose() {
     root.dispose();
     super.dispose();
@@ -31,6 +48,7 @@ class _CfapiPageState extends State<CfapiPage> {
         profileId ??
         profiles.firstOrNull?['id'] as String?;
     final configured = state['configured'] == true;
+    final preparing = state['preparing'] == true;
     final running = state['running'] == true;
     final progress = state['progress'] as Map? ?? {};
     final summary = progress['summary'] as Map? ?? {};
@@ -61,7 +79,7 @@ class _CfapiPageState extends State<CfapiPage> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'CFAPI 将 OneDrive 文件显示为 Explorer 原生占位文件。打开文件时下载，并支持“始终保留在此设备上”和“释放空间”。',
+                'CFAPI 将 OneDrive 普通文件和文件夹显示为 Explorer 原生占位文件。打开文件时下载，并支持“始终保留在此设备上”和“释放空间”。',
               ),
               const SizedBox(height: 12),
               Text(
@@ -125,12 +143,13 @@ class _CfapiPageState extends State<CfapiPage> {
                     label: const Text('选择父目录'),
                   ),
                   const Text(
-                    '使用新的本机目录。准备只获取云端目录信息，文件内容按需下载。现有挂载和 Microsoft OneDrive 目录保留。',
+                    '使用新的本机目录，仅同步普通文件和文件夹。特殊服务对象继续通过原挂载访问。准备只获取目录信息，文件内容按需下载。',
                   ),
                   const SizedBox(height: 12),
                   FilledButton(
                     onPressed:
                         working ||
+                            preparing ||
                             selected == null ||
                             state['supported'] != true
                         ? null
@@ -139,6 +158,14 @@ class _CfapiPageState extends State<CfapiPage> {
                   ),
                 ] else ...[
                   SelectableText(state['root'] as String? ?? ''),
+                  if ((state['exclusions']?['excluded_objects'] as num? ?? 0) >
+                      0)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        '此独立原生目录有 ${state['exclusions']['excluded_objects']} 项特殊对象或子项未纳入；仍可通过原挂载或 OneDrive 网页访问。',
+                      ),
+                    ),
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 12,
@@ -191,6 +218,11 @@ class _CfapiPageState extends State<CfapiPage> {
                     '云端变化每 30 秒检查；固定与释放空间每 10 秒检查。文件打开时的写入会等待可一致捕获的时机。冲突版本保留在恢复状态中。',
                   ),
                 ],
+                if (preparing)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text('原生目录正在后台准备，原有挂载继续运行。'),
+                  ),
                 if (working)
                   const Padding(
                     padding: EdgeInsets.only(top: 16),

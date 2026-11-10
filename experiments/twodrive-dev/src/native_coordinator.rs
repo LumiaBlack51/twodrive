@@ -43,6 +43,8 @@ struct Configuration {
     root: PathBuf,
     registration: Vec<u8>,
     receipt: Option<RootReceipt>,
+    #[serde(default)]
+    ordinary_only: bool,
 }
 pub struct CreateNativeSession {
     pub account: PathBuf,
@@ -60,6 +62,12 @@ impl NativeSession {
     /// Stage a fresh native root while the existing client/root remain intact.
     /// This initial projection does not enable the cloud mutation consumers.
     pub fn create(request: CreateNativeSession) -> anyhow::Result<Self> {
+        Self::create_mode(request, false)
+    }
+    pub fn create_ordinary(request: CreateNativeSession) -> anyhow::Result<Self> {
+        Self::create_mode(request, true)
+    }
+    fn create_mode(request: CreateNativeSession, ordinary_only: bool) -> anyhow::Result<Self> {
         use crate::{
             model::CloudBackend,
             onedrive::{self, OneDrive},
@@ -120,13 +128,32 @@ impl NativeSession {
         );
         db.cloud_commit(&identity, &cursor, replace)?;
         use std::os::windows::ffi::OsStrExt;
-        let plan = NamespacePlan::build(
-            &db.cloud_items(&identity)?,
-            &cloud_root.remote_id,
-            request.root.as_os_str().encode_wide().count(),
-            twodrive_local_files::names::ordinal_ignorecase_cmp,
-        )
-        .map_err(anyhow::Error::msg)?;
+        let items = db.cloud_items(&identity)?;
+        let (plan, excluded) = if ordinary_only {
+            NamespacePlan::build_ordinary(
+                &items,
+                &cloud_root.remote_id,
+                request.root.as_os_str().encode_wide().count(),
+                &HashSet::new(),
+                twodrive_local_files::names::ordinal_ignorecase_cmp,
+            )
+            .map_err(anyhow::Error::msg)?
+        } else {
+            (
+                NamespacePlan::build(
+                    &items,
+                    &cloud_root.remote_id,
+                    request.root.as_os_str().encode_wide().count(),
+                    twodrive_local_files::names::ordinal_ignorecase_cmp,
+                )
+                .map_err(anyhow::Error::msg)?,
+                0,
+            )
+        };
+        crate::state::State::new(state.clone())?.save(
+            "native-exclusions.json",
+            &serde_json::json!({"ordinary_only":ordinary_only,"excluded_objects":excluded}),
+        )?;
         let cache = state.join("cache");
         std::fs::create_dir(&cache)?;
         let bridge = onedrive::open_pinned_session(db, &cache, &account, identity.clone(), true)?;
@@ -144,12 +171,13 @@ impl NativeSession {
         )
         .into_bytes();
         let mut configuration = Configuration {
-            schema_version: 1,
+            schema_version: if ordinary_only { 2 } else { 1 },
             account,
             identity,
             root: request.root,
             registration,
             receipt: None,
+            ordinary_only,
         };
         Self::seal(&state, &configuration)?;
         let coordinator = NativeCoordinator::create_new(
@@ -183,7 +211,8 @@ impl NativeSession {
             &twodrive_core::private_file::read_secret(&state.join("native-owner.dat"))?,
         )?;
         ensure!(
-            configuration.schema_version == 1
+            ((configuration.schema_version == 1)
+                || (configuration.schema_version == 2 && configuration.ordinary_only))
                 && configuration.account.is_absolute()
                 && configuration.root.is_absolute()
                 && !configuration.identity.account.is_empty()
@@ -194,6 +223,12 @@ impl NativeSession {
             state.join("native.sqlite3").is_file() && state.join("cache").is_dir(),
             "native state is incomplete; recovery required"
         );
+        // Fence the short-lived local desktop preview's ordinary-object policy
+        // from older readers which would ignore the added JSON field.
+        if configuration.schema_version == 1 && configuration.ordinary_only {
+            configuration.schema_version = 2;
+            Self::seal(&state, &configuration)?;
+        }
         let bridge = crate::onedrive::open_pinned_session(
             Database::new(state.join("native.sqlite3")),
             &state.join("cache"),
@@ -4027,6 +4062,7 @@ mod tests {
             root: coordinator.root().to_path_buf(),
             registration: receipt.identity.clone(),
             receipt: None,
+            ordinary_only: false,
         };
         std::fs::copy(&checkpoint, private.join("root-receipt.json")).unwrap();
         NativeSession::seal(&private, &configuration).unwrap();

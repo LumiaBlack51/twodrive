@@ -49,13 +49,42 @@ impl NativeSession {
         let root = db
             .get_state_value("native_cloud_root_id")?
             .context("native cloud root missing")?;
-        let plan = NamespacePlan::build(
-            &db.cloud_items(&self.configuration.identity)?,
-            &root,
-            self.coordinator.root().as_os_str().encode_wide().count(),
-            twodrive_local_files::names::ordinal_ignorecase_cmp,
-        )
-        .map_err(anyhow::Error::msg)?;
+        let items = db.cloud_items(&self.configuration.identity)?;
+        let (plan, excluded) = if self.configuration.ordinary_only {
+            let mut protected = self
+                .coordinator
+                .bridge
+                .journal()
+                .native_projections(self.coordinator.binding()?)?
+                .into_iter()
+                .map(|p| p.cloud_id)
+                .collect::<HashSet<_>>();
+            protected.extend(
+                db.all_records()?
+                    .into_iter()
+                    .filter_map(|r| r.cloud_remote_id),
+            );
+            NamespacePlan::build_ordinary(
+                &items,
+                &root,
+                self.coordinator.root().as_os_str().encode_wide().count(),
+                &protected,
+                twodrive_local_files::names::ordinal_ignorecase_cmp,
+            )
+            .map_err(anyhow::Error::msg)?
+        } else {
+            (
+                NamespacePlan::build(
+                    &items,
+                    &root,
+                    self.coordinator.root().as_os_str().encode_wide().count(),
+                    twodrive_local_files::names::ordinal_ignorecase_cmp,
+                )
+                .map_err(anyhow::Error::msg)?,
+                0,
+            )
+        };
+        crate::state::State::new(self.state.clone())?.save("native-exclusions.json", &serde_json::json!({"ordinary_only":self.configuration.ordinary_only,"excluded_objects":excluded}))?;
         let metadata = plan
             .entries
             .iter()
