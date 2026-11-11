@@ -27,9 +27,28 @@ class StorageClient extends ChangeNotifier {
   final updates = UpdateChecker();
   final preferences = DesktopPreferences();
   bool get autoMountOnConnect => preferences.autoMountOnConnect;
+  bool get restoreConnectionsOnStartup =>
+      preferences.restoreConnectionsOnStartup;
+
+  Future<void> setRestoreConnectionsOnStartup(bool enabled) async {
+    error = null;
+    try {
+      await preferences.setRestoreConnectionsOnStartup(enabled);
+    } catch (e) {
+      error = '无法保存桌面设置：$e';
+    }
+    notifyListeners();
+  }
 
   Future<void> setAutoMountOnConnect(bool enabled) async {
-    await preferences.setAutoMountOnConnect(enabled);
+    error = null;
+    try {
+      await preferences.setAutoMountOnConnect(enabled);
+    } catch (e) {
+      error = '无法保存桌面设置：$e';
+      notifyListeners();
+      return;
+    }
     notifyListeners();
     if (enabled && connected && canMount && !mounted && !busy) {
       await mountToggle();
@@ -797,11 +816,13 @@ class StorageClient extends ChangeNotifier {
     }
   }
 
-  /// Restore every previously authenticated account once per app process.
+  /// When enabled, restore every authenticated account once per app process.
+  /// Disconnect is session-only; startup restoration is a separate preference.
   /// The engine refuses browser login here and validates revision and binding.
   Future<void> restoreOnStartup() => _startupRestore ??= action(
     '正在恢复网盘连接和挂载',
     () async {
+      if (!restoreConnectionsOnStartup) return;
       _restoringStartup = true;
       try {
         final preferred = selected;
@@ -836,7 +857,7 @@ class StorageClient extends ChangeNotifier {
             continue;
           }
           if (quitting || _disposed) break;
-          if (mountSupported && !isProfileMounted(id)) {
+          if (autoMountOnConnect && mountSupported && !isProfileMounted(id)) {
             try {
               activeId = reserveRequestId();
               await request('mount', {...owner, 'startup': true}, activeId);

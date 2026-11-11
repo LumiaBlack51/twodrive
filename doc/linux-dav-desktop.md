@@ -61,7 +61,21 @@ names are retained for isolation and do not rename the product. Runtime lives in
 under `~/.local/share/twodrive-dav/state`. The autostart entry, if explicitly enabled,
 is `~/.config/autostart/twodrive-dav.desktop`.
 
-Normal background startup restores every saved, still-valid account. The first
+By default, normal startup restores every saved, still-valid account, including
+accounts disconnected during the previous run. **Disconnect** ends the current
+connection without deleting its saved login. In Settings, **启动时恢复已登录账号**
+controls restoration on the next app start; disabling it leaves accounts offline
+until manually connected. Changing this preference does not disconnect or connect
+accounts in the running app. Explicit maintenance `--restore-connections` requests
+continue to select their specified accounts.
+
+**连接后自动挂载** independently controls automatic file-manager mounting after both
+manual connection and startup restoration. Disabling it still allows connection
+restoration, but sends no automatic mount request and does not remove existing
+mounts. Both preferences persist across app restarts. OS login autostart only
+launches the app; these choices decide its connection/mount behavior.
+
+The first
 iCloud root metadata check retries Rclone temporary errors (exit code 5) after
 2, 5 and 10 seconds, for at most four attempts. Each attempt keeps the existing
 component timeout and cancellation checks. This also applies when reconnecting;

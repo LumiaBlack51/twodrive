@@ -1183,12 +1183,23 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
             subtitle: Text(
               c.updates.managed
                   ? 'MSIX 自启动尚待适配；请从开始菜单启动。'
-                  : '默认关闭。开启后在托盘中运行并连接上次使用的服务器。',
+                  : '默认关闭。开启后在托盘中运行；连接和挂载遵循下方设置。',
             ),
             value: c.status['autostart'] == true,
             onChanged: c.busy || !c.available || c.updates.managed
                 ? null
                 : c.autostart,
+          ),
+        ),
+        Card(
+          color: Colors.white,
+          child: SwitchListTile(
+            title: const Text('启动时恢复已登录账号'),
+            subtitle: const Text(
+              '默认恢复全部已保存登录的账号。“断开”仅对本次运行生效；关闭此项后，下次启动不自动连接，仍可手动连接。',
+            ),
+            value: c.restoreConnectionsOnStartup,
+            onChanged: c.busy ? null : c.setRestoreConnectionsOnStartup,
           ),
         ),
         if (c.canPreflightLocalFile) LocalFilePreflightCard(client: c),
@@ -1205,7 +1216,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
             color: Colors.white,
             child: SwitchListTile(
               title: const Text('连接后自动挂载'),
-              subtitle: const Text('账户连接成功后自动挂载到文件管理器。'),
+              subtitle: const Text('手动连接或启动恢复成功后自动挂载到文件管理器。关闭不会卸载已有挂载。'),
               value: c.autoMountOnConnect,
               onChanged: c.busy ? null : c.setAutoMountOnConnect,
             ),

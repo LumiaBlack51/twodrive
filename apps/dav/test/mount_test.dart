@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
@@ -85,11 +86,69 @@ void main() {
       await tester.tap(find.text('设置').first);
       await tester.pumpAndSettle();
       expect(find.text('连接后自动挂载'), findsOneWidget);
+      expect(find.text('启动时恢复已登录账号'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     },
     variant: TargetPlatformVariant({TargetPlatform.windows}),
+  );
+  testWidgets('startup restore control works without mount support', (
+    tester,
+  ) async {
+    final c = MountClient();
+    c.status['mount_support'] = {'supported': false};
+    await tester.pumpWidget(DavApp(client: c));
+    await tester.tap(find.text('设置').first);
+    await tester.pumpAndSettle();
+    final setting = find.widgetWithText(SwitchListTile, '启动时恢复已登录账号');
+    expect(setting, findsOneWidget);
+    expect(find.text('连接后自动挂载'), findsNothing);
+    expect(find.textContaining('“断开”仅对本次运行生效'), findsOneWidget);
+    await tester.ensureVisible(setting);
+    await tester.tap(setting);
+    await tester.pumpAndSettle();
+    expect(c.restoreConnectionsOnStartup, isFalse);
+    expect(c.autoMountOnConnect, isTrue);
+    expect(
+      c.calls.where(
+        (v) => ['connect', 'resume', 'mount', 'disconnect'].contains(v['op']),
+      ),
+      isEmpty,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
+  testWidgets(
+    'failed startup preference save is visible and leaves the switch enabled',
+    (tester) async {
+      final root = Directory.systemTemp.createTempSync(
+        'twodrive-settings-error-',
+      );
+      final c = MountClient();
+      try {
+        final file = File('${root.path}/desktop-settings.json');
+        await tester.runAsync(() => c.preferences.load(file));
+        Directory('${file.path}.tmp').createSync();
+        await tester.pumpWidget(DavApp(client: c));
+        await tester.tap(find.text('设置').first);
+        await tester.pumpAndSettle();
+        final setting = find.widgetWithText(SwitchListTile, '启动时恢复已登录账号');
+        await tester.ensureVisible(setting);
+        // Await real filesystem work outside the widget fake-async clock.
+        await tester.runAsync(() => c.setRestoreConnectionsOnStartup(false));
+        await tester.pumpAndSettle();
+        expect(c.restoreConnectionsOnStartup, isTrue);
+        expect(tester.widget<SwitchListTile>(setting).value, isTrue);
+        expect(find.textContaining('无法保存桌面设置'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        c.dispose();
+        root.deleteSync(recursive: true);
+      }
+    },
   );
   testWidgets('Linux component help describes FUSE without a Windows driver', (
     tester,

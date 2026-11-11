@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
 
@@ -21,6 +22,7 @@ class StartupClient extends StorageClient {
       'connections': <Json>[],
       'mounts': <Json>[],
       'mount_support': {'supported': true},
+      'capabilities': {'mount': true},
     };
   }
   final calls = <Json>[];
@@ -41,9 +43,9 @@ class StartupClient extends StorageClient {
     }
     if (op == 'status') return status;
     if (op == 'list') return {'entries': <Json>[]};
-    if (op == 'resume') {
+    if (op == 'resume' || op == 'connect') {
       final id = args['id'];
-      expect(args['revision'], 'rev-$id');
+      if (op == 'resume') expect(args['revision'], 'rev-$id');
       if (gate != null) await gate!.future;
       if (failResume == id) throw StateError('授权需要处理');
       status = {
@@ -60,7 +62,8 @@ class StartupClient extends StorageClient {
     if (op == 'mount') {
       final id = args['profile'];
       expect(args['revision'], 'rev-$id');
-      expect(args['startup'], true);
+      final starting = calls.any((v) => v['op'] == 'resume' && v['id'] == id);
+      expect(args['startup'], starting ? true : isNull);
       if (failMount == id) throw StateError('目录已被占用');
       status = {
         ...status,
@@ -69,6 +72,22 @@ class StartupClient extends StorageClient {
           {'profile': id, 'revision': 'rev-$id', 'path': 'D:\\TwoDrive\\$id'},
         ],
       };
+      return {};
+    }
+    if (op == 'disconnect') {
+      final remaining = (status['connections'] as List)
+          .where((p) => p['id'] != args['id'])
+          .toList();
+      status = {
+        ...status,
+        'connected': remaining.isNotEmpty,
+        'profile': remaining.isEmpty ? null : remaining.first['id'],
+        'connections': remaining,
+        'mounts': (status['mounts'] as List)
+            .where((m) => m['profile'] != args['id'])
+            .toList(),
+      };
+      // Like the engine, disconnect does not remove saved authentication.
       return {};
     }
     if (op == 'cancel') {
@@ -84,6 +103,120 @@ class StartupClient extends StorageClient {
 }
 
 void main() {
+  for (final restoreEnabled in [true, false]) {
+    for (final autoMount in [true, false]) {
+      test(
+        'disconnect then restart: restore=$restoreEnabled mount=$autoMount',
+        () async {
+          final root = await Directory.systemTemp.createTemp(
+            'twodrive-disconnect-restart-',
+          );
+          final first = StartupClient();
+          final restarted = StartupClient();
+          try {
+            final file = File('${root.path}/desktop-settings.json');
+            await first.preferences.load(file);
+            await first.setAutoMountOnConnect(autoMount);
+            await first.setRestoreConnectionsOnStartup(restoreEnabled);
+            await first.connect('b');
+            expect(first.isProfileConnected('b'), isTrue);
+            await first.disconnect('b');
+            expect(first.isProfileConnected('b'), isFalse);
+            expect(
+              first.profiles.singleWhere(
+                (p) => p['id'] == 'b',
+              )['startup_ready'],
+              isTrue,
+            );
+            restarted.profiles = first.profiles
+                .map((p) => Map<String, dynamic>.from(p))
+                .toList();
+            await restarted.preferences.load(file);
+            await restarted.restoreOnStartup();
+            expect(
+              restarted.calls
+                  .where((v) => v['op'] == 'resume')
+                  .map((v) => v['id']),
+              restoreEnabled ? ['a', 'b'] : isEmpty,
+            );
+            expect(
+              restarted.calls
+                  .where((v) => v['op'] == 'mount')
+                  .map((v) => v['profile']),
+              restoreEnabled && autoMount ? ['a', 'b'] : isEmpty,
+            );
+            expect(restarted.isProfileConnected('b'), restoreEnabled);
+            expect(
+              restarted.isProfileMounted('b'),
+              restoreEnabled && autoMount,
+            );
+            expect(restarted.selected, 'b');
+            expect(restarted.error, isNull);
+            if (!restoreEnabled) {
+              await restarted.connect('b');
+              expect(restarted.isProfileConnected('b'), isTrue);
+              final manualMounts = restarted.calls
+                  .where((v) => v['op'] == 'mount')
+                  .toList();
+              expect(manualMounts, hasLength(autoMount ? 1 : 0));
+              if (autoMount) {
+                expect(manualMounts.single['profile'], 'b');
+                expect(manualMounts.single.containsKey('startup'), isFalse);
+              }
+            }
+          } finally {
+            first.dispose();
+            restarted.dispose();
+            await root.delete(recursive: true);
+          }
+        },
+      );
+    }
+  }
+  test(
+    'enabling startup restoration takes effect on the next process only',
+    () async {
+      final c = StartupClient();
+      await c.setRestoreConnectionsOnStartup(false);
+      await c.restoreOnStartup();
+      await c.setRestoreConnectionsOnStartup(true);
+      await c.restoreOnStartup();
+      expect(c.calls, isEmpty);
+      c.dispose();
+    },
+  );
+
+  test(
+    'persisted disabled automatic mount restores connections without mounts',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'twodrive-startup-pref-',
+      );
+      final first = StartupClient();
+      final restarted = StartupClient();
+      try {
+        final file = File('${root.path}/desktop-settings.json');
+        await first.preferences.load(file);
+        await first.setAutoMountOnConnect(false);
+        await restarted.preferences.load(file);
+        await restarted.restoreOnStartup();
+        expect(
+          restarted.calls.where((v) => v['op'] == 'resume').map((v) => v['id']),
+          ['a', 'b'],
+        );
+        expect(restarted.connectedProfiles, hasLength(2));
+        expect(restarted.calls.where((v) => v['op'] == 'mount'), isEmpty);
+        expect(restarted.mounts, isEmpty);
+        expect(restarted.selected, 'b');
+        expect(restarted.error, isNull);
+      } finally {
+        first.dispose();
+        restarted.dispose();
+        await root.delete(recursive: true);
+      }
+    },
+  );
+
   test(
     'normal startup restores four saved clouds even with only two previously online',
     () async {
