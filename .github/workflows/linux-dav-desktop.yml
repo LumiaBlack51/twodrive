@@ -155,8 +155,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --features native-local-fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked --release --features native-local-fixture --bins
+          cargo build --locked --release --features native-sync --bins
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retained native profile edit recovery
+        run: python scripts/test-desktop-native-recovery.py --engine experiments/twodrive-dev/target/release/twodrive-dav-engine.exe --peer experiments/twodrive-dev/target/release/twodrive-dev.exe
       - name: Persistent native coordinator compile and unit contracts
         working-directory: experiments/twodrive-dev
         run: |
@@ -216,13 +218,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Assemble portable Windows directory
         run: |
-          Copy-Item experiments/twodrive-dev/target/release/twodrive-dev.exe,experiments/twodrive-dev/target/release/twodrive-dav-engine.exe,experiments/twodrive-dev/target/release/twodrive-provider-login.exe apps/dav/build/windows/x64/runner/Release/
+          Copy-Item experiments/twodrive-dev/target/release/twodrive-dev.exe,experiments/twodrive-dev/target/release/twodrive-dav-engine.exe,experiments/twodrive-dev/target/release/twodrive-native-dev.exe,experiments/twodrive-dev/target/release/twodrive-provider-login.exe apps/dav/build/windows/x64/runner/Release/
           Copy-Item dist/rclone/* apps/dav/build/windows/x64/runner/Release/
           Copy-Item scripts/install-desktop-windows.ps1 apps/dav/build/windows/x64/runner/Release/
           New-Item -ItemType Directory -Force apps/dav/build/windows/x64/runner/Release/docs | Out-Null
           Copy-Item doc/provider-integration-spec.md,doc/storage-connections-dev.md,doc/desktop-sharing-validation.md,doc/google-drive-dev.md,doc/icloud-drive.md,doc/windows-write-lock.md,doc/tray-positioning-2026-10-14.md apps/dav/build/windows/x64/runner/Release/docs/
           Copy-Item packaging/development/INSTALL-WINDOWS.md apps/dav/build/windows/x64/runner/Release/INSTALL.md
       - name: Windows native tray smoke
+        run: python scripts/test-desktop-native-package.py --bundle apps/dav/build/windows/x64/runner/Release
+      - name: Windows native tray UI smoke
         run: python scripts/test-desktop-windows-ui.py apps/dav/build/windows/x64/runner/Release/twodrive_dav.exe
       - name: Independent desktop state instances
         run: python scripts/test-desktop-instances.py --app apps/dav/build/windows/x64/runner/Release/twodrive_dav.exe --report desktop-instances.json

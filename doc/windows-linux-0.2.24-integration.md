@@ -8,6 +8,10 @@
 
 ## PR 交付（2026-11-11）
 
+Dot 的六项意见已逐项复核：五项确认修复，一项百度整段超时推断有慢流反证，
+保留原生产传输路径并补回归。处理、旧代码反例和未运行范围见
+[本轮审查跟进](pr63-review-followup-2026-11-11.md)。
+
 已提交 [PR #63](https://github.com/LumiaBlack51/twodrive/pull/63)，目标 `dev`，
 来源 `DavidXile:codex/windows-linux-0.2.24-cfapi-20261111`。
 分支同时包含当前上游 dev、Linux 0.2.24 及此前未合入的多账号桌面适配，

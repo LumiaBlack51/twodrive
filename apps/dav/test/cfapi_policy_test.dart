@@ -76,6 +76,38 @@ class ProgressClient extends Client {
 }
 
 void main() {
+  for (final retry in [true, false]) {
+    testWidgets(
+      'interrupted native setup exposes ${retry ? 'retry before ownership' : 'resume sealed ownership'}',
+      (tester) async {
+        tester.view.physicalSize = const Size(1200, 900);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final c = Client();
+        c.status['cfapi'] = {
+          'supported': true,
+          'configured': false,
+          'preparing': true,
+          'retry_prepare': retry,
+          'profile': 'one',
+          'root': r'C:\Retained-Native',
+        };
+        await tester.pumpWidget(DavApp(client: c));
+        await tester.tap(find.text('原生同步'));
+        await tester.pumpAndSettle();
+        final button = find.text(retry ? '重试准备 CFAPI 原生目录' : '继续准备现有原生目录');
+        await tester.ensureVisible(button);
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+        expect(c.calls.single.$1, retry ? 'native_prepare' : 'native_start');
+        if (retry) expect(c.calls.single.$2['root'], r'C:\Retained-Native');
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        c.dispose();
+      },
+    );
+  }
   testWidgets(
     'visible native page refreshes progress without directory IO and stops when hidden',
     (tester) async {

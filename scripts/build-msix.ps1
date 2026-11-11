@@ -13,7 +13,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $bundlePath = (Resolve-Path -LiteralPath $Bundle).Path
-foreach ($name in @('twodrive_dav.exe', 'twodrive-dev.exe', 'twodrive-dav-engine.exe', 'flutter_windows.dll', 'data\icudtl.dat', 'data\flutter_assets')) {
+foreach ($name in @('twodrive_dav.exe', 'twodrive-dev.exe', 'twodrive-dav-engine.exe', 'twodrive-native-dev.exe', 'flutter_windows.dll', 'data\icudtl.dat', 'data\flutter_assets')) {
     if (-not (Test-Path -LiteralPath (Join-Path $bundlePath $name))) { throw "Incomplete Windows bundle: $name" }
 }
 if ($TestPackage) {

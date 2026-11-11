@@ -797,6 +797,15 @@ impl CloudBackend for BackupVersionBackend {
 
 #[test]
 fn excluded_backup_handoff_retains_old_etag_and_preserves_external_edit_as_conflict() {
+    check_backup_handoff(false);
+}
+
+#[test]
+fn repeated_excluded_backup_handoff_preserves_external_edit_as_conflict() {
+    check_backup_handoff(true);
+}
+
+fn check_backup_handoff(repeated: bool) {
     let root = test_root("excluded-backup-external-edit");
     fs::create_dir_all(&root).unwrap();
     let db = Database::new(root.join("db"))
@@ -815,13 +824,53 @@ fn excluded_backup_handoff_retains_old_etag_and_preserves_external_edit_as_confl
         .upload("/report.txt", b"original before backup".to_vec())
         .unwrap();
     sync_metadata(&db, &backend).unwrap();
-    let baseline = db
+    let mut baseline = db
         .get_by_path("/report.txt")
         .unwrap()
         .unwrap()
         .metadata
         .etag;
     let mut filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    if repeated {
+        filesystem
+            .rename_record(
+                ROOT_INO,
+                OsStr::new("report.txt"),
+                ROOT_INO,
+                OsStr::new("report.txt.bak"),
+            )
+            .unwrap();
+        let (_, fh, _) = filesystem
+            .create_upload(ROOT_INO, OsStr::new("report.txt"), libc::O_RDWR)
+            .unwrap();
+        write_slice(
+            &filesystem.write_handles[&fh].cache_path,
+            0,
+            b"first saved document",
+        )
+        .unwrap();
+        filesystem.queue_upload_handle(fh).unwrap();
+        filesystem.write_handles.remove(&fh);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !filesystem
+            .upload_pool
+            .sender
+            .pending
+            .lock()
+            .unwrap()
+            .is_empty()
+        {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        baseline = db
+            .get_by_path("/report.txt")
+            .unwrap()
+            .unwrap()
+            .metadata
+            .etag;
+        filesystem.backend.attempted_etags.lock().unwrap().clear();
+    }
     filesystem
         .rename_record(
             ROOT_INO,
@@ -890,7 +939,11 @@ fn excluded_backup_handoff_retains_old_etag_and_preserves_external_edit_as_confl
     assert!(backup.cloud_remote_id.is_none());
     assert_eq!(
         fs::read(backup.cache_path.unwrap()).unwrap(),
-        b"original before backup"
+        if repeated {
+            b"first saved document".as_slice()
+        } else {
+            b"original before backup".as_slice()
+        }
     );
     drop(filesystem);
     fs::remove_dir_all(root).unwrap();

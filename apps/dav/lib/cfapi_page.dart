@@ -26,6 +26,8 @@ class _CfapiPageState extends State<CfapiPage> {
         .firstOrNull;
     profileId = first?['id'] as String?;
     suggestRoot(first);
+    final savedRoot = widget.client.status['cfapi']?['root'];
+    if (savedRoot is String) root.text = savedRoot;
     statusTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
       final c = widget.client;
       final native = c.status['cfapi'] as Map? ?? {};
@@ -77,6 +79,7 @@ class _CfapiPageState extends State<CfapiPage> {
         profiles.firstOrNull?['id'] as String?;
     final configured = state['configured'] == true;
     final preparing = state['preparing'] == true;
+    final retryPrepare = state['retry_prepare'] == true;
     final running = state['running'] == true;
     final progress = state['progress'] as Map? ?? {};
     final summary = progress['summary'] as Map? ?? {};
@@ -141,7 +144,7 @@ class _CfapiPageState extends State<CfapiPage> {
                         ),
                       )
                       .toList(),
-                  onChanged: working || configured
+                  onChanged: working || configured || preparing
                       ? null
                       : (v) => setState(() => profileId = v),
                 ),
@@ -149,13 +152,14 @@ class _CfapiPageState extends State<CfapiPage> {
                 if (!configured) ...[
                   TextField(
                     controller: root,
+                    enabled: !working && (!preparing || retryPrepare),
                     decoration: const InputDecoration(
                       labelText: '新的原生同步目录',
                       hintText: r'D:\TwoDrive\OneDrive-Native',
                     ),
                   ),
                   TextButton.icon(
-                    onPressed: working
+                    onPressed: working || (preparing && !retryPrepare)
                         ? null
                         : () async {
                             final parent = await getDirectoryPath(
@@ -177,13 +181,22 @@ class _CfapiPageState extends State<CfapiPage> {
                   FilledButton(
                     onPressed:
                         working ||
-                            preparing ||
+                            (preparing && !retryPrepare) ||
                             selected == null ||
                             state['supported'] != true
                         ? null
                         : () => run('native_prepare', selected),
-                    child: const Text('准备 CFAPI 原生目录'),
+                    child: Text(
+                      retryPrepare ? '重试准备 CFAPI 原生目录' : '准备 CFAPI 原生目录',
+                    ),
                   ),
+                  if (preparing && !retryPrepare)
+                    OutlinedButton(
+                      onPressed: working || selected == null
+                          ? null
+                          : () => run('native_start', selected),
+                      child: const Text('继续准备现有原生目录'),
+                    ),
                 ] else ...[
                   SelectableText(state['root'] as String? ?? ''),
                   if ((state['exclusions']?['excluded_objects'] as num? ?? 0) >
@@ -247,9 +260,9 @@ class _CfapiPageState extends State<CfapiPage> {
                   ),
                 ],
                 if (preparing)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: Text('原生目录正在后台准备，原有挂载继续运行。'),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(working ? '原生目录正在后台准备，原有挂载继续运行。' : retryPrepare ? '上次准备在所有者建立前中断，可保留诊断并重试。' : '准备尚未完成，可继续校验现有原生目录。'),
                   ),
                 if (working)
                   const Padding(

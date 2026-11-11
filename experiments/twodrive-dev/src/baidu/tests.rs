@@ -12,6 +12,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 use sha2::Digest;
 use std::{
+    io::Write,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -39,7 +40,14 @@ struct Fixture {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Fixture {
-    fn new(mut custom: impl FnMut(&Url, &str) -> Option<Reply> + Send + 'static) -> Self {
+    fn new(custom: impl FnMut(&Url, &str) -> Option<Reply> + Send + 'static) -> Self {
+        Self::with_content_delay(custom, None, Duration::from_secs(30))
+    }
+    fn with_content_delay(
+        mut custom: impl FnMut(&Url, &str) -> Option<Reply> + Send + 'static,
+        delay: Option<Duration>,
+        metadata: Duration,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let state = State::new(root.path().join("private")).unwrap();
         auth::save(
@@ -74,6 +82,25 @@ impl Fixture {
                     );
                     let u = Url::parse(&format!("{base}{}", request.url())).unwrap();
                     calls.lock().unwrap().push(u.path().to_owned());
+                    if u.path() == "/content"
+                        && let Some(delay) = delay
+                    {
+                        let mut writer = request.into_writer();
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\nContent-MD5: {:x}\r\n\r\n",
+                            DATA.len(),
+                            md5::Md5::digest(DATA)
+                        );
+                        if writer.write_all(header.as_bytes()).is_ok() && writer.flush().is_ok() {
+                            for chunk in DATA.chunks(4) {
+                                std::thread::sleep(delay);
+                                if writer.write_all(chunk).is_err() || writer.flush().is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     let reply = custom(&u, &base).unwrap_or_else(|| match u.path() {
                         "/rest/2.0/xpan/nas" => {
                             json_reply(json!({"errno":0,"uk":7,"netdisk_name":"Synthetic account"}))
@@ -106,7 +133,7 @@ impl Fixture {
         Self {
             _root: root,
             state,
-            api: Api::local(origin),
+            api: Api::local_with_timeout(origin, metadata),
             requests,
             stop,
             thread: Some(thread),
@@ -116,6 +143,73 @@ impl Fixture {
         BaiduDrive::connect_with(self.state.clone(), root, self.api.clone(), &mut || Ok(()))
             .unwrap()
     }
+}
+
+#[test]
+fn progressing_content_outlives_the_client_read_timeout() {
+    let f = Fixture::with_content_delay(
+        |_, _| None,
+        Some(Duration::from_millis(80)),
+        Duration::from_millis(300),
+    );
+    let b = f.backend("/");
+    let id = b.list_directory("/").unwrap()[0].remote_id.clone();
+    let start = std::time::Instant::now();
+    assert_eq!(b.download(&id).unwrap(), DATA);
+    assert!(start.elapsed() > Duration::from_millis(300));
+}
+
+#[test]
+fn content_stall_is_bounded_and_progress_callbacks_cancel_downloads() {
+    for cancel in [false, true] {
+        let f = Fixture::with_content_delay(
+            |_, _| None,
+            Some(Duration::from_millis(if cancel { 80 } else { 500 })),
+            Duration::from_millis(300),
+        );
+        let b = f.backend("/");
+        let id = b.list_directory("/").unwrap()[0].remote_id.clone();
+        let start = std::time::Instant::now();
+        let mut bytes = Vec::new();
+        let error = b
+            .download_to(&id, &mut bytes, &mut |_| {
+                if cancel && start.elapsed() >= Duration::from_millis(80) {
+                    anyhow::bail!("injected transfer cancellation");
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        if cancel {
+            assert!(
+                error.to_string().contains("injected transfer cancellation"),
+                "{error}"
+            );
+        }
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(bytes.len() < DATA.len());
+        if !cancel {
+            assert!(bytes.is_empty());
+        }
+    }
+}
+
+#[test]
+fn metadata_response_wait_remains_bounded() {
+    let f = Fixture::with_content_delay(
+        |u, _| {
+            if u.path() == "/slow-metadata" {
+                std::thread::sleep(Duration::from_millis(500));
+                Some(json_reply(json!({"errno":0})))
+            } else {
+                None
+            }
+        },
+        None,
+        Duration::from_millis(150),
+    );
+    let start = std::time::Instant::now();
+    assert!(f.api.oauth("/slow-metadata", &[]).is_err());
+    assert!(start.elapsed() < Duration::from_secs(2));
 }
 impl Drop for Fixture {
     fn drop(&mut self) {

@@ -29,7 +29,7 @@ class MsixPackagingTests(unittest.TestCase):
         # Invalid-identity cases must stop before these intentionally fake files
         # can reach SDK packing or image generation.
         for name in ('twodrive_dav.exe', 'twodrive-dev.exe',
-                     'twodrive-dav-engine.exe', 'flutter_windows.dll', 'data/icudtl.dat'):
+                     'twodrive-dav-engine.exe', 'twodrive-native-dev.exe', 'flutter_windows.dll', 'data/icudtl.dat'):
             file = self.bundle / name
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_bytes(b'not an executable')
@@ -51,6 +51,12 @@ class MsixPackagingTests(unittest.TestCase):
             '-OutputDirectory', str(output or self.directory / 'output'),
             *arguments,
         ], env=environment, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
+
+    def test_missing_native_helper_is_rejected_before_packing(self):
+        (self.bundle / 'twodrive-native-dev.exe').unlink()
+        result = self.invoke('-TestPackage')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Incomplete Windows bundle: twodrive-native-dev.exe', result.stdout + result.stderr)
 
     def test_store_rejects_test_name_or_reserved_publisher(self):
         for name, publisher in (

@@ -249,8 +249,33 @@ impl Database {
             // Preserve content, state, upload claims and pending metadata jobs.
             return Ok(target);
         }
-        // An atomic save replaces the target's bytes, not its cloud identity or
-        // destination. Keep its pending rename; only the source job is obsolete.
+        let excluded_target = self.excludes_file_name(&cloud_name(&new_path));
+        if excluded_target {
+            let claimed: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE remote_id IN (?1, ?2) AND upload_path IS NOT NULL)",
+                params![source_local_id, target_local_id], |row| row.get(0))?;
+            anyhow::ensure!(
+                !claimed,
+                "excluded replacement must wait for the upload claim to settle"
+            );
+        }
+        let transfer_baseline = excluded_target && source.cloud_remote_id.is_some();
+        if transfer_baseline {
+            // The target may be the detached backup from an earlier save.
+            // Its old/null identity cannot replace the original's baseline.
+            anyhow::ensure!(
+                target.cloud_remote_id.is_none()
+                    || target.cloud_remote_id == source.cloud_remote_id,
+                "excluded replacement would discard a different cloud identity"
+            );
+            anyhow::ensure!(
+                !source.metadata.etag.is_empty(),
+                "excluded replacement has no version baseline"
+            );
+        }
+        // Ordinary atomic saves keep the destination's cloud identity. An
+        // excluded backup instead carries the original source's baseline for
+        // the subsequent new document to adopt. Keep the target's pending move.
         tx.execute(
             "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
             params![source_local_id],
@@ -294,7 +319,9 @@ impl Database {
                 state = CASE WHEN ?11 THEN 'local_only' WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
                 cache_path = ?7,
                 cache_accessed_unix = ?8,
-                local_mode = ?10
+                local_mode = ?10,
+                cloud_remote_id = CASE WHEN ?14 THEN ?12 ELSE cloud_remote_id END,
+                etag = CASE WHEN ?14 THEN ?13 ELSE etag END
             WHERE remote_id = ?9
             "#,
             params![
@@ -312,6 +339,9 @@ impl Database {
                 target_local_id,
                 source.local_mode,
                 self.excludes_file_name(&cloud_name(&new_path)),
+                source.cloud_remote_id,
+                source.metadata.etag,
+                transfer_baseline,
             ],
         )?;
         anyhow::ensure!(updated == 1, "replacement target was not updated");

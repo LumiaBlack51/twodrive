@@ -1293,7 +1293,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       await c.connect(profile['id'] as String);
     }
     if (mounted && c.connected && c.status['profile'] == profile['id']) {
-      setState(() => page = 0);
+      navigateTo(WorkspacePage.files.index);
     }
   }
 

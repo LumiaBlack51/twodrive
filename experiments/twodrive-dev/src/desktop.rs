@@ -838,6 +838,8 @@ impl App {
                 providers::retain_secrets(&mut p, previous, a["clear_password"] == true);
                 providers::prepare(&mut p, &self.state)?;
                 providers::validate(&p)?;
+                self.native_runtime
+                    .retain_profile_binding(&self.state, previous, &mut p)?;
                 let mut next = self.config.clone();
                 next.profiles.retain(|c| c.id != p.id);
                 next.profiles.push(p.clone());

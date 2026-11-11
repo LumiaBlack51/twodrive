@@ -15,6 +15,9 @@ pub(super) struct Api {
 }
 impl Api {
     pub fn new(route: &str) -> anyhow::Result<Self> {
+        Self::with_timeout(route, Duration::from_secs(30))
+    }
+    fn with_timeout(route: &str, timeout: Duration) -> anyhow::Result<Self> {
         ensure!(
             matches!(route, "system" | "direct"),
             "百度网盘请选择系统路由或仅直连"
@@ -22,7 +25,7 @@ impl Api {
         let builder = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            .timeout(timeout)
             .user_agent("TwoDrive/0.1.7 pan.baidu.com");
         let client = if route == "direct" {
             builder.no_proxy()
@@ -42,7 +45,11 @@ impl Api {
     }
     #[cfg(test)]
     pub fn local(origin: String) -> Self {
-        let mut api = Self::new("direct").unwrap();
+        Self::local_with_timeout(origin, Duration::from_secs(30))
+    }
+    #[cfg(test)]
+    pub fn local_with_timeout(origin: String, timeout: Duration) -> Self {
+        let mut api = Self::with_timeout("direct", timeout).unwrap();
         api.api = origin.clone();
         api.oauth = origin.clone();
         api.pcs = origin.clone();

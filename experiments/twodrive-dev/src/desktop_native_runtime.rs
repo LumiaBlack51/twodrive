@@ -27,6 +27,65 @@ mod enabled {
         child: Option<Child>,
     }
     impl Runtime {
+        fn missing(path: &std::path::Path) -> anyhow::Result<bool> {
+            match std::fs::symlink_metadata(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                Err(e) => Err(e.into()),
+                Ok(_) => Ok(false),
+            }
+        }
+        fn unowned_attempt(root: &Root) -> anyhow::Result<bool> {
+            Ok(Self::missing(&root.state.join("native-owner.dat"))?
+                && Self::missing(&root.state.join("root-receipt.json"))?
+                && Self::missing(&root.state.join("desktop-ready.json"))?
+                && Self::missing(&root.root)?
+                && !Self::event_running(root))
+        }
+        fn prepare_attempt<T>(
+            state: &State,
+            root: &Root,
+            operation: impl FnOnce() -> anyhow::Result<T>,
+        ) -> anyhow::Result<T> {
+            state.save("native-desktop.json", root)?;
+            operation()
+        }
+        pub fn retain_profile_binding(
+            &self,
+            state: &State,
+            previous: Option<&Profile>,
+            proposed: &mut Profile,
+        ) -> anyhow::Result<()> {
+            let Some(root) = Self::configuration(state)? else {
+                return Ok(());
+            };
+            if root.profile != proposed.id {
+                return Ok(());
+            }
+            let previous = previous.context("原生目录所属连接缺失，保留原配置以便恢复")?;
+            ensure!(
+                previous.revision == root.revision,
+                "原生目录配置修订不匹配，保留原配置以便恢复"
+            );
+            let mut old = previous.clone();
+            old.writable = super::super::providers::editable(&old);
+            let mut comparable = proposed.clone();
+            // OneDrive's legacy "auto" is the same system route; normalize
+            // this alias without changing account paths or opaque options.
+            if old.kind == "onedrive" && old.network_route == "auto" {
+                old.network_route = "system".into();
+            }
+            if comparable.kind == "onedrive" && comparable.network_route == "auto" {
+                comparable.network_route = "system".into();
+            }
+            comparable.name = old.name.clone();
+            comparable.revision = old.revision.clone();
+            ensure!(
+                serde_json::to_value(&old)? == serde_json::to_value(&comparable)?,
+                "此连接已绑定原生目录；目前仅支持修改显示名称，账户、路径和网络配置须保持不变"
+            );
+            proposed.revision = previous.revision.clone();
+            Ok(())
+        }
         fn configuration(state: &State) -> anyhow::Result<Option<Root>> {
             if state.dir.join("native-desktop.json").exists() {
                 Ok(Some(state.read("native-desktop.json")?))
@@ -80,8 +139,11 @@ mod enabled {
                     .read::<Value>("native-exclusions.json")
                     .ok()
             });
+            let retry_prepare = root
+                .as_ref()
+                .is_some_and(|r| Self::unowned_attempt(r).unwrap_or(false));
             Ok(
-                json!({"supported":true,"provider":"onedrive","configured":configured,"preparing":root.is_some() && !configured,"running":running,"profile":root.as_ref().map(|r|&r.profile),"root":root.as_ref().map(|r|&r.root),"progress":progress,"exclusions":exclusions}),
+                json!({"supported":true,"provider":"onedrive","configured":configured,"preparing":root.is_some() && !configured,"retry_prepare":retry_prepare,"running":running,"profile":root.as_ref().map(|r|&r.profile),"root":root.as_ref().map(|r|&r.root),"progress":progress,"exclusions":exclusions}),
             )
         }
         fn binary() -> anyhow::Result<std::path::PathBuf> {
@@ -119,10 +181,16 @@ mod enabled {
             if op == "native_prepare" {
                 let setup = State::new(state.dir.join("native-setup-owner"))?;
                 let _setup_owner = setup.run_lock()?;
-                ensure!(
-                    Self::configuration(state)?.is_none(),
-                    "CFAPI 目录已配置，请启动现有目录"
-                );
+                if let Some(previous) = Self::configuration(state)? {
+                    ensure!(
+                        previous.profile == profile.id && previous.revision == profile.revision,
+                        "CFAPI 目录属于其他连接或配置"
+                    );
+                    ensure!(
+                        Self::unowned_attempt(&previous)?,
+                        "CFAPI 目录已配置或已有恢复材料，请继续启动现有目录"
+                    );
+                }
                 let root = std::path::PathBuf::from(
                     args["root"].as_str().context("请选择新的 CFAPI 目录")?,
                 );
@@ -170,11 +238,16 @@ mod enabled {
                     "OneDrive 账号已改变"
                 );
                 db.cloud_commit(&identity, &cursor, replace)?;
-                let native_state = state.dir.join(format!("native-cfapi-{}", profile.id));
+                // Never erase or reuse a failed attempt's private state.
+                let native_state = state.dir.join(format!(
+                    "native-cfapi-{}-{:032x}",
+                    profile.id,
+                    rand::random::<u128>()
+                ));
                 // Retain the desktop-to-sealed-state link before registration so
                 // a lost IPC reply can resume the exact owner rather than adopt a root.
-                state.save(
-                    "native-desktop.json",
+                let mut session = Self::prepare_attempt(
+                    state,
                     &Root {
                         profile: profile.id.clone(),
                         revision: profile.revision.clone(),
@@ -182,14 +255,16 @@ mod enabled {
                         state: native_state.clone(),
                         auto_start: false,
                     },
+                    || {
+                        NativeSession::create_ordinary(CreateNativeSession {
+                            account,
+                            expected_owner: identity.account.clone(),
+                            catalogue,
+                            state: native_state.clone(),
+                            root: root.clone(),
+                        })
+                    },
                 )?;
-                let mut session = NativeSession::create_ordinary(CreateNativeSession {
-                    account,
-                    expected_owner: identity.account.clone(),
-                    catalogue,
-                    state: native_state.clone(),
-                    root: root.clone(),
-                })?;
                 ensure!(session.owner_matches(&identity), "CFAPI 账号身份不匹配");
                 session.coordinator.verify_bootstrap_inventory()?;
                 session.coordinator.disconnect()?;
@@ -314,6 +389,137 @@ mod enabled {
     #[cfg(test)]
     mod tests {
         use super::*;
+        fn attempt_fixture() -> (tempfile::TempDir, State, Profile, Root) {
+            let temp = tempfile::tempdir().unwrap();
+            let state = State::new(temp.path().join("desktop")).unwrap();
+            let mut profile = Profile {
+                id: "one".into(),
+                revision: "original-revision".into(),
+                name: "OneDrive".into(),
+                kind: "onedrive".into(),
+                mount_path: temp.path().join("mount"),
+                ..Profile::default()
+            };
+            profile.options.insert(
+                "onedrive_state".into(),
+                json!(temp.path().join("missing-account")),
+            );
+            let root = Root {
+                profile: profile.id.clone(),
+                revision: profile.revision.clone(),
+                root: temp.path().join("native-root"),
+                state: state.dir.join("native-attempt"),
+                auto_start: false,
+            };
+            (temp, state, profile, root)
+        }
+        #[test]
+        fn failed_preownership_attempt_is_retryable_without_erasing_diagnostics() {
+            let (_temp, state, profile, root) = attempt_fixture();
+            let failure: anyhow::Result<()> = Runtime::prepare_attempt(&state, &root, || {
+                std::fs::create_dir(&root.state)?;
+                std::fs::write(
+                    root.state.join("diagnostic.txt"),
+                    b"generated partial metadata",
+                )?;
+                anyhow::bail!("injected failure before owner seal")
+            });
+            assert!(failure.is_err());
+            let mut runtime = Runtime::default();
+            assert_eq!(runtime.status(&state).unwrap()["retry_prepare"], true);
+            let error = runtime
+                .request(
+                    "native_prepare",
+                    &json!({"root":root.root}),
+                    &profile,
+                    &state,
+                    &AtomicBool::new(false),
+                )
+                .unwrap_err();
+            // It must reach location/account validation rather than be stranded
+            // at the old unconditional "already configured" guard.
+            assert!(!error.to_string().contains("已配置"), "{error}");
+            assert_eq!(
+                std::fs::read(root.state.join("diagnostic.txt")).unwrap(),
+                b"generated partial metadata"
+            );
+            assert!(!root.root.exists());
+        }
+        #[test]
+        fn sealed_partial_or_existing_roots_cannot_be_reset_as_unowned() {
+            for marker in [
+                "native-owner.dat",
+                "root-receipt.json",
+                "desktop-ready.json",
+            ] {
+                let (_temp, state, profile, root) = attempt_fixture();
+                std::fs::create_dir(&root.state).unwrap();
+                std::fs::write(root.state.join(marker), b"generated ownership evidence").unwrap();
+                state.save("native-desktop.json", &root).unwrap();
+                let mut runtime = Runtime::default();
+                assert_eq!(runtime.status(&state).unwrap()["retry_prepare"], false);
+                assert!(
+                    runtime
+                        .request(
+                            "native_prepare",
+                            &json!({"root":root.root}),
+                            &profile,
+                            &state,
+                            &AtomicBool::new(false)
+                        )
+                        .unwrap_err()
+                        .to_string()
+                        .contains("已有恢复材料")
+                );
+                assert_eq!(
+                    std::fs::read(root.state.join(marker)).unwrap(),
+                    b"generated ownership evidence"
+                );
+            }
+            let (_temp, _state, _profile, root) = attempt_fixture();
+            std::fs::create_dir(&root.root).unwrap();
+            assert!(!Runtime::unowned_attempt(&root).unwrap());
+        }
+        #[test]
+        fn stopped_root_name_edit_keeps_revision_and_rejects_binding_changes() {
+            let (_temp, state, profile, root) = attempt_fixture();
+            state.save("native-desktop.json", &root).unwrap();
+            let runtime = Runtime::default();
+            let mut renamed = profile.clone();
+            renamed.name = "Renamed OneDrive".into();
+            renamed.revision = "new-revision-must-not-escape".into();
+            runtime
+                .retain_profile_binding(&state, Some(&profile), &mut renamed)
+                .unwrap();
+            assert_eq!(renamed.revision, root.revision);
+            assert_eq!(renamed.name, "Renamed OneDrive");
+            // This is the exact identity guard used on the subsequent start.
+            let saved = Runtime::configuration(&state).unwrap().unwrap();
+            assert!(saved.profile == renamed.id && saved.revision == renamed.revision);
+            for field in ["kind", "network", "mount", "account"] {
+                let mut changed = renamed.clone();
+                match field {
+                    "kind" => changed.kind = "google".into(),
+                    "network" => changed.network_route = "direct".into(),
+                    "mount" => changed.mount_path = changed.mount_path.join("other"),
+                    _ => {
+                        changed.options.insert(
+                            "onedrive_state".into(),
+                            json!(state.dir.join("other-account")),
+                        );
+                    }
+                }
+                assert!(
+                    runtime
+                        .retain_profile_binding(&state, Some(&profile), &mut changed)
+                        .is_err()
+                );
+            }
+            assert_eq!(
+                Runtime::configuration(&state).unwrap().unwrap().revision,
+                root.revision
+            );
+        }
         #[test]
         #[ignore = "explicit read-only probe of an unsupported CFAPI parent; no root registration"]
         fn unsupported_cfapi_parent_is_rejected_before_account_access() {
@@ -359,6 +565,14 @@ pub struct Runtime {
 }
 #[cfg(not(all(windows, feature = "native-sync")))]
 impl Runtime {
+    pub fn retain_profile_binding(
+        &self,
+        _: &super::State,
+        _: Option<&super::Profile>,
+        _: &mut super::Profile,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     pub fn status(&mut self, _: &super::State) -> anyhow::Result<serde_json::Value> {
         Ok(serde_json::json!({"supported":false}))
     }
