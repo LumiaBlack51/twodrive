@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
@@ -56,17 +57,30 @@ class MountClient extends StorageClient {
 }
 
 void main() {
-  test('successful connection automatically mounts once', () async {
-    final client = MountClient();
-    await client.connect();
-    expect(client.operations.where((op) => op == 'mount'), hasLength(1));
-    expect(client.mountOwner, {'profile': 'personal', 'revision': 'test'});
-    expect(client.connected, isTrue);
-    expect(client.mounted, isTrue);
-    await client.connect();
-    expect(client.operations.where((op) => op == 'mount'), hasLength(1));
-    client.dispose();
-  });
+  test(
+    'successful connection automatically mounts once on Linux only',
+    () async {
+      final client = MountClient();
+      final expectedMounts = Platform.isLinux ? 1 : 0;
+      await client.connect();
+      expect(
+        client.operations.where((op) => op == 'mount'),
+        hasLength(expectedMounts),
+      );
+      expect(
+        client.mountOwner,
+        Platform.isLinux ? {'profile': 'personal', 'revision': 'test'} : null,
+      );
+      expect(client.connected, isTrue);
+      expect(client.mounted, Platform.isLinux);
+      await client.connect();
+      expect(
+        client.operations.where((op) => op == 'mount'),
+        hasLength(expectedMounts),
+      );
+      client.dispose();
+    },
+  );
   test('unsupported providers and rejected connections never mount', () async {
     for (final client in [
       MountClient(supported: false),
@@ -77,14 +91,18 @@ void main() {
       client.dispose();
     }
   });
-  test('mount failure preserves connected account and reports error', () async {
-    final client = MountClient(mountFails: true);
-    await client.connect();
-    expect(client.connected, isTrue);
-    expect(client.mounted, isFalse);
-    expect(client.error, contains('mount unavailable'));
-    client.dispose();
-  });
+  test(
+    'mount failure preserves connected account and reports error',
+    () async {
+      final client = MountClient(mountFails: true);
+      await client.connect();
+      expect(client.connected, isTrue);
+      expect(client.mounted, isFalse);
+      expect(client.error, contains('mount unavailable'));
+      client.dispose();
+    },
+    skip: !Platform.isLinux,
+  );
   testWidgets('settings navigation stays usable while connection is pending', (
     tester,
   ) async {
