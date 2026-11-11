@@ -19,6 +19,7 @@ impl NativeSession {
         &mut self,
         check_stop: &mut dyn FnMut() -> anyhow::Result<()>,
     ) -> anyhow::Result<RemoteProgress> {
+        self.coordinator.control.checkpoint("remote.index")?;
         check_stop()?;
         let provider = crate::native_account::NativeAccount::new(
             self.configuration.account.clone(),
@@ -29,6 +30,7 @@ impl NativeSession {
         let db = self.coordinator.bridge.journal().database();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         let mut check = || {
+            self.coordinator.control.checkpoint("remote.index")?;
             check_stop()?;
             ensure!(
                 std::time::Instant::now() < deadline,
@@ -89,6 +91,7 @@ impl NativeSession {
             .entries
             .iter()
             .map(|entry| {
+                self.coordinator.control.checkpoint("remote.plan")?;
                 let modified = time::OffsetDateTime::parse(
                     entry
                         .item
@@ -140,6 +143,7 @@ impl NativeCoordinator {
         let binding = self.binding()?.to_string();
         let mut progress = RemoteProgress::default();
         for removal in self.bridge.journal().native_remote_removals(&binding)? {
+            self.control.checkpoint("remote.removal.replay")?;
             self.last_successful_watch = None;
             match self.bridge.apply_native_remote_removal(
                 &self.owner,
@@ -160,6 +164,7 @@ impl NativeCoordinator {
             .into_iter()
             .filter(|p| p.state == "published" && !remaining.contains(&p.cloud_id))
         {
+            self.control.checkpoint("remote.remove")?;
             self.last_successful_watch = None;
             let result = (|| -> anyhow::Result<()> {
                 ensure!(
@@ -288,6 +293,7 @@ impl NativeCoordinator {
         let mut progress = RemoteProgress::default();
         let binding = self.binding()?.to_string();
         for update in self.bridge.journal().native_remote_updates(&binding)? {
+            self.control.checkpoint("remote.update.replay")?;
             self.last_successful_watch = None;
             match self.bridge.apply_native_remote_version(
                 &self.owner,
@@ -317,6 +323,7 @@ impl NativeCoordinator {
             .map(|p| (p.cloud_id.clone(), p))
             .collect::<HashMap<_, _>>();
         for entry in metadata {
+            self.control.checkpoint("remote.apply")?;
             if unchanged.get(&entry.remote_id).is_some_and(|p| {
                 p.directory == entry.is_dir
                     && p.path == entry.path

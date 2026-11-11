@@ -33,6 +33,7 @@ impl NativeCoordinator {
         let db = self.bridge.journal().database().clone();
         let mut replayed = HashSet::new();
         for (_, payload) in db.pending_native_events(&binding, 1000)? {
+            self.control.checkpoint("local.delete")?;
             let event: NativeEvent = serde_json::from_str(&payload)?;
             ensure!(
                 event.schema_version == 1
@@ -71,6 +72,7 @@ impl NativeCoordinator {
         let mut retired = Vec::new();
         let mut seen = HashSet::new();
         for (_, _, event) in &events {
+            self.control.checkpoint("local.delete")?;
             if seen.insert(event.identity.clone())
                 && let Some((intent, state)) = self
                     .bridge
@@ -85,6 +87,7 @@ impl NativeCoordinator {
             let entries = self.observed_entries()?;
             let mut archived = HashSet::new();
             for intent in retired {
+                self.control.checkpoint("local.delete")?;
                 // A different new file at the old path is independent work.
                 // Only a surviving old physical/tagged entity vetoes archival.
                 if entries.iter().any(|e| {
@@ -132,6 +135,7 @@ impl NativeCoordinator {
             .collect::<HashMap<_, _>>();
         let mut no_op = HashSet::new();
         for (_, _, event) in &events {
+            self.control.checkpoint("local.delete")?;
             if !matches!(
                 event.kind,
                 NativeEventKind::DeleteRequested | NativeEventKind::DeleteCompleted
@@ -197,6 +201,7 @@ impl NativeCoordinator {
             .into_iter()
             .filter(|p| completed_tags.contains(p.tag.as_slice()))
         {
+            self.control.checkpoint("local.delete")?;
             if existing.iter().any(|(i, s)| {
                 i.publication.local_id == p.local_id
                     && !matches!(s.as_str(), "applied" | "cancelled")
@@ -218,6 +223,7 @@ impl NativeCoordinator {
                     && e.identity == p.tag
                     && !no_op.contains(sequence)
             }) {
+                self.control.checkpoint("local.delete")?;
                 let physical = NativeFileIdentity {
                     volume_serial: complete.volume_serial,
                     file_id: complete.file_id,
@@ -324,6 +330,7 @@ impl NativeCoordinator {
             }
         }
         for (intent, state) in self.bridge.journal().native_pending_deletes()? {
+            self.control.checkpoint("local.delete")?;
             let id = &intent.publication.local_id;
             if matches!(state.as_str(), "applied" | "cancelled") {
                 continue;

@@ -77,6 +77,31 @@ class OverviewClient extends StorageClient {
 }
 
 void main() {
+  testWidgets(
+    'working native heartbeat does not present old zero work as completion',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final c = OverviewClient();
+      c.status['cfapi']['progress']['phase'] = 'working';
+      c.status['cfapi']['progress']['stage'] = 'remote';
+      await tester.pumpWidget(DavApp(client: c));
+      expect(find.text('正在更新云端目录'), findsOneWidget);
+      expect(find.text('处理中'), findsOneWidget);
+      expect(find.text('本轮尚未完成，统计来自最近一次检查。'), findsOneWidget);
+      expect(find.text('原生待处理'), findsNothing);
+      c.status['cfapi']['progress']['phase'] = 'sync';
+      c.notifyListeners();
+      await tester.pump();
+      expect(find.text('原生待处理'), findsOneWidget);
+      expect(find.text('正在更新云端目录'), findsNothing);
+      expect(c.calls, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
   void viewport(WidgetTester tester, Size size) {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;

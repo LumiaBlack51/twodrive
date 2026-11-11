@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'client.dart';
 import 'workspace_navigation.dart';
+import 'native_progress.dart';
 
 /// A status overview, never a directory/content/quota reader.
 class OverviewPage extends StatefulWidget {
@@ -58,6 +59,9 @@ class _OverviewPageState extends State<OverviewPage> {
     final c = widget.client;
     final native = c.status['cfapi'] as Map? ?? {};
     final progress = native['progress'] as Map? ?? {};
+    final workLabel = native['running'] == true
+        ? nativeWorkLabel(progress)
+        : null;
     final summary = progress['summary'] as Map? ?? {};
     final cache = c.status['cache'] as Map? ?? {};
     final issue =
@@ -167,8 +171,10 @@ class _OverviewPageState extends State<OverviewPage> {
                   (width - 12 * (columns - 1)) / columns,
                 ),
                 metric(
-                  '原生待处理',
-                  native['configured'] == true
+                  workLabel == null ? '原生待处理' : '原生状态',
+                  workLabel != null
+                      ? '处理中'
+                      : native['configured'] == true
                       ? '${summary['durable_work_items'] ?? '—'}'
                       : '—',
                   Icons.cloud_sync_outlined,
@@ -259,6 +265,10 @@ class _OverviewPageState extends State<OverviewPage> {
                     else
                       const Text('使用 Windows CFAPI，占位文件在打开时下载。'),
                     const SizedBox(height: 8),
+                    if (workLabel != null) ...[
+                      Text(workLabel),
+                      const Text('本轮尚未完成，统计来自最近一次检查。'),
+                    ],
                     if (native['configured'] == true)
                       Text(
                         '文件 ${summary['catalogue_files'] ?? '—'} · 目录 ${summary['catalogue_directories'] ?? '—'} · 待处理 ${summary['durable_work_items'] ?? '—'}',

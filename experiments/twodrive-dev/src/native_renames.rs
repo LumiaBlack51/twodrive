@@ -14,6 +14,7 @@ impl NativeCoordinator {
             .recover_legacy_backup_history(&binding, self.receipt().file_id)?;
         let mut moved = 0;
         for _ in 0..1000 {
+            self.control.checkpoint("local.rename.batch")?;
             let projections = self.bridge.journal().native_projections(&binding)?;
             let by_tag = projections
                 .iter()
@@ -21,6 +22,7 @@ impl NativeCoordinator {
                 .collect::<HashMap<_, _>>();
             let mut recovered = false;
             for (intent, state) in self.bridge.journal().native_pending_moves(&binding)? {
+                self.control.checkpoint("local.rename.replay")?;
                 if state == "received" {
                     self.bridge
                         .journal()
@@ -39,8 +41,9 @@ impl NativeCoordinator {
             }
             let pending_backups = self.bridge.journal().native_backup_copies(&binding)?;
             if !pending_backups.is_empty() {
-                let entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+                let entries = self.inventory_entries()?;
                 for copy in pending_backups {
+                    self.control.checkpoint("local.backup.replay")?;
                     let backup = entries.iter().find(|e| {
                         e.volume_serial == copy.physical.volume_serial
                             && e.file_id == copy.physical.file_id
@@ -77,6 +80,7 @@ impl NativeCoordinator {
             let mut candidate = None;
             let mut split = false;
             for entry in &entries {
+                self.control.checkpoint("local.rename.scan")?;
                 let Some(p) = entry
                     .identity
                     .as_deref()

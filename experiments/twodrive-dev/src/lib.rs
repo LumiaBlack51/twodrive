@@ -10,9 +10,13 @@ pub mod model;
 pub mod mount_write;
 mod native_account;
 #[cfg(all(windows, feature = "native-sync"))]
+pub mod native_control;
+#[cfg(all(windows, feature = "native-sync"))]
 pub mod native_coordinator;
 #[cfg(all(windows, feature = "native-local-fixture"))]
 pub mod native_local_fixture;
+#[cfg(all(windows, feature = "native-sync"))]
+pub mod native_runtime_status;
 #[cfg(all(windows, feature = "native-sync"))]
 pub mod native_source;
 pub mod network;

@@ -20,6 +20,7 @@ pub struct NativeEntry {
 pub(super) enum InventoryStage {
     BeforeDirectory,
     DirectoryHeld,
+    BeforeEntry,
 }
 
 impl PersistentSession {
@@ -184,6 +185,15 @@ impl PersistentSession {
         self.inventory_observed(|_, _| Ok(()))
     }
 
+    /// Abort without returning a partial inventory. The check runs before each
+    /// directory and entry while all original namespace leases remain intact.
+    pub fn inventory_controlled(
+        &self,
+        check: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Vec<NativeEntry>> {
+        self.inventory_observed(|_, _| check())
+    }
+
     fn inventory_observed(
         &self,
         observe: impl FnMut(InventoryStage, &Path) -> Result<()>,
@@ -344,6 +354,7 @@ pub(super) fn inventory_under_root(
         }
         observe(InventoryStage::DirectoryHeld, &relative)?;
         for child in std::fs::read_dir(&directory).map_err(|e| e.to_string())? {
+            observe(InventoryStage::BeforeEntry, &relative)?;
             let child = child.map_err(|e| e.to_string())?;
             let relative_path = relative.join(child.file_name());
             if relative_path.components().count() > 128 || entries.len() >= 1_000_000 {

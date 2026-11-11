@@ -76,6 +76,38 @@ class ProgressClient extends Client {
 }
 
 void main() {
+  testWidgets('native page distinguishes a running batch and a stop request', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final c = Client();
+    c.status['cfapi'] = {
+      'supported': true,
+      'configured': true,
+      'running': true,
+      'profile': 'one',
+      'root': r'C:\Native',
+      'progress': {
+        'phase': 'working',
+        'stage': 'local',
+        'summary': {'catalogue_files': 2048, 'durable_work_items': 0},
+      },
+    };
+    await tester.pumpWidget(DavApp(client: c));
+    await tester.tap(find.text('原生同步'));
+    await tester.pumpAndSettle();
+    expect(find.text('正在核对本地目录'), findsOneWidget);
+    expect(find.text('本轮尚未完成，统计来自最近一次检查。'), findsOneWidget);
+    c.status['cfapi']['progress']['stop_requested'] = true;
+    c.notifyListeners();
+    await tester.pump();
+    expect(find.text('正在安全停止原生同步'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
   for (final retry in [true, false]) {
     testWidgets(
       'interrupted native setup exposes ${retry ? 'retry before ownership' : 'resume sealed ownership'}',

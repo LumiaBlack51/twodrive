@@ -271,6 +271,7 @@ impl NativeSession {
 }
 
 pub struct NativeCoordinator {
+    control: crate::native_control::NativeControl,
     // Cancel directory I/O before releasing the connection and source.
     watcher: Option<DurableDirectoryWatcher>,
     owner: PersistentSession,
@@ -304,6 +305,18 @@ pub struct NativeSummary {
     pub rescan_required: bool,
 }
 impl NativeCoordinator {
+    pub fn set_control(&mut self, control: crate::native_control::NativeControl) {
+        self.control = control;
+    }
+    /// Resume has already verified the sealed owner and physical root. A ready
+    /// desktop root may contain unprocessed local changes; only first setup
+    /// requires an entirely clean bootstrap inventory before exposure.
+    pub fn verify_desktop_start(&mut self, previously_ready: bool) -> anyhow::Result<()> {
+        if !previously_ready {
+            self.verify_bootstrap_inventory()?;
+        }
+        Ok(())
+    }
     fn is_untracked_artifact(path: &Path, directory: bool) -> bool {
         if directory {
             return false;
@@ -320,13 +333,25 @@ impl NativeCoordinator {
                     )
             })
     }
+    fn inventory_entries(
+        &self,
+    ) -> anyhow::Result<Vec<twodrive_local_files::native::persistent::NativeEntry>> {
+        self.owner
+            .inventory_controlled(&mut || {
+                self.control
+                    .checkpoint("local.inventory")
+                    .map_err(|e| e.to_string())
+            })
+            .map_err(anyhow::Error::msg)
+    }
     fn observed_entries(
         &self,
     ) -> anyhow::Result<Vec<twodrive_local_files::native::persistent::NativeEntry>> {
-        let mut entries = self.owner.inventory().map_err(anyhow::Error::msg)?;
+        let mut entries = self.inventory_entries()?;
         let receipt = serde_json::to_string(self.receipt())?;
         let mut kept = Vec::with_capacity(entries.len());
         for entry in entries.drain(..) {
+            self.control.checkpoint("local.inventory.filter")?;
             if entry.identity.is_none()
                 && Self::is_untracked_artifact(&entry.relative_path, entry.directory)
                 && self
@@ -617,6 +642,7 @@ impl NativeCoordinator {
     /// Coalesce complete same-path replacements before consuming old physical
     /// delete notifications. The new immutable snapshot is durable first.
     pub fn synchronize_once(&mut self) -> anyhow::Result<SyncProgress> {
+        self.control.checkpoint("local.begin")?;
         self.drain_observations()?;
         let imports = self.resume_source_imports()?;
         // Deferred replicas must not starve ordinary native reconciliation.
@@ -701,6 +727,7 @@ impl NativeCoordinator {
                 });
             }
         }
+        self.control.checkpoint("local.deletions")?;
         let deletion = self.synchronize_deletions()?;
         if deletion.waiting != 0 {
             return Ok(SyncProgress {
@@ -712,6 +739,7 @@ impl NativeCoordinator {
             });
         }
         let deleted = deletion.deleted;
+        self.control.checkpoint("local.renames")?;
         let renamed = self.synchronize_renames()?;
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
@@ -736,6 +764,7 @@ impl NativeCoordinator {
             .iter()
             .filter(|p| !p.directory && p.state == "published")
         {
+            self.control.checkpoint("local.replacements.scan")?;
             let relative = Self::relative(&projection.path)?;
             let Some(entry) = by_path
                 .get(relative.as_path())
@@ -771,6 +800,7 @@ impl NativeCoordinator {
         }
         let events = db.pending_native_events(&binding, 1000)?;
         for (_, payload) in &events {
+            self.control.checkpoint("local.events")?;
             let event: twodrive_local_files::native::persistent::NativeEvent =
                 serde_json::from_str(payload)?;
             ensure!(
@@ -805,6 +835,7 @@ impl NativeCoordinator {
             ..Default::default()
         };
         for (projection, relative, current_id) in candidates.values() {
+            self.control.checkpoint("local.replacement")?;
             let id = &projection.local_id;
             if self
                 .bridge
@@ -873,6 +904,7 @@ impl NativeCoordinator {
             .map(|p| p.local_id.as_str())
             .collect::<HashSet<_>>();
         for entry in entries {
+            self.control.checkpoint("local.create")?;
             let path = Self::cloud_path(&entry.relative_path)?;
             let existing = records_by_path.get(path.as_str()).copied();
             if existing
@@ -906,6 +938,7 @@ impl NativeCoordinator {
         if progress.needs_namespace || progress.deferred != 0 {
             return Ok(progress);
         }
+        self.control.checkpoint("local.data")?;
         let mut data = self.synchronize_known_files_once()?;
         data.replacements = progress.replacements;
         data.created = progress.created;
@@ -987,6 +1020,7 @@ impl NativeCoordinator {
             last_successful_watch: None,
             last_residency_watch: None,
             residency_pending: false,
+            control: Default::default(),
             watcher: None,
             owner,
             _source: source,
@@ -1019,6 +1053,7 @@ impl NativeCoordinator {
             last_successful_watch: None,
             last_residency_watch: None,
             residency_pending: false,
+            control: Default::default(),
             owner,
             _source: source,
             bridge,
@@ -1053,6 +1088,7 @@ impl NativeCoordinator {
             last_successful_watch: None,
             last_residency_watch: None,
             residency_pending: false,
+            control: Default::default(),
             owner,
             _source: source,
             bridge,
@@ -1091,6 +1127,7 @@ impl NativeCoordinator {
         });
         let binding = self.binding()?.to_string();
         for record in &records {
+            self.control.checkpoint("local.bootstrap")?;
             let id = &record.metadata.remote_id;
             let existing = self.bridge.journal().native_projection_for_id(id)?;
             if let Some(p) = existing.as_ref().filter(|p| p.state == "published") {
@@ -1188,6 +1225,7 @@ impl NativeCoordinator {
         }
         let mut work = Vec::new();
         for entry in entries {
+            self.control.checkpoint("local.data.scan")?;
             let Some(projection) = entry
                 .identity
                 .as_deref()
@@ -1235,6 +1273,7 @@ impl NativeCoordinator {
             }
         }
         for (entry, projection) in work {
+            self.control.checkpoint("local.data.apply")?;
             if !db.pending_native_events(&binding, 1)?.is_empty() {
                 progress.needs_namespace = true;
                 break;
@@ -1328,6 +1367,7 @@ impl NativeCoordinator {
     }
     fn drain_observations(&mut self) -> anyhow::Result<()> {
         for _ in 0..1000 {
+            self.control.checkpoint("local.observations")?;
             if !self.poll_observations(0)? {
                 return Ok(());
             }
@@ -1345,6 +1385,7 @@ impl NativeCoordinator {
             .map(|p| (p.tag.as_slice(), p))
             .collect::<HashMap<_, _>>();
         for entry in entries {
+            self.control.checkpoint("local.data.scan")?;
             let tag = entry
                 .identity
                 .as_deref()
@@ -1371,6 +1412,7 @@ impl NativeCoordinator {
         let binding = self.binding()?.to_string();
         let db = self.bridge.journal().database().clone();
         for _ in 0..3 {
+            self.control.checkpoint("local.bootstrap.verify")?;
             self.drain_observations()?;
             let watcher = self.watcher.as_ref().context("native watcher stopped")?;
             let before = watcher.state().map_err(anyhow::Error::msg)?;
@@ -1407,6 +1449,10 @@ impl NativeCoordinator {
             .map_err(anyhow::Error::msg)
     }
 }
+
+#[cfg(all(test, feature = "native-test-hooks"))]
+#[path = "native_cancellation_tests.rs"]
+mod cancellation_tests;
 
 #[cfg(all(test, feature = "native-test-hooks"))]
 mod tests {

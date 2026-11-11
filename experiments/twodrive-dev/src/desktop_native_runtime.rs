@@ -295,9 +295,26 @@ mod enabled {
             let identity = provider.graph.readonly_identity(&mut || Ok(()))?;
             let mut session = NativeSession::resume(&root.state)?;
             ensure!(session.owner_matches(&identity), "CFAPI 登录账号已改变");
-            session.coordinator.verify_bootstrap_inventory()?;
+            let runtime_state = State::new(root.state.clone())?;
+            let previously_ready =
+                match std::fs::symlink_metadata(root.state.join("desktop-ready.json")) {
+                    Ok(marker) => {
+                        ensure!(
+                            marker.is_file() && !marker.file_type().is_symlink(),
+                            "invalid native readiness marker"
+                        );
+                        ensure!(
+                            runtime_state.read::<bool>("desktop-ready.json")?,
+                            "invalid native readiness marker"
+                        );
+                        true
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(error.into()),
+                };
+            session.coordinator.verify_desktop_start(previously_ready)?;
             session.coordinator.disconnect()?;
-            State::new(root.state.clone())?.save("desktop-ready.json", &true)?;
+            runtime_state.save("desktop-ready.json", &true)?;
             drop(session);
             let log = std::fs::OpenOptions::new()
                 .append(true)

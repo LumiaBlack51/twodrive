@@ -3,6 +3,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'client.dart';
 import 'file_manager.dart';
+import 'native_progress.dart';
 
 class CfapiPage extends StatefulWidget {
   const CfapiPage({super.key, required this.client});
@@ -82,6 +83,7 @@ class _CfapiPageState extends State<CfapiPage> {
     final retryPrepare = state['retry_prepare'] == true;
     final running = state['running'] == true;
     final progress = state['progress'] as Map? ?? {};
+    final workLabel = running ? nativeWorkLabel(progress) : null;
     final summary = progress['summary'] as Map? ?? {};
     final syncIssue =
         progress['local']?['error'] ??
@@ -244,12 +246,14 @@ class _CfapiPageState extends State<CfapiPage> {
                       ),
                     ),
                   Text(
-                    progress['phase'] == 'paused'
-                        ? '已暂停自动同步'
-                        : running
-                        ? '正在监测本地与云端变化'
-                        : '原生目录保留，等待启动',
+                    workLabel ??
+                        (progress['phase'] == 'paused'
+                            ? '已暂停自动同步'
+                            : running
+                            ? '正在监测本地与云端变化'
+                            : '原生目录保留，等待启动'),
                   ),
+                  if (workLabel != null) const Text('本轮尚未完成，统计来自最近一次检查。'),
                   const SizedBox(height: 8),
                   Text(
                     '文件 ${summary['catalogue_files'] ?? '—'} · 目录 ${summary['catalogue_directories'] ?? '—'} · 待处理 ${summary['durable_work_items'] ?? '—'}',
@@ -262,7 +266,13 @@ class _CfapiPageState extends State<CfapiPage> {
                 if (preparing)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: Text(working ? '原生目录正在后台准备，原有挂载继续运行。' : retryPrepare ? '上次准备在所有者建立前中断，可保留诊断并重试。' : '准备尚未完成，可继续校验现有原生目录。'),
+                    child: Text(
+                      working
+                          ? '原生目录正在后台准备，原有挂载继续运行。'
+                          : retryPrepare
+                          ? '上次准备在所有者建立前中断，可保留诊断并重试。'
+                          : '准备尚未完成，可继续校验现有原生目录。',
+                    ),
                   ),
                 if (working)
                   const Padding(

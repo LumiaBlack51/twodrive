@@ -46,6 +46,10 @@ on:
         type: choice
         options: [all, linux, windows]
         default: all
+      native_stop_fixture:
+        description: 'Run disposable Windows CFAPI stop/restart fixtures (registers temporary roots)'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -168,6 +172,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native runtime installer staging recovery (generated task only)
         run: ./experiments/twodrive-dev/scripts/test-native-runtime-installer.ps1
+      - name: Opt-in large-catalogue native stop and restart (generated roots only)
+        if: github.event_name == 'workflow_dispatch' && inputs.native_stop_fixture
+        run: ./scripts/test-native-runtime-cancellation.ps1 -RootParent '${{ runner.temp }}'
       - name: Windows IPC, file transfer, backups and autostart isolation
         run: |
           python scripts/test-local-file-preflight.py --engine experiments/twodrive-dev/target/release/twodrive-dav-engine.exe

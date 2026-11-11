@@ -16,6 +16,7 @@ const OBJECT: &str = "opaque-object-not-a-path";
 const REMOTE_PATH: &str = "/generated-中文.txt";
 const INITIAL: &[u8] = b"generated initial provider content";
 const EDITED: &[u8] = b"generated unsynchronized content survives complete-byte checks";
+type DirectoryHook = Arc<dyn Fn() + Send + Sync>;
 struct Remote {
     path: String,
     present: bool,
@@ -24,6 +25,7 @@ struct Remote {
 }
 #[derive(Clone)]
 pub(crate) struct MockProvider {
+    directory_hook: Arc<Mutex<Option<DirectoryHook>>>,
     extras: Arc<Mutex<std::collections::HashMap<String, Remote>>>,
     allow_extras: bool,
     folders: Arc<Mutex<Vec<MetadataEntry>>>,
@@ -34,8 +36,13 @@ pub(crate) struct MockProvider {
     upload_calls: Arc<AtomicUsize>,
 }
 impl MockProvider {
+    #[cfg(all(windows, feature = "native-test-hooks"))]
+    pub(crate) fn on_directory_create(&self, hook: DirectoryHook) {
+        *self.directory_hook.lock().unwrap() = Some(hook);
+    }
     pub(crate) fn new() -> Self {
         Self {
+            directory_hook: Arc::default(),
             extras: Arc::default(),
             allow_extras: false,
             folders: Arc::default(),
@@ -373,6 +380,10 @@ impl Provider for MockProvider {
             "folder-v1",
         );
         folders.push(entry.clone());
+        drop(folders);
+        if let Some(hook) = self.directory_hook.lock().unwrap().clone() {
+            hook();
+        }
         Ok(entry)
     }
     fn capabilities(&self) -> Capabilities {

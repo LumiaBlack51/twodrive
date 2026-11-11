@@ -23,6 +23,7 @@ impl NativeCoordinator {
             .into_iter()
             .filter(|u| u.local_modified_filetime.is_some())
         {
+            self.control.checkpoint("local.import.replay")?;
             let events = self
                 .bridge
                 .journal()
@@ -32,6 +33,7 @@ impl NativeCoordinator {
             let mut cancelled = false;
             let mut namespace_failure = None;
             for (sequence, payload) in events {
+                self.control.checkpoint("local.import.events")?;
                 let event: twodrive_local_files::native::persistent::NativeEvent =
                     serde_json::from_str(&payload)?;
                 if event.schema_version != 1
@@ -77,6 +79,7 @@ impl NativeCoordinator {
             }
         }
         for import in self.bridge.journal().native_source_imports(&binding)? {
+            self.control.checkpoint("local.import.apply")?;
             match self.apply_source_import(&import) {
                 Ok(true) => progress.imported += 1,
                 Ok(false) => progress.isolated += 1,
