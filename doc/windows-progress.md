@@ -2,6 +2,10 @@
 
 ## 当前接续点
 
+2026-11-11：补齐默认“同步总览”和托盘 Dashboard 入口，集中展示多账号目录、
+缓存与真实 CFAPI 状态；构建 7ca58d931f25 已安装并重开验证，Flutter 117 项通过。
+四挂载与 CFAPI 自动恢复验收通过，详见[本轮整合说明](windows-linux-0.2.24-integration.md)。
+
 2026-11-10：Windows 桌面已完整整合 Linux 0.2.24 main 与 Windows 最新 dev，
 新增 CFAPI 管理页、挂载排除和大目录可靠性修复。本机部署及真实账户验证见
 [本轮整合说明](windows-linux-0.2.24-integration.md)；以下保留各阶段历史边界。
