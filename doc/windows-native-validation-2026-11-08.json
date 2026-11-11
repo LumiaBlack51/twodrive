@@ -1,0 +1,709 @@
+{
+  "date": "2026-11-08",
+  "timezone": "Asia/Shanghai",
+  "scope": "preparatory native CFAPI and Office components, not completed takeover",
+  "native_capture": {
+    "generated_real_cfapi_root": true,
+    "normal_os_hydration": true,
+    "same_length_edit_capture": true,
+    "conditional_mock_upload_and_full_bytes": true,
+    "owned_root_unregistered": true
+  },
+  "persistent_root": {
+    "cached_reads_after_disconnect": true,
+    "online_only_entries_retained": true,
+    "hydration_after_resume": true,
+    "wrong_root_receipt_rejected": true,
+    "metadata_publication_did_not_hydrate": true,
+    "traversal_reserved_names_and_existing_file_replacement_rejected": true,
+    "production_account_restart_recovery": false
+  },
+  "office": {
+    "version": "Microsoft 365 x64 16.0.20527.20112",
+    "word_excel_powerpoint_native_save_and_actual_sta_timer": true,
+    "persisted_ooxml_verified": true,
+    "real_generated_cfapi_root_guard": true,
+    "normal_office_registration_changed": false,
+    "registered_com_load_and_ribbon_verified": false,
+    "office_document_to_real_cloud_pipeline_verified": false
+  },
+  "real_personal_onedrive": {
+    "independent_explicit_login": true,
+    "owner_matches_current_personal_client": true,
+    "bytes": 1048699,
+    "native_hydration": true,
+    "native_edit_capture": true,
+    "conditional_upload": true,
+    "full_cloud_readback": true,
+    "stale_version_rejected": true,
+    "only_new_generated_cloud_scope_used": true,
+    "cloud_fixture_removed_with_ordinary_delete": true,
+    "native_fixture_unregistered_and_removed": true,
+    "user_work_files_used": false
+  },
+  "takeover": {
+    "microsoft_onedrive_stopped": false,
+    "original_folder_replaced": false,
+    "production_native_mount_enabled": false,
+    "complete": false,
+    "remaining": [
+      "normal logon startup and Shell presentation",
+      "conflict recovery interface",
+      "registered COM/ribbon and open-editor cloud save acceptance",
+      "source-resident data preservation and tested rollback/cutover"
+    ],
+    "personal_vault_scope": "user confirmed unused; excluded"
+  },
+  "review": {
+    "maintainer_approval_claimed": false,
+    "user_waived_waiting_for_maintainer_review": true,
+    "dot_review_received": true,
+    "addressed_findings": [
+      "durable root checkpoint before first registration/connection",
+      "recovery-copy tombstone precedence",
+      "preserve an imported different recovery-copy version",
+      "only actual pending writes override remote inode attributes",
+      "refresh cached read retention"
+    ],
+    "native_checkpoint_recovery_and_nested_publication": "passed on actual Windows with generated roots; rejects mismatched IDs and junction parents",
+    "windows_core_fs_default": {
+      "core": 58,
+      "filesystem": 23
+    },
+    "strict_clippy": "Windows core/fs and CFAPI, Linux core/fs passed",
+    "remaining": "final CI and follow-up review for this revision; full native takeover is still incomplete",
+    "followup_deletion_completion_evidence": true,
+    "followup_failed_close_releases_handle": true,
+    "linux_core_fs_default": {
+      "core": 59,
+      "filesystem": 80,
+      "ignored_environment": 11
+    },
+    "pinned_cache_mismatch_records_dirty_recovery": true,
+    "known_folder_ci_timing_test_fixed": "Condvar requires two actual upload entrants; local daemon seven tests and strict Clippy passed",
+    "ancestor_recovery_ci_test_fixed": "fixed queued timestamps reproduce the old one-pass assumption; bounded passes retain exact completion, content, restart and parent-first assertions",
+    "delete_and_backup_recovery_followup": {
+      "schema_4_actual_legacy_json": [
+        "prepared",
+        "dispatched",
+        "received"
+      ],
+      "native_restart": [
+        "completion_commit",
+        "reverted_backup_deleted",
+        "reverted_backup_moved_out"
+      ],
+      "unrelated_work_progresses": true,
+      "backup_event_future_and_unrelated_rows_preserved": true,
+      "cloud_backend_for_recovery_regressions": "mock",
+      "cache_schema": 6
+    },
+    "pending_remote_private_writer_fence": {
+      "old_code_failed_two_contracts": true,
+      "update_and_removal_prepare_and_restart_fence_passed": true
+    },
+    "pin_followup_8788": {
+      "explicit_and_inherited_directory_move_delete": true,
+      "newer_release_during_remote_recovery": true,
+      "legacy_pin_flag_state_restart": true,
+      "flags_derived_state_transaction_rollback": true,
+      "native_cloud_backend": "mock"
+    },
+    "source_import_followup_0ad3": {
+      "native_edit_and_unrelated_rename_restart_progress": true,
+      "source_snapshot_alias_private_writer_veto": true,
+      "target_release_between_time_update_and_pin_restore": true,
+      "relocation_collision_source_resume_foreign_sentinel_preserved": true,
+      "prior_hydration_exact_filetime_and_pin": true,
+      "installer_first_and_owned_reinstall": true,
+      "disabled_after_registration_interruption": true,
+      "rejected_candidate_preserves_previous_task_binary": true,
+      "journal_contracts": 40
+    }
+  },
+  "cleanup": {
+    "office_fixture_processes_and_roots_cleaned": true,
+    "live_cloud_validation_scope_cleaned": true,
+    "earlier_unregistered_generated_files_and_disposable_old_login_copy": "moved to Recycle Bin after user authorization; 8 directories verified there",
+    "build_caches": "earlier caches recycled; a new scoped validation build exists for the Linux recovery port and will be recycled after checks",
+    "office_bytecode_and_test_binaries_recycled": {
+      "directories": 3,
+      "files": 2
+    },
+    "additional_resized_generated_roots_recycled_and_verified": 4,
+    "namespace_recovery_recycled_verified": {
+      "empty_directories": 4,
+      "receipt_files": 2,
+      "one_off_source_files": 1
+    },
+    "event_fixture_recovery_recycled_verified": {
+      "empty_directories": 1,
+      "receipt_files": 1,
+      "one_off_source_files": 1
+    }
+  },
+  "linux_recovery_port": {
+    "source_commit": "a64ce65c8282398aafa79e66f8279b518e8d6e1c",
+    "scope": "selected core/fs/backend storage fixes and tests; no whole main merge, package/version changes or known-folder throttling port",
+    "linux_default_tests": {
+      "backend": 54,
+      "backend_contract": 2,
+      "core": 56,
+      "filesystem": 75,
+      "environment_tests_ignored_in_default_run": 11
+    },
+    "explicit_mock_fuse_tests": {
+      "passed": 11,
+      "first_attempt": {
+        "passed": 9,
+        "failed_due_to_setup": 2
+      },
+      "corrected_tests": "unprivileged permission oracle and explicit built CLI"
+    },
+    "native_journal_tests": 18,
+    "new_native_reference_cleanup_veto": true,
+    "native_source_mtime_preserved": true,
+    "windows_fixture_drop_order_regression": true,
+    "full_cfapi_takeover": false,
+    "linux_workspace_default": {
+      "passed": 223,
+      "ignored": 12
+    },
+    "windows_shared_default": {
+      "backend": 54,
+      "backend_contract": 2,
+      "core": 55,
+      "filesystem": 21
+    },
+    "windows_preview_engine_tests": 11,
+    "windows_preview_native_ipc": "passed after porting current published-cache-path assertions"
+  },
+  "native_resize_and_acknowledgement": {
+    "sizes": [
+      5,
+      0,
+      131079,
+      34
+    ],
+    "actual_windows_cfapi": true,
+    "cloud_backend": "MockProvider",
+    "old_code_failed_shrink": true,
+    "full_byte_and_mtime_checks": true,
+    "later_same_size_edit_refuses_stale_sync_ack": true,
+    "pinned_sync_ack_retains_release_veto": true,
+    "journal_tests_passed": 19,
+    "live_graph_variable_size": {
+      "passed": true,
+      "tested_sizes": [
+        5,
+        0,
+        1056892,
+        1048699
+      ],
+      "conditional_upload": true,
+      "full_cloud_readback": true,
+      "native_in_sync_state": true,
+      "stale_version_refused": true,
+      "cloud_and_native_generated_scope_cleaned": true
+    }
+  },
+  "native_atomic_replacement": {
+    "actual_windows": true,
+    "backend": "MockProvider",
+    "busy_reader_deferral": true,
+    "ordinary_file_conversion_preserves_all_bytes": true,
+    "foreign_identity_refused": true,
+    "restart_after_conversion_before_journal_publish": true,
+    "full_conditional_upload_and_native_ack": true,
+    "generated_root_cleaned": true,
+    "actual_office_to_cloud": false
+  },
+  "office_open_document_probe": {
+    "hosts": [
+      "Word",
+      "Excel",
+      "PowerPoint"
+    ],
+    "local_save_and_sta_timer": "passed",
+    "exclusive_reader": "busy in all three while document open",
+    "read_oplock_acquisition": "available in all three; coherent snapshot not yet established",
+    "all_generated_processes_and_roots_cleaned": true
+  },
+  "native_namespace_observation": {
+    "actual_windows_generated_test": true,
+    "ordinary_additions_and_cloud_metadata": true,
+    "rename_and_move_out_by_file_id": true,
+    "foreign_volume_and_junction_refused": true,
+    "hydration_callbacks": 0,
+    "deleted_file_id_error_87": "unresolved; not treated as deletion authorization",
+    "cloud_mutation_worker_enabled": false,
+    "effective_directory_only_parent_leases": true,
+    "queued_ancestor_identity_chain_revalidated": true,
+    "old_race_oracles_failed": 2,
+    "native_race_regressions_passed": 3
+  },
+  "native_operation_events": {
+    "actual_windows_external_process": true,
+    "failed_persistence_denies_rename": true,
+    "placeholder_rename_and_delete_requested_and_completed": true,
+    "identity_volume_and_root_checked": true,
+    "queue_survives_restart": true,
+    "owner_and_sequence_prefix_acknowledgement": true,
+    "portable_sqlite_failure_and_restart_tests": "Windows and Linux passed",
+    "ordinary_unconverted_file_event_count": 0,
+    "provider_own_io_is_not_application_notification": true,
+    "cloud_consumer_connected": false
+  },
+  "readonly_personal_catalogue": {
+    "pages": 202,
+    "entries": 20159,
+    "files": 12733,
+    "folder_items": 7426,
+    "unsupported_indexer_objects": 0,
+    "logical_file_bytes": 105678248836,
+    "content_downloaded": false,
+    "cloud_mutations": false,
+    "native_root_registered": false,
+    "private_catalogue_retained": true,
+    "host_appdata_resolved_under_package_localcache": true
+  },
+  "office_to_cloud_generated_validation": {
+    "hosts": [
+      "Word",
+      "Excel",
+      "PowerPoint"
+    ],
+    "actual_sta_timer_save": true,
+    "actual_personal_onedrive": true,
+    "initial_generated_baseline_then_conditional_final_version": true,
+    "full_cloud_readback": true,
+    "native_sync_acknowledgement": true,
+    "editors_closed_before_capture": true,
+    "generated_cloud_and_native_scopes_retired": true,
+    "registered_addin_or_whole_root_coordinator": false
+  },
+  "native_cold_replacement": {
+    "old_code_failed": true,
+    "no_old_content_download": true,
+    "dirty_generation": 1,
+    "stale_hydration_rejected": true,
+    "baseline_cache_and_delete_change_vetoes": true
+  },
+  "native_new_file": {
+    "stable_local_id_then_real_cloud_binding": true,
+    "creation_intent_precedes_native_conversion": true,
+    "restart_after_conversion_before_snapshot": true,
+    "mock_lost_reply_and_same_name_conflict": true,
+    "actual_personal_onedrive_create_only_and_full_readback": true,
+    "schema": 3,
+    "schema_2_upgrade": true,
+    "generated_scopes_retired": true,
+    "production_worker_enabled": false,
+    "current_journal_schema": 4
+  },
+  "ordinary_directory_watch": {
+    "actual_windows_create_write_rename_delete": true,
+    "file_and_parent_ids_preserved": true,
+    "no_hydration": true,
+    "pending_io_drained_on_drop": true,
+    "durable_batch_before_consumer": true,
+    "restart_and_overflow_require_inventory": true,
+    "stale_scan_watermark_cannot_clear_new_changes": true,
+    "sqlite_partial_batch_rolls_back": true,
+    "cloud_deletion_authority": false
+  },
+  "published_native_source": {
+    "immutable_published_version_before_download": true,
+    "one_verified_cache_lease_per_cfapi_fetch": true,
+    "cancellation_registered_before_download": true,
+    "unpublished_cloud_version_refused": true,
+    "corruption_preserved_for_recovery": true,
+    "real_personal_cloud_four_sizes_and_cleanup": true,
+    "persistent_projection_delta_coordinator": false
+  },
+  "zero_call_upload_rejection": {
+    "old_regression_failed": true,
+    "no_provider_invocation_when_paused": true,
+    "dirty_retry_survives_restart": true,
+    "same_local_identity_full_content_and_cloud_binding": true,
+    "ambiguous_provider_failures_stay_fenced": true
+  },
+  "native_reader_availability": {
+    "old_callback_regression_failed": true,
+    "offline_and_stopping_block_reader_initialization": true,
+    "active_request_cleanup": true,
+    "test_os_transfer_boundary_replaced": true
+  },
+  "conditional_namespace": {
+    "explicit_drive_item_and_parent_ids": true,
+    "http_contracts_windows_linux": 3,
+    "windows_backend_unit_tests": 57,
+    "windows_backend_contract_tests": 2,
+    "real_personal_onedrive": true,
+    "name_conflict_preserves_both_contents": true,
+    "cross_parent_move_stable_id_full_bytes": true,
+    "deliberately_noncurrent_tag_move_and_delete_refused": true,
+    "generated_scope_retired": true,
+    "retained_local_scope_recycled": true,
+    "native_consumer_enabled": false,
+    "concurrent_folder_delete_child_insert_tested": false
+  },
+  "readonly_native_name_preflight": {
+    "entries_excluding_root": 20158,
+    "max_depth": 19,
+    "max_path_utf16": 295,
+    "paths_at_least_260_utf16": 11,
+    "ordinal_ignorecase_sibling_collisions": 0,
+    "content_read": false,
+    "cloud_mutations": false,
+    "catalogue_snapshot_only": true,
+    "invalid_names": 0,
+    "reserved_device_aliases": 0,
+    "ooxml_files": 284,
+    "ooxml_max_path_utf16": 157,
+    "ooxml_paths_at_least_260_utf16": 0
+  },
+  "native_long_path": {
+    "actual_windows_generated_cfapi_root": true,
+    "path_longer_than_295_utf16": true,
+    "nested_publication_hydration_inventory_resume": true,
+    "generated_root_retired": true,
+    "office_long_paths_tested": false
+  },
+  "native_name_validator": {
+    "old_superscript_device_alias_test_failed": true,
+    "fixed_windows_linux_unit_test": true,
+    "shared_by_native_publication": true
+  },
+  "native_namespace_plan": {
+    "verified_drive_root_id": true,
+    "account_verified_metadata_audit": true,
+    "planned_entries": 20158,
+    "parent_first": true,
+    "cycles_orphans_duplicates_bad_names_and_host_comparison_errors_refused": true,
+    "windows_ordinal_comparison": true,
+    "content_read": false,
+    "cloud_mutations": false,
+    "root_registered": false,
+    "catalogue_snapshot_only": true
+  },
+  "graph_root_metadata": {
+    "live_http_400_reproduced": true,
+    "old_http_url_regression_failed": true,
+    "fixed_live_metadata_plan_passed": true
+  },
+  "bound_native_publication": {
+    "schema": 4,
+    "upgrade_from_2_and_3": true,
+    "durable_preparing_and_published": true,
+    "physical_binding_and_unique_tag_required": true,
+    "changed_version_pending_event_and_duplicate_file_vetoes": true,
+    "windows_linux_journal_contracts": 24,
+    "actual_generated_cfapi_physical_duplicate_refused": true,
+    "os_dehydration_with_private_clean_lease_and_restart_rehydration": true,
+    "private_cache_retained": true,
+    "generated_scope_retired": true,
+    "real_cloud_for_bound_source": false,
+    "writable_coordinator_enabled": false
+  },
+  "native_preserved_mtime_download": {
+    "old_code_regression_failed": true,
+    "same_cloud_version_different_server_timestamp_allowed": true,
+    "native_timestamp_cas_retained": true,
+    "mock_data_only": true
+  },
+  "publication_metadata_lease": {
+    "old_attributes_only_file_rename_test_failed": true,
+    "file_delete_access_share_check_zero_hydration": true,
+    "directory_only_lease_and_long_paths": true,
+    "callback_held_through_sqlite_completion": true
+  },
+  "upload_session_snapshot_fingerprint": {
+    "full_sha256": true,
+    "old_predicate_regression_failed": true,
+    "same_size_time_changed_content_refused": true,
+    "legacy_missing_digest_refused": true,
+    "windows_linux_regression": true,
+    "real_mixed_content_not_created": true
+  },
+  "personal_upload_session_midflight_race": {
+    "bytes": 20971643,
+    "concurrent_update_after_first_fragment": true,
+    "old_session_http_status": 404,
+    "original_etag_retry_http_412": true,
+    "concurrent_full_bytes_and_etag_preserved": true,
+    "scope_and_isolated_credentials_cleaned": true
+  },
+  "native_sync_only_windows": {
+    "old_compile_failed": true,
+    "fixed_contracts_passed": 21,
+    "hosted_gate_added": true
+  },
+  "writable_mapping_capture": {
+    "generated_actual_cfapi": true,
+    "original_file_handle_closed_view_still_alive": true,
+    "capture_body_not_entered": true,
+    "scope_retired": true,
+    "all_mapping_models_certified": false
+  },
+  "native_initial_coordinator": {
+    "generated_nested_tree_materialization": true,
+    "parent_first_directory_and_file_binding": true,
+    "watcher_rescan_and_sequence_bounded_ack": true,
+    "sealed_dpapi_configuration": true,
+    "resume_cached_native_read_without_credentials": true,
+    "uncached_missing_authority_refused": true,
+    "normal_profile_modified": false,
+    "production_takeover_enabled": false
+  },
+  "native_projected_data_sync": {
+    "watcher_driven_in_place_edit": true,
+    "separate_process_atomic_replacement": true,
+    "mock_conditional_backend": true,
+    "same_cloud_identity_retained": true,
+    "capture_binding_atomic_with_snapshot": true,
+    "native_and_private_digests_before_publication_advance": true,
+    "real_cloud_coordinator_tested": false
+  },
+  "native_callback_shutdown": {
+    "old_owner_lock_regression_failed": true,
+    "callback_scopes_drained_before_source_drop": true,
+    "owner_lock_reacquired_without_cleanup_sleep": true,
+    "unit_gate_test_passed": true
+  },
+  "native_directory_creation": {
+    "actual_cfapi": true,
+    "backend": "mock",
+    "automatic_parent_first_directory_depth": 2,
+    "automatic_file_creation": true,
+    "dehydrate_readback": true,
+    "dispatch_fence_survives_restart": true,
+    "foreign_physical_binding_ack_refused": true,
+    "live_cloud_creation_not_run": false,
+    "live_personal_onedrive": {
+      "automatic_parent_first_directories": 2,
+      "automatic_create_only_file": true,
+      "native_and_cloud_full_byte_readback": true,
+      "generated_scopes_retired": true,
+      "copied_credentials_retired": true
+    }
+  },
+  "native_rename": {
+    "actual_cfapi_external_child": true,
+    "directory_and_file_move_mock": true,
+    "actual_personal_onedrive_directory_and_file_move": true,
+    "opaque_id_and_complete_bytes_preserved": true,
+    "partial_linux_metadata_commit_recovery_mock": true,
+    "uncertain_move_refused_blind_retry": true,
+    "idle_watcher_resume_test_pending": false,
+    "idle_then_external_rename_wakes_worker": true
+  },
+  "replacement_upload_recovery": {
+    "old_actual_native_test_failed": true,
+    "old_cache_files_before": 4,
+    "old_cache_files_after_three_retries": 7,
+    "success_after_owner_restart": true,
+    "conflict_after_owner_restart": true,
+    "generation_preserved": true,
+    "no_extra_capture_files": true,
+    "backend": "mock"
+  },
+  "complete_account_staging": {
+    "production_cutover": false,
+    "original_personal_client_running": true,
+    "catalogue_files": 12735,
+    "catalogue_directories": 7425,
+    "published": 20160,
+    "logical_bytes": 105679168641,
+    "private_content_cache_files": 0,
+    "initial_full_native_inventory": true,
+    "independent_process_resume_inventory": true,
+    "limited_unpacked_process_resume_inventory": true,
+    "unpacked_launcher_package_query_status": 15700,
+    "temporary_scheduler_task_removed": true,
+    "bounded_observation_without_mutation_consumers": true,
+    "post_observation_full_inventory": true,
+    "durable_work_items": 0,
+    "pending_native_event_batch": 0
+  },
+  "owned_artifact_creation_recovery": {
+    "old_native_regression_failed": true,
+    "converted_paused_creation_resumes_after_restart": true,
+    "prepared_only_claim_resumes_after_restart": true,
+    "fresh_artifacts_remain_ordinary": true,
+    "backend": "mock"
+  },
+  "native_file_delete": {
+    "actual_cfapi_external_child": true,
+    "actual_personal_onedrive_conditional_recycle": true,
+    "old_completion_request_key_assumption_failed": true,
+    "completion_zero_key_identity_matching": true,
+    "different_nonzero_key_refused": true,
+    "exact_proof_and_version_required": true,
+    "uncertain_dispatch_not_blindly_retried": true,
+    "private_revisions_archived": true,
+    "retired_cache_pruning_preserves_archive": true,
+    "no_op_waits_for_delete_capable_handle": true,
+    "generated_scopes_retired": true,
+    "directory_delete_not_implemented": true
+  },
+  "native_directory_delete": {
+    "actual_cfapi": true,
+    "actual_personal_onedrive": true,
+    "bottom_up_known_descendants": true,
+    "observed_nonempty_not_recycled": true,
+    "bound_parent_identity": true,
+    "personal_directory_ctag_missing_even_explicit_select": true,
+    "etag_fallback_directory_object_only": true,
+    "atomic_subtree_compare_not_claimed": true,
+    "generated_scopes_retired": true
+  },
+  "retained_backup_replacefile": {
+    "old_native_cloud_path_regression_failed": true,
+    "both_complete_snapshots_before_revert": true,
+    "private_backup_independent_owner": true,
+    "new_physical_publication_after_full_ack": true,
+    "restart_after_native_revert": true,
+    "original_cloud_id_and_path_kept": true,
+    "separate_backup_id_and_full_bytes": true,
+    "actual_personal_onedrive": true,
+    "cache_schema": 5
+  },
+  "delete_history_recovery": {
+    "preparation_and_history_ack_one_transaction": true,
+    "retained_intent_ack_replay": true,
+    "same_object_prior_rename_consumed": true,
+    "native_rename_delete_prepare_restart_passed": true
+  },
+  "remote_native_changes": {
+    "actual_cfapi_generated_mock_restart": [
+      "native_update_before_sql",
+      "rename_before_sql",
+      "native_delete_before_sql"
+    ],
+    "local_edits_preserved": true,
+    "actual_personal_generated_scope": [
+      "create",
+      "changed_length_content",
+      "directory_subtree_move",
+      "file_and_directory_remote_delete"
+    ],
+    "native_full_byte_readback": true,
+    "generated_scopes_retired": true,
+    "user_documents_used": false,
+    "automatic_conflict_copy": false
+  },
+  "native_residency_current_candidate": {
+    "actual_generated_cfapi_pin_hydration": true,
+    "clean_native_and_private_cache_release": true,
+    "readers_pins_dirty_native_and_private_corruption_veto": true,
+    "rehydration_after_release": true,
+    "actual_personal_generated_scope_pin_release_rehydrate": true,
+    "pinned_remote_same_path_rename_and_restart": true,
+    "native_pin_intent_does_not_forge_hydration_claim": true,
+    "windows_journal_contracts": 36
+  },
+  "continuous_runtime_current_candidate": {
+    "commands": [
+      "run",
+      "stop"
+    ],
+    "outside_codex_package_query": 15700,
+    "actual_complete_account_side_root": true,
+    "local_idle_remote_delta_and_residency_cycles": true,
+    "private_content_cache_files_after_validation": 0,
+    "cloud_metadata_creations_observed": 7,
+    "initial_local_cycle_ms": 24164,
+    "previous_initial_cycle_seconds": 156,
+    "one_shot_validation_tasks_removed": true,
+    "normal_logon_startup_installed": false,
+    "original_root_cutover": false
+  },
+  "source_preflight_current_candidate": {
+    "registry_personal_owner_matches_sealed_identity": true,
+    "metadata_only_files": 12745,
+    "metadata_only_directories": 7425,
+    "complete_clean_files": 2071,
+    "complete_clean_bytes": 734170010,
+    "incomplete_files": 10672,
+    "unsynchronized_files": 0,
+    "ordinary_files": 2,
+    "pinned_files": 5,
+    "source_context_empty_identity_supported_without_weakening_private_tags": true,
+    "cold_and_stale_residency_no_recall_regression": true,
+    "actual_original_source_sample": {
+      "files": 20,
+      "bytes_read": 440419,
+      "checksum_matches": 20,
+      "checksum_mismatches": 0,
+      "metadata_deferred": 0,
+      "source_deferred": 0,
+      "cloud_content_downloads": false,
+      "source_mutations": false
+    },
+    "full_import_completed": false,
+    "original_root_moved": false
+  },
+  "verified_source_import_current_candidate": {
+    "cache_schema": 7,
+    "cloud_files": 2070,
+    "bytes": 734168870,
+    "mismatches": 0,
+    "deferred": 0,
+    "isolated": 0,
+    "source_mutations": false,
+    "cloud_content_uploads": false,
+    "native_source_restart_with_provider_paused": true,
+    "local_filetime_retains_cache_and_pin": true,
+    "source_acl_original_unchanged": true,
+    "staged_access_dacl_matches_source": true,
+    "journal_contracts": 39,
+    "actual_full_metadata_inventory_after_import": {
+      "files": 12745,
+      "directories": 7425,
+      "published": 20170,
+      "logical_bytes": 105689431788
+    }
+  },
+  "owned_root_relocation_current_candidate": {
+    "native_cached_and_cold_root_roundtrip": true,
+    "sealed_intent_after_rename_before_config_commit_restart": true,
+    "full_account_staging_roundtrip_and_both_inventories": true,
+    "original_microsoft_folder_moved": false,
+    "microsoft_client_stopped": false
+  },
+  "native_startup_staged": {
+    "installer_parser_passed": true,
+    "installed_per_user_limited": true,
+    "enabled": false,
+    "runtime_copied_outside_build_cache": true,
+    "microsoft_client_changed": false,
+    "school_account_stop_authorization_pending": true
+  },
+  "staged_refresh_before_personal_only_handoff": {
+    "captured_date": "2026-11-08",
+    "original_client_running": true,
+    "school_sync_must_remain_running": true,
+    "actual_cutover_performed": false,
+    "catalogue_files": 12746,
+    "catalogue_directories": 7425,
+    "publications": 20171,
+    "logical_bytes": 105690027207,
+    "durable_work_items": 0,
+    "source_files": 12749,
+    "source_directories": 7425,
+    "all_cloud_paths_types_sizes_match_source": true,
+    "source_only_auxiliary_or_unused_vault_items": 3,
+    "verified_source_replicas": 2071,
+    "verified_replica_bytes": 759185275,
+    "new_replica_files": 1,
+    "new_replica_bytes": 25016405,
+    "source_mutations": false,
+    "source_copy_cloud_content_uploads": false,
+    "bounded_runtime_local_uploads": 0,
+    "bounded_runtime_transient_deferred": 1,
+    "later_refresh_recovered": true,
+    "transient_cause": "unconfirmed",
+    "logon_startup_enabled": false
+  }
+}

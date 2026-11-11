@@ -21,6 +21,8 @@ mod icloud;
 mod onedrive;
 #[path = "providers/paired.rs"]
 mod paired;
+#[path = "providers/smb.rs"]
+mod smb;
 
 pub struct Connection {
     pub backend: Backend,
@@ -37,7 +39,8 @@ pub fn catalog() -> Value {
         google::descriptor(),
         onedrive::descriptor(),
         baidu::descriptor(),
-        icloud::descriptor()
+        icloud::descriptor(),
+        smb::descriptor(),
     ])
 }
 pub(super) fn descriptor(kind: &str) -> anyhow::Result<Value> {
@@ -48,6 +51,7 @@ pub(super) fn descriptor(kind: &str) -> anyhow::Result<Value> {
         "onedrive" => Ok(onedrive::descriptor()),
         "icloud" => Ok(icloud::descriptor()),
         "baidu" => Ok(baidu::descriptor()),
+        "smb" => Ok(smb::descriptor()),
         _ => anyhow::bail!("unsupported provider: {kind}"),
     }
 }
@@ -70,6 +74,7 @@ pub fn prepare(p: &mut Profile, state: &twodrive_dev::state::State) -> anyhow::R
     descriptor(&p.kind)?;
     match p.kind.as_str() {
         "onedrive" => onedrive::prepare(p, state),
+        "smb" => smb::prepare(p, state),
         "peer" => paired::prepare(p, state),
         "google" => google::prepare(p, state),
         "icloud" => icloud::prepare(p, state),
@@ -105,6 +110,7 @@ pub fn validate(p: &Profile) -> anyhow::Result<()> {
         "onedrive" => onedrive::validate(p),
         "icloud" => icloud::validate(p),
         "baidu" => baidu::validate(p),
+        "smb" => smb::validate(p),
         _ => unreachable!(),
     }
 }
@@ -130,6 +136,9 @@ pub fn retain_secrets(p: &mut Profile, previous: Option<&Profile>, clear: bool) 
                 p.options.insert(key.into(), json!(old.option(key)));
             }
         }
+    }
+    if p.kind == "smb" {
+        smb::retain(p, previous, clear);
     }
     // Provider schemas define the only persisted options, so account switches
     // cannot accidentally retain another provider's credentials or IPC metadata.
@@ -167,12 +176,18 @@ pub fn public_profile(p: &Profile) -> Value {
         });
         value["account"] = json!(if account.is_empty() { &p.name } else { account });
         for field in d["fields"].as_array().unwrap() {
+            if field["internal"] == true {
+                continue;
+            }
             let key = field["key"].as_str().unwrap();
             if field["secret"] == true {
                 value[format!("{key}_saved")] = json!(!p.option(key).is_empty());
             } else if let Some(v) = p.options.get(key) {
                 value[key] = v.clone();
             }
+        }
+        if p.kind == "smb" {
+            value["password_saved"] = json!(Path::new(p.option("credential_state")).is_file());
         }
         let mut capabilities = d["capabilities"].clone();
         if !editable(p) {
@@ -202,10 +217,13 @@ pub fn connect(
     Ok(connection)
 }
 /// Cloud accounts edit by default, including legacy profiles saved as read-only.
-/// Paired devices retain the owner's exported grant. Remote authorization and
-/// each adapter's actual capabilities still decide which writes can succeed.
+/// Paired devices retain the owner's grant and SMB only supports reads.
 pub fn editable(p: &Profile) -> bool {
-    p.kind != "peer" || p.writable
+    match p.kind.as_str() {
+        "smb" => false,
+        "peer" => p.writable,
+        _ => true,
+    }
 }
 fn effective_access(p: &Profile) -> Profile {
     let mut effective = p.clone();
@@ -226,6 +244,7 @@ fn connect_raw(
         "onedrive" => onedrive::connect(p, cancel, network),
         "icloud" => icloud::connect(p, cancel, network),
         "baidu" => baidu::connect(p, cancel, network),
+        "smb" => smb::connect(p, cancel, network),
         _ => unreachable!(),
     }
 }
@@ -244,6 +263,9 @@ pub fn restore(p: &Profile, recipe: &Value, paused: &Path) -> anyhow::Result<Bac
         "onedrive" => onedrive::restore(p, recipe)?,
         "icloud" => icloud::restore(p, recipe)?,
         "baidu" => baidu::restore(p, recipe)?,
+        "smb" => {
+            anyhow::bail!("SMB requires explicit reconnect; persistent workers/mounts unavailable")
+        }
         _ => anyhow::bail!("unsupported provider"),
     };
     Ok(backend
@@ -259,6 +281,7 @@ pub fn resume(
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
 ) -> anyhow::Result<Connection> {
+    ensure!(p.kind != "smb", "SMB requires an explicit connection");
     ensure!(
         session["kind"].as_str() == Some(&p.kind)
             && session["revision"].as_str() == Some(&p.revision),
@@ -346,6 +369,7 @@ pub fn sign_out(p: &Profile) -> anyhow::Result<()> {
         "onedrive" => onedrive::sign_out(p)?,
         "icloud" => icloud::sign_out(p)?,
         "baidu" => baidu::sign_out(p)?,
+        "smb" => smb::sign_out(p)?,
         _ => {}
     }
     Ok(())

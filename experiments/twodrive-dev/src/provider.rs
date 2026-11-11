@@ -35,6 +35,17 @@ impl StorageUsage {
     }
 }
 
+/// Attached before a data mutation: Backend's local checks or the pinned native
+/// account's read-only authority check. Data-request and progress failures never
+/// receive this marker.
+#[derive(Debug)]
+pub(crate) struct TransferNotStarted;
+impl std::fmt::Display for TransferNotStarted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transfer rejected before provider invocation")
+    }
+}
+
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Capabilities {
     pub upload: bool,
@@ -50,6 +61,43 @@ impl Capabilities {
 }
 
 pub trait Provider: CloudBackend {
+    fn empty_directory_version_bound(
+        &self,
+        _entry: &MetadataEntry,
+        _parent_id: &str,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        anyhow::bail!("content-conditional empty-directory recycle unavailable")
+    }
+    fn create_directory_bound(
+        &self,
+        _parent: &MetadataEntry,
+        _path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        Err(
+            anyhow::anyhow!("conditional namespace creation unavailable")
+                .context(TransferNotStarted),
+        )
+    }
+    fn move_bound(
+        &self,
+        _entry: &MetadataEntry,
+        _parent: &MetadataEntry,
+        _path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        Err(anyhow::anyhow!("conditional namespace move unavailable").context(TransferNotStarted))
+    }
+    fn delete_bound(&self, _entry: &MetadataEntry) -> anyhow::Result<()> {
+        Err(
+            anyhow::anyhow!("conditional namespace deletion unavailable")
+                .context(TransferNotStarted),
+        )
+    }
+    /// Optional protocol process control, used by bounded desktop operations.
+    fn set_operation_cancel(&self, _cancel: Arc<std::sync::atomic::AtomicBool>) {}
+    /// Adapters without a persistent version/cache contract may forbid mounts.
+    fn supports_mount(&self) -> bool {
+        true
+    }
     fn capabilities(&self) -> Capabilities;
     /// This provider resolves item metadata through a shallow parent listing.
     /// The mount can share that listing across display requests.
@@ -136,6 +184,65 @@ pub struct Backend {
     write_guard: Option<(PathBuf, String)>,
 }
 impl Backend {
+    pub fn empty_directory_version_bound(
+        &self,
+        entry: &MetadataEntry,
+        parent_id: &str,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.check_pause()?;
+        ensure!(
+            entry.is_dir && entry.path != "/" && !parent_id.is_empty(),
+            "invalid directory recycle scope"
+        );
+        self.inner.empty_directory_version_bound(entry, parent_id)
+    }
+    pub fn create_directory_bound(
+        &self,
+        parent: &MetadataEntry,
+        path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        (|| {
+            self.check_pause()?;
+            self.check_write()?;
+            valid_path(path)?;
+            ensure!(parent.is_dir, "namespace parent is not a directory");
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
+        self.inner.create_directory_bound(parent, path)
+    }
+    pub fn move_bound(
+        &self,
+        entry: &MetadataEntry,
+        parent: &MetadataEntry,
+        path: &str,
+    ) -> anyhow::Result<MetadataEntry> {
+        (|| {
+            self.check_pause()?;
+            self.check_write()?;
+            valid_path(path)?;
+            ensure!(
+                !entry.etag.is_empty() && parent.is_dir && entry.path != "/",
+                "conditional namespace move lacks a version"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
+        self.inner.move_bound(entry, parent, path)
+    }
+    pub fn delete_bound(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
+        (|| {
+            self.check_pause()?;
+            self.check_write()?;
+            ensure!(
+                !entry.etag.is_empty() && entry.path != "/",
+                "conditional namespace delete lacks a version"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
+        self.inner.delete_bound(entry)
+    }
     pub fn new(provider: impl Provider) -> Self {
         Self {
             inner: Arc::new(provider),
@@ -169,6 +276,12 @@ impl Backend {
             "同步已暂停；待传输数据保留在本机"
         );
         Ok(())
+    }
+    pub fn supports_mount(&self) -> bool {
+        self.inner.supports_mount()
+    }
+    pub fn set_operation_cancel(&self, cancel: Arc<std::sync::atomic::AtomicBool>) {
+        self.inner.set_operation_cancel(cancel);
     }
     pub fn capabilities(&self) -> Capabilities {
         if self.writable
@@ -352,6 +465,41 @@ impl Backend {
 }
 
 impl Backend {
+    /// No object/version means the Provider's atomic create-only contract.
+    /// Do not perform a check-then-unconditional-write fallback.
+    pub fn create_snapshot(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<MetadataEntry> {
+        (|| {
+            valid_path(path)?;
+            self.check_pause()?;
+            let caps = self.capabilities();
+            self.check_write()?;
+            ensure!(
+                caps.upload && caps.conditional_upload,
+                "atomic creation unavailable"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
+        let paused = self.paused.clone();
+        self.inner.upload_controlled(
+            path,
+            source,
+            None,
+            None,
+            Arc::new(move |done, total| {
+                ensure!(
+                    !paused.as_ref().is_some_and(|path| path.exists()),
+                    "synchronization paused"
+                );
+                progress(done, total)
+            }),
+        )
+    }
     /// A journal claim owns an opaque object/version snapshot. Do not select a
     /// potentially replaced object by path again at transfer time.
     pub fn upload_snapshot(
@@ -362,14 +510,18 @@ impl Backend {
         version: &str,
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
-        valid_path(path)?;
-        self.check_pause()?;
-        self.check_write()?;
-        let caps = self.capabilities();
-        ensure!(
-            caps.upload && caps.conditional_upload && !id.is_empty() && !version.is_empty(),
-            "versioned conditional upload unavailable"
-        );
+        (|| {
+            valid_path(path)?;
+            self.check_pause()?;
+            let caps = self.capabilities();
+            self.check_write()?;
+            ensure!(
+                caps.upload && caps.conditional_upload && !id.is_empty() && !version.is_empty(),
+                "versioned conditional upload unavailable"
+            );
+            Ok::<_, anyhow::Error>(())
+        })()
+        .context(TransferNotStarted)?;
         let paused = self.paused.clone();
         let write_owner = self.clone();
         self.inner.upload_controlled(
@@ -440,7 +592,6 @@ impl CloudBackend for Backend {
             progress(done)
         })
     }
-    #[cfg(target_os = "linux")]
     fn download_sized_to(
         &self,
         id: &str,

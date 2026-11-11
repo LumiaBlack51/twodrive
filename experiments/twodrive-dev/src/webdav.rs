@@ -10,7 +10,7 @@ use roxmltree::Node;
 use std::{
     collections::{BTreeSet, VecDeque},
     fs::File,
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     path::Path,
     time::Duration,
 };
@@ -27,6 +27,60 @@ pub struct DavError {
     pub status: u16,
 }
 
+/// Format-independent transfer policy; frontends may force full upload without
+/// implementing hashing or patch application. No file-extension allowlist.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UploadMode {
+    #[default]
+    Auto,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadKind {
+    Full,
+    Delta,
+}
+
+pub struct UploadOutcome {
+    pub entry: MetadataEntry,
+    pub kind: UploadKind,
+    /// Committed request body bytes, excluding HTTP/QUIC framing and prior attempts.
+    pub uploaded_bytes: u64,
+    pub reused_bytes: u64,
+    pub signature_bytes: u64,
+}
+
+struct UploadReader {
+    file: File,
+    done: u64,
+    total: u64,
+    progress: crate::provider::Progress,
+    report_total: u64,
+    report_start: u64,
+    report_span: u64,
+    paused: Option<std::path::PathBuf>,
+}
+impl Read for UploadReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.paused.as_ref().is_some_and(|p| p.exists()) {
+            return Err(std::io::Error::other("upload paused"));
+        }
+        let done = self.report_start
+            + ((self.done.min(self.total) as u128 * self.report_span as u128)
+                / self.total.max(1) as u128) as u64;
+        (self.progress)(done, self.report_total).map_err(std::io::Error::other)?;
+        let count = self.file.read(buffer)?;
+        self.done += count as u64;
+        Ok(count)
+    }
+}
+fn delta_unsupported(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<DavError>()
+        .is_some_and(|e| matches!(e.status, 405 | 415 | 501))
+}
+
 #[derive(Clone)]
 pub struct WebDavBackend {
     client: Client,
@@ -36,6 +90,7 @@ pub struct WebDavBackend {
     connector: Option<std::sync::Arc<crate::network::HttpConnector>>,
     pause_file: Option<std::path::PathBuf>,
     route: String,
+    upload_mode: UploadMode,
 }
 
 fn valid_path(path: &str) -> anyhow::Result<()> {
@@ -105,6 +160,7 @@ impl WebDavBackend {
             connector: None,
             pause_file: None,
             route: "direct".into(),
+            upload_mode: UploadMode::Auto,
         })
     }
 
@@ -194,22 +250,29 @@ impl WebDavBackend {
         path: &str,
         source: &Path,
         version: Option<&str>,
-        progress: std::sync::Arc<dyn Fn(u64, u64) -> anyhow::Result<()> + Send + Sync>,
+        progress: crate::provider::Progress,
     ) -> anyhow::Result<MetadataEntry> {
-        struct Reader {
-            file: File,
-            done: u64,
-            total: u64,
-            progress: std::sync::Arc<dyn Fn(u64, u64) -> anyhow::Result<()> + Send + Sync>,
-        }
-        impl Read for Reader {
-            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-                (self.progress)(self.done, self.total).map_err(std::io::Error::other)?;
-                let count = self.file.read(buffer)?;
-                self.done += count as u64;
-                Ok(count)
-            }
-        }
+        self.upload_controlled_with_mode(path, source, version, self.upload_mode, progress)
+            .map(|outcome| outcome.entry)
+    }
+
+    /// Backend policy exposed to frontends; Auto negotiates with the receiving
+    /// peer, Full always retains the original conditional streaming PUT.
+    pub fn with_upload_mode(mut self, mode: UploadMode) -> Self {
+        self.upload_mode = mode;
+        self
+    }
+
+    pub fn upload_controlled_with_mode(
+        &self,
+        path: &str,
+        source: &Path,
+        version: Option<&str>,
+        mode: UploadMode,
+        progress: crate::provider::Progress,
+    ) -> anyhow::Result<UploadOutcome> {
+        // Validate permissions and conditional tokens before any network I/O.
+        let full = self.versioned_put(path, version)?;
         let file = File::open(source)?;
         ensure!(
             file.metadata()?.is_file(),
@@ -217,20 +280,157 @@ impl WebDavBackend {
         );
         let total = file.metadata()?.len();
         progress(0, total)?;
-        let reader = Reader {
+        let mut reader = UploadReader {
             file,
             done: 0,
             total,
             progress: progress.clone(),
+            report_total: total,
+            report_start: 0,
+            report_span: total,
+            paused: self.pause_file.clone(),
         };
+        let mut signature_bytes = 0;
+        if mode == UploadMode::Auto
+            && total >= 128 * 1024
+            && let Some(version) = version
+            && let Some(stats) =
+                self.try_delta_upload(path, version, &mut reader, &mut signature_bytes)?
+        {
+            return Ok(UploadOutcome {
+                entry: self
+                    .get_metadata_by_path(path)?
+                    .context("uploaded DAV resource not found")?,
+                kind: UploadKind::Delta,
+                uploaded_bytes: stats.wire,
+                reused_bytes: stats.reused,
+                signature_bytes,
+            });
+        }
+        reader.file.rewind()?;
+        if reader.done > 0 && reader.report_start < total {
+            reader.report_start = total / 2;
+            reader.report_span = total - total / 2;
+        }
+        reader.done = 0;
         self.send(
             "PUT",
-            self.versioned_put(path, version)?
-                .body(reqwest::blocking::Body::sized(reader, total)),
+            full.body(reqwest::blocking::Body::sized(reader, total)),
         )?;
-        // A late cancellation cannot undo a PUT that the server has committed.
-        self.get_metadata_by_path(path)?
-            .context("uploaded DAV resource not found")
+        // A late cancellation cannot undo a write the server already committed.
+        Ok(UploadOutcome {
+            entry: self
+                .get_metadata_by_path(path)?
+                .context("uploaded DAV resource not found")?,
+            kind: UploadKind::Full,
+            uploaded_bytes: total,
+            reused_bytes: 0,
+            signature_bytes,
+        })
+    }
+
+    fn try_delta_upload(
+        &self,
+        path: &str,
+        version: &str,
+        reader: &mut UploadReader,
+        signature_bytes: &mut u64,
+    ) -> anyhow::Result<Option<crate::delta::Stats>> {
+        use crate::delta;
+        let options = match self.send("OPTIONS", self.request("OPTIONS", path)?) {
+            Ok(response) => response,
+            Err(error) if delta_unsupported(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if options
+            .headers()
+            .get("Accept-Patch")
+            .and_then(|v| v.to_str().ok())
+            != Some(delta::MEDIA_TYPE)
+        {
+            return Ok(None);
+        }
+        drop(options);
+        let response = match self.send(
+            delta::SIGNATURE_METHOD,
+            self.request(delta::SIGNATURE_METHOD, path)?
+                .header("If-Match", version),
+        ) {
+            Ok(response) => response,
+            Err(error) if delta_unsupported(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        // Negotiate a versioned, bounded format; an old/generic DAV service may
+        // respond successfully to unknown methods without implementing delta.
+        if response
+            .headers()
+            .get("Content-Type")
+            .and_then(|v| v.to_str().ok())
+            != Some(delta::MEDIA_TYPE)
+            || response.headers().get("ETag").and_then(|v| v.to_str().ok()) != Some(version)
+        {
+            return Ok(None);
+        }
+        let mut bytes = Vec::new();
+        response
+            .take(delta::MAX_SIGNATURE_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        *signature_bytes = bytes.len() as u64;
+        if bytes.len() as u64 > delta::MAX_SIGNATURE_BYTES {
+            return Ok(None);
+        }
+        let Ok(signature) = serde_json::from_slice::<delta::Signature>(&bytes) else {
+            return Ok(None);
+        };
+        if signature.validate().is_err() {
+            return Ok(None);
+        }
+        let mut patch = tempfile::tempfile()?;
+        reader.report_span = reader.total / 2;
+        let stats = delta::encode(reader, &signature, &mut patch)?;
+        ensure!(
+            stats.size == reader.total,
+            "upload source changed length while preparing delta"
+        );
+        // Include the reverse-direction signature in the bandwidth decision.
+        if stats.wire.saturating_add(bytes.len() as u64) >= reader.total {
+            return Ok(None);
+        }
+        self.check_pause()?;
+        (reader.progress)(reader.total / 2, reader.total)?;
+        let patch = UploadReader {
+            file: patch,
+            done: 0,
+            total: stats.wire,
+            progress: reader.progress.clone(),
+            report_total: reader.total,
+            report_start: reader.total / 2,
+            report_span: reader.total - reader.total / 2,
+            paused: reader.paused.clone(),
+        };
+        let result = self.send(
+            "PATCH",
+            self.request("PATCH", path)?
+                .header("If-Match", version)
+                .header("Content-Type", delta::MEDIA_TYPE)
+                .body(reqwest::blocking::Body::sized(patch, stats.wire)),
+        );
+        match result {
+            Ok(_) => Ok(Some(stats)),
+            // These replies guarantee the delta was rejected without a commit.
+            // A transport error/5xx might follow a commit and must never replay.
+            Err(error)
+                if delta_unsupported(&error)
+                    || error
+                        .downcast_ref::<DavError>()
+                        .is_some_and(|e| e.status == 422) =>
+            {
+                reader.report_start = reader.total;
+                reader.report_span = 0;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn url(&self, path: &str) -> anyhow::Result<Url> {
@@ -570,10 +770,23 @@ impl CloudBackend for WebDavBackend {
         content: Vec<u8>,
         if_match: Option<&str>,
     ) -> anyhow::Result<MetadataEntry> {
-        self.send("PUT", self.versioned_put(path, if_match)?.body(content))?;
-        self.get_metadata_by_path(path)?
-            .context("uploaded DAV resource not found")
+        if if_match.is_none() || content.len() < 128 * 1024 || self.upload_mode == UploadMode::Full
+        {
+            self.send("PUT", self.versioned_put(path, if_match)?.body(content))?;
+            return self
+                .get_metadata_by_path(path)?
+                .context("uploaded DAV resource not found");
+        }
+        let mut source = tempfile::NamedTempFile::new()?;
+        source.write_all(&content)?;
+        self.upload_controlled(
+            path,
+            source.path(),
+            if_match,
+            std::sync::Arc::new(|_, _| Ok(())),
+        )
     }
+
     fn upload_file_with_version(
         &self,
         path: &str,

@@ -1,7 +1,7 @@
 name: Isolated CFAPI adapter
 on:
   pull_request:
-    paths: ['experiments/windows-cfapi/**', 'crates/twodrive-core/**', 'experiments/twodrive-dev/src/local_files*', 'experiments/twodrive-dev/src/native_local_fixture.rs', 'experiments/twodrive-dev/src/desktop_local_files.rs', 'experiments/twodrive-dev/src/model.rs', 'experiments/twodrive-dev/src/provider.rs', 'scripts/build-cfapi-probe.ps1', 'scripts/test-generated-visual-dataset.py', 'scripts/test_generated_visual_dataset.py', 'scripts/capture-native-fixture-evidence.ps1', '.github/workflows/windows-cfapi.yml']
+    paths: ['experiments/windows-cfapi/**', 'crates/twodrive-core/**', 'experiments/twodrive-dev/src/local_files*', 'experiments/twodrive-dev/src/native_local_fixture.rs', 'experiments/twodrive-dev/src/native_source.rs', 'experiments/twodrive-dev/src/desktop_local_files.rs', 'experiments/twodrive-dev/src/model.rs', 'experiments/twodrive-dev/src/provider.rs', 'scripts/build-cfapi-probe.ps1', 'scripts/test-generated-visual-dataset.py', 'scripts/test_generated_visual_dataset.py', 'scripts/capture-native-fixture-evidence.ps1', '.github/workflows/windows-cfapi.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -42,6 +42,9 @@ jobs:
       - run: cargo fmt --manifest-path experiments/windows-cfapi/Cargo.toml -- --check
       - run: cargo clippy --manifest-path experiments/windows-cfapi/Cargo.toml --all-features --all-targets --locked -- -D warnings
       - run: cargo test --manifest-path experiments/windows-cfapi/Cargo.toml --all-features --locked
+      - name: Check native-sync without Shell fixtures
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path experiments/windows-cfapi/Cargo.toml --features native-sync --test engine_cache_contract --locked
       - run: cargo build --manifest-path experiments/windows-cfapi/Cargo.toml --example export_visual_fixture --locked
       - name: Decode generated PNG bytes without filesystem fixture reads
         shell: pwsh

@@ -187,8 +187,19 @@ pub fn recover_dirty_record<B: CloudBackend>(
             {
                 return Ok(false);
             }
-            if backend.is_conflict_error(&err) {
-                db.mark_state(&record.metadata.remote_id, FileState::Conflict)?;
+            // A deleted/replaced cloud identity cannot be fixed by retrying its
+            // ID forever, or by overwriting a new same-name item. Confirm that
+            // exact ID is absent, then preserve these edits as a separate copy.
+            let missing_target = backend.is_not_found_error(&err)
+                && if let Some(id) = record.cloud_remote_id.as_deref() {
+                    backend.get_metadata(id)?.is_none()
+                } else {
+                    false
+                };
+            if backend.is_conflict_error(&err) || missing_target {
+                if !db.mark_upload_conflict(&record)? {
+                    return Ok(false);
+                }
                 let conflict_record = db
                     .get_by_remote_id(&record.metadata.remote_id)?
                     .unwrap_or(record.clone());
@@ -278,6 +289,18 @@ pub(crate) fn recover_pending_delete_id<B: CloudBackend>(
     if !delete.retry_due(twodrive_core::now_unix()) {
         return Ok(false);
     }
+    // A delayed upload acknowledgement can outlive its local identity. Its
+    // cleanup must not delete an ID now owned by another live local record.
+    // Recheck persisted old cleanup tasks as well as guarding new insertions.
+    if let Some(id) = delete.cloud_remote_id.as_deref()
+        && db.get_by_cloud_remote_id(id)?.is_some()
+    {
+        if delete.local_id.is_none() {
+            db.remove_pending_delete(&delete.remote_id)?;
+            return Ok(true);
+        }
+        return Ok(false);
+    }
     let result = (|| -> anyhow::Result<bool> {
         // File locks also protect a transfer/handle owned by another process. Claim
         // all retained cache files before remote deletion or unknown-upload replay.
@@ -336,7 +359,7 @@ pub(crate) fn recover_pending_delete_id<B: CloudBackend>(
                 Err(err) => return Err(err.into()),
             }
         }
-        db.remove_pending_delete(&delete.remote_id)?;
+        db.complete_pending_delete(&delete.remote_id)?;
         Ok(true)
     })();
     if let Err(error) = &result {

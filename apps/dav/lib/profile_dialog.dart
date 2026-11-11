@@ -38,8 +38,21 @@ class _ProfileDialogState extends State<ProfileDialog> {
   Json? pickedItem;
   Json? get provider =>
       widget.providers.where((p) => p['id'] == kind).firstOrNull;
-  List<Json> get providerFields =>
-      ((provider?['fields'] as List?) ?? []).cast<Json>();
+  List<Json> get providerFields => ((provider?['fields'] as List?) ?? [])
+      .cast<Json>()
+      .where((f) => f['internal'] != true)
+      .toList();
+  bool get providerAllowsWrites {
+    final capabilities = provider?['capabilities'];
+    return capabilities is! Map ||
+        [
+          'upload',
+          'mkdir',
+          'rename',
+          'delete',
+        ].any((key) => capabilities[key] == true);
+  }
+
   List<String> credentialFields(Json action) =>
       ((action['credential_fields'] as List?) ?? [])
           .cast<String>()
@@ -111,7 +124,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
       'id': widget.original?['id'] ?? '',
       'kind': kind,
       'network_route': route,
-      'writable': writable,
+      'writable': writable && providerAllowsWrites,
       'name': fields['name']!.text.trim(),
       'mount_path': fields['mount_path']!.text.trim(),
       for (final f in providerFields.where(
@@ -528,9 +541,13 @@ class _ProfileDialogState extends State<ProfileDialog> {
                       child: Text('仅直连（绕过代理）'),
                     ),
                   if (networkModes.contains('system'))
-                    const DropdownMenuItem(
+                    DropdownMenuItem(
                       value: 'system',
-                      child: Text('使用系统路由和代理'),
+                      child: Text(
+                        (provider?['network_labels'] as Map?)?['system']
+                                as String? ??
+                            '使用系统路由和代理',
+                      ),
                     ),
                 ],
                 onChanged: runningAction

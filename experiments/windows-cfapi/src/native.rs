@@ -9,7 +9,7 @@ use std::{
     path::{Component, Path, PathBuf, Prefix},
     ptr,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
@@ -30,6 +30,9 @@ use windows_sys::{
 };
 
 type Result<T> = std::result::Result<T, String>;
+#[cfg(feature = "native-sync")]
+#[path = "native_persistent.rs"]
+pub mod persistent;
 const ID: &[u8] = Dataset::StandardV1.root_identity();
 const SIZE: usize = 65536;
 const OFFLINE: i32 = 0xC000CF11u32 as i32;
@@ -79,9 +82,44 @@ pub fn platform() -> Result<CF_PLATFORM_INFO> {
 /// this boundary. Each requested buffer is at most 64 KiB.
 pub trait HydrationSource: Send + Sync {
     fn size(&self, identity: &[u8]) -> Result<usize>;
+    /// An engine can retain an immutable, verified cache lease for the whole
+    /// fetch instead of reopening and rehashing it for every 64 KiB transfer.
+    fn begin_read(
+        &self,
+        _identity: &[u8],
+        _cancelled: &AtomicBool,
+    ) -> Result<Option<Box<dyn HydrationRead>>> {
+        Ok(None)
+    }
+    fn begin_native_read(
+        &self,
+        identity: &[u8],
+        _context: NativeReadContext<'_>,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<Box<dyn HydrationRead>>> {
+        self.begin_read(identity, cancelled)
+    }
     fn read_range(
         &self,
         identity: &[u8],
+        offset: usize,
+        length: usize,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<u8>>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NativeReadContext<'a> {
+    pub root_identity: &'a [u8],
+    pub volume_serial: u32,
+    pub root_file_id: u64,
+    pub file_id: u64,
+    pub file_size: u64,
+}
+
+pub trait HydrationRead {
+    fn read_range(
+        &mut self,
         offset: usize,
         length: usize,
         cancelled: &AtomicBool,
@@ -95,11 +133,49 @@ struct Source {
     offline: AtomicBool,
     stopping: AtomicBool,
     engine: Option<Arc<dyn HydrationSource>>,
+    #[cfg(feature = "native-sync")]
+    events: Option<persistent::events::Context>,
     active: Mutex<HashMap<(i64, i64), Arc<AtomicBool>>>,
     requested_bytes: AtomicU64,
     transferred_bytes: AtomicU64,
     recent_requests: Mutex<VecDeque<serde_json::Value>>,
+    callbacks: Mutex<usize>,
+    callbacks_done: Condvar,
     dataset: Dataset,
+}
+struct CallbackLease<'a>(&'a Source);
+impl Drop for CallbackLease<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut count) = self.0.callbacks.lock() {
+            *count -= 1;
+            if *count == 0 {
+                self.0.callbacks_done.notify_all();
+            }
+        }
+    }
+}
+impl Source {
+    fn enter_callback(&self) -> CallbackLease<'_> {
+        let mut count = self
+            .callbacks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *count += 1;
+        CallbackLease(self)
+    }
+    fn wait_callbacks(&self) -> Result<()> {
+        let mut count = self
+            .callbacks
+            .lock()
+            .map_err(|_| "callback counter poisoned")?;
+        while *count != 0 {
+            count = self
+                .callbacks_done
+                .wait(count)
+                .map_err(|_| "callback drain poisoned")?;
+        }
+        Ok(())
+    }
 }
 
 // The OS owns callback pointers until CfDisconnectSyncRoot returns. Source is
@@ -108,9 +184,18 @@ unsafe extern "system" fn fetch(
     info: *const CF_CALLBACK_INFO,
     params: *const CF_CALLBACK_PARAMETERS,
 ) {
+    unsafe { fetch_with_transfer(info, params, execute_transfer) };
+}
+
+unsafe fn fetch_with_transfer(
+    info: *const CF_CALLBACK_INFO,
+    params: *const CF_CALLBACK_PARAMETERS,
+    mut transfer: impl FnMut(&CF_CALLBACK_INFO, i32, i64, i64, &[u8]) -> Result<()>,
+) {
     // SAFETY: CldApi supplies valid pointers for the duration of this callback.
     let (info, params) = unsafe { (&*info, &*params) };
     let source = unsafe { &*(info.CallbackContext as *const Source) };
+    let _callback = source.enter_callback();
     source.calls.fetch_add(1, Ordering::SeqCst);
     let requested = unsafe { params.Anonymous.FetchData };
     let mut status = FAILED;
@@ -162,6 +247,42 @@ unsafe extern "system" fn fetch(
         }
         offset = start as i64;
         length = (end - start) as i64;
+        if source.offline.load(Ordering::SeqCst)
+            || source.stopping.load(Ordering::SeqCst)
+            || cancelled.load(Ordering::SeqCst)
+        {
+            return Err("request unavailable or cancelled".into());
+        }
+        // Register cancellation before any blocking provider download.
+        let mut reader = match &source.engine {
+            Some(engine) => {
+                if info.SyncRootIdentity.is_null()
+                    || info.SyncRootIdentityLength == 0
+                    || info.SyncRootIdentityLength > 4096
+                {
+                    return Err("invalid fetch root identity".into());
+                }
+                let root_identity = unsafe {
+                    std::slice::from_raw_parts(
+                        info.SyncRootIdentity.cast::<u8>(),
+                        info.SyncRootIdentityLength as usize,
+                    )
+                };
+                engine.begin_native_read(
+                    identity,
+                    NativeReadContext {
+                        root_identity,
+                        volume_serial: info.VolumeSerialNumber,
+                        root_file_id: info.SyncRootFileId as u64,
+                        file_id: info.FileId as u64,
+                        file_size: u64::try_from(info.FileSize)
+                            .map_err(|_| "negative native file size")?,
+                    },
+                    &cancelled,
+                )?
+            }
+            None => None,
+        };
         for start in (start..end).step_by(65536) {
             if source.offline.load(Ordering::SeqCst)
                 || source.stopping.load(Ordering::SeqCst)
@@ -170,9 +291,12 @@ unsafe extern "system" fn fetch(
                 return Err("request unavailable or cancelled".into());
             }
             let count = (end - start).min(65536);
-            let bytes = match &source.engine {
-                Some(engine) => engine.read_range(identity, start, count, &cancelled)?,
-                None => payload()[start..start + count].to_vec(),
+            let bytes = match &mut reader {
+                Some(reader) => reader.read_range(start, count, &cancelled)?,
+                None => match &source.engine {
+                    Some(engine) => engine.read_range(identity, start, count, &cancelled)?,
+                    None => payload()[start..start + count].to_vec(),
+                },
             };
             if bytes.len() != count
                 || cancelled.load(Ordering::SeqCst)
@@ -180,7 +304,7 @@ unsafe extern "system" fn fetch(
             {
                 return Err("short or cancelled engine read".into());
             }
-            execute_transfer(info, 0, start as i64, count as i64, &bytes)?;
+            transfer(info, 0, start as i64, count as i64, &bytes)?;
             source
                 .transferred_bytes
                 .fetch_add(count as u64, Ordering::SeqCst);
@@ -211,13 +335,14 @@ unsafe extern "system" fn fetch(
     if source.offline.load(Ordering::SeqCst) {
         status = OFFLINE;
     }
-    let _ = execute_transfer(info, status, offset, length, &[]);
+    let _ = transfer(info, status, offset, length, &[]);
     source.failures.fetch_add(1, Ordering::SeqCst);
 }
 
 unsafe extern "system" fn cancel(info: *const CF_CALLBACK_INFO, _: *const CF_CALLBACK_PARAMETERS) {
     let info = unsafe { &*info };
     let source = unsafe { &*(info.CallbackContext as *const Source) };
+    let _callback = source.enter_callback();
     if let Ok(active) = source.active.lock() {
         // A partial cancellation conservatively cancels this entire request.
         if let Some(flag) = active.get(&(info.TransferKey, info.RequestKey)) {
@@ -284,6 +409,13 @@ unsafe extern "system" fn deny_dehydrate(
     deny_mutation(unsafe { &*info }, CF_OPERATION_TYPE_ACK_DEHYDRATE);
 }
 fn deny_mutation(info: &CF_CALLBACK_INFO, kind: CF_OPERATION_TYPE) {
+    let _ = acknowledge_mutation(info, kind, 0xC0000022u32 as i32);
+}
+fn acknowledge_mutation(
+    info: &CF_CALLBACK_INFO,
+    kind: CF_OPERATION_TYPE,
+    status: i32,
+) -> Result<()> {
     let operation = CF_OPERATION_INFO {
         StructSize: size_of::<CF_OPERATION_INFO>() as u32,
         Type: kind,
@@ -294,32 +426,34 @@ fn deny_mutation(info: &CF_CALLBACK_INFO, kind: CF_OPERATION_TYPE) {
         ..Default::default()
     };
     let mut parameters = CF_OPERATION_PARAMETERS::default();
-    let denied = 0xC0000022u32 as i32;
     let size = match kind {
         CF_OPERATION_TYPE_ACK_DELETE => {
             parameters.Anonymous.AckDelete = CF_OPERATION_PARAMETERS_0_7 {
                 Flags: 0,
-                CompletionStatus: denied,
+                CompletionStatus: status,
             };
             size_of::<CF_OPERATION_PARAMETERS_0_7>()
         }
         CF_OPERATION_TYPE_ACK_RENAME => {
             parameters.Anonymous.AckRename = CF_OPERATION_PARAMETERS_0_6 {
                 Flags: 0,
-                CompletionStatus: denied,
+                CompletionStatus: status,
             };
             size_of::<CF_OPERATION_PARAMETERS_0_6>()
         }
         _ => {
             parameters.Anonymous.AckDehydrate = CF_OPERATION_PARAMETERS_0_5 {
-                CompletionStatus: denied,
+                CompletionStatus: status,
                 ..Default::default()
             };
             size_of::<CF_OPERATION_PARAMETERS_0_5>()
         }
     };
     parameters.ParamSize = (offset_of!(CF_OPERATION_PARAMETERS, Anonymous) + size) as u32;
-    let _ = unsafe { CfExecute(&operation, &mut parameters) };
+    hr(
+        unsafe { CfExecute(&operation, &mut parameters) },
+        "acknowledge native mutation",
+    )
 }
 
 pub struct Session {
@@ -658,6 +792,7 @@ impl Session {
             )?;
             self.connection = None;
         }
+        self.source.wait_callbacks()?;
         Ok(())
     }
     pub fn finish(&mut self) -> Result<()> {
@@ -1091,7 +1226,7 @@ impl RetainedPlaceholder {
         let raw = unsafe {
             CreateFileW(
                 wide(path).as_ptr(),
-                FILE_READ_DATA | FILE_READ_ATTRIBUTES | WRITE_DAC,
+                FILE_READ_DATA | FILE_READ_ATTRIBUTES | WRITE_DAC | DELETE,
                 0,
                 ptr::null(),
                 OPEN_EXISTING,
@@ -1554,7 +1689,7 @@ fn directory_observation(handle: HANDLE, expected_identity: &[u8]) -> Result<Nat
 fn node_observation(
     handle: HANDLE,
     expected_identity: &[u8],
-    size: usize,
+    _size: usize,
     directory: bool,
 ) -> Result<NativeObservation> {
     // u64 buffer provides alignment for the variable-length standard-info blob.
@@ -1572,7 +1707,7 @@ fn node_observation(
         },
         "inspect placeholder",
     )?;
-    if returned < size_of::<CF_PLACEHOLDER_STANDARD_INFO>() as u32 {
+    if returned < offset_of!(CF_PLACEHOLDER_STANDARD_INFO, FileIdentity) as u32 {
         return Err("short placeholder info".into());
     }
     let info = unsafe { &*buffer.as_ptr().cast::<CF_PLACEHOLDER_STANDARD_INFO>() };
@@ -1613,8 +1748,8 @@ fn node_observation(
         (!partial, partial)
     } else {
         (
-            info.OnDiskDataSize >= size as i64,
-            info.OnDiskDataSize > 0 && info.OnDiskDataSize < size as i64,
+            info.OnDiskDataSize >= logical_size,
+            info.OnDiskDataSize > 0 && info.OnDiskDataSize < logical_size,
         )
     };
     Ok(NativeObservation {
@@ -1669,6 +1804,72 @@ fn directory_handle(path: &Path) -> Result<Handle> {
     }
     Ok(Handle(handle, false))
 }
+/// Effective directory traversal lease. Attribute-only handles do not prevent
+/// rename on Windows. A directory-only relative NT open prevents a substituted
+/// file from being opened for data/implicit hydration. Keep this distinct from
+/// metadata observations and from
+/// the fixture teardown's independent exclusive directory handles.
+#[cfg(feature = "native-sync")]
+fn directory_lease(parent: HANDLE, component: &std::ffi::OsStr) -> Result<Handle> {
+    directory_lease_access(
+        parent,
+        component,
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+    )
+}
+#[cfg(feature = "native-sync")]
+fn directory_lease_access(
+    parent: HANDLE,
+    component: &std::ffi::OsStr,
+    access: u32,
+) -> Result<Handle> {
+    use windows_sys::Wdk::Storage::FileSystem::FILE_OPEN;
+    let mut name = wide(Path::new(component));
+    let length = ((name.len() - 1) * 2)
+        .try_into()
+        .map_err(|_| "directory component too long")?;
+    let unicode = UNICODE_STRING {
+        Length: length,
+        MaximumLength: length,
+        Buffer: name.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: parent,
+        ObjectName: &unicode,
+        Attributes: OBJ_CASE_INSENSITIVE,
+        ..Default::default()
+    };
+    let mut io = IO_STATUS_BLOCK::default();
+    let mut raw = ptr::null_mut();
+    let status = unsafe {
+        NtCreateFile(
+            &mut raw,
+            access | SYNCHRONIZE,
+            &attributes,
+            &mut io,
+            ptr::null(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_OPEN,
+            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+            ptr::null(),
+            0,
+        )
+    };
+    if status < 0 {
+        return Err(format!(
+            "retain traversal directory: NTSTATUS 0x{:08X}",
+            status as u32
+        ));
+    }
+    let handle = Handle(raw, false);
+    if !file_binding(handle.0)?.2 {
+        return Err("traversal target is not a directory".into());
+    }
+    Ok(handle)
+}
+
 fn relative_name(root: &Path, path: &Path) -> Result<String> {
     path.strip_prefix(root)
         .map_err(|_| "path outside fixture")?
@@ -1721,7 +1922,47 @@ pub struct LockedPlaceholder<'a> {
     identity: &'a [u8],
     size: usize,
 }
+#[cfg(feature = "native-test-hooks")]
+thread_local! {static INTERRUPT_LOCAL_TIME_BEFORE_PIN:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(feature = "native-test-hooks")]
+pub fn interrupt_local_time_before_pin_for_test() {
+    INTERRUPT_LOCAL_TIME_BEFORE_PIN.with(|f| f.set(true));
+}
 impl LockedPlaceholder<'_> {
+    #[cfg(feature = "native-sync")]
+    pub fn retain_pin_intent(&self) -> Result<()> {
+        if self.inspect()?.release_requested {
+            return Ok(());
+        }
+        hr(
+            unsafe {
+                CfSetPinState(
+                    self.handle,
+                    CF_PIN_STATE_PINNED,
+                    CF_SET_PIN_FLAG_NONE,
+                    ptr::null_mut(),
+                )
+            },
+            "retain copied pin intent",
+        )
+    }
+    #[cfg(feature = "native-sync")]
+    pub fn hydrate(&self) -> Result<()> {
+        let before = self.inspect()?;
+        if !before.os_in_sync || before.modified_bytes != 0 {
+            return Err("pin hydration preserves native edits".into());
+        }
+        hr(
+            unsafe {
+                CfHydratePlaceholder(self.handle, 0, -1, CF_HYDRATE_FLAG_NONE, ptr::null_mut())
+            },
+            "hydrate pinned native version",
+        )?;
+        if !self.inspect()?.resident {
+            return Err("pin hydration incomplete".into());
+        }
+        Ok(())
+    }
     pub fn inspect(&self) -> Result<NativeObservation> {
         observation(
             unsafe { CfGetWin32HandleFromProtectedHandle(self.handle) },
@@ -1779,6 +2020,287 @@ pub fn with_exclusive_placeholder<T>(
     action(&locked)
 }
 
+/// A synchronous no-recall, no-follow, share-none lease for copying native
+/// edits. Busy files are deferred instead of reading a writer's partial save.
+pub struct NativeCapture<'a>(&'a RetainedPlaceholder);
+impl NativeCapture<'_> {
+    #[cfg(feature = "native-sync")]
+    pub fn remove_remote_deleted(&self) -> Result<()> {
+        let observed = self.0.inspect()?;
+        if !observed.os_in_sync || observed.modified_bytes != 0 {
+            return Err("remote removal vetoed by native edits".into());
+        }
+        let mut info = FILE_DISPOSITION_INFO { DeleteFile: true };
+        if unsafe {
+            SetFileInformationByHandle(
+                self.0.handle.0,
+                FileDispositionInfo,
+                (&mut info as *mut FILE_DISPOSITION_INFO).cast(),
+                size_of_val(&info) as u32,
+            )
+        } == 0
+        {
+            return Err(format!("owned remote removal: {}", unsafe {
+                GetLastError()
+            }));
+        }
+        Ok(())
+    }
+    #[cfg(feature = "native-sync")]
+    pub fn inspect_metadata(&self) -> Result<NativeObservation> {
+        self.0.inspect()
+    }
+    /// Remote metadata may discard only platform-confirmed clean data while
+    /// this same no-write/no-delete native lease remains held.
+    #[cfg(feature = "native-sync")]
+    pub fn update_remote_version(
+        &self,
+        size: u64,
+        modified_unix: i64,
+        owned_rename: bool,
+        preserve_pin: bool,
+        local_modified_filetime: Option<u64>,
+    ) -> Result<()> {
+        let before = self.0.inspect()?;
+        if (!before.os_in_sync && !owned_rename) || before.modified_bytes != 0 {
+            return Err("remote update vetoed by native edits".into());
+        }
+        let mut metadata = CF_FS_METADATA::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                self.0.handle.0,
+                FileBasicInfo,
+                (&mut metadata.BasicInfo as *mut FILE_BASIC_INFO).cast(),
+                size_of::<FILE_BASIC_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err("native update basic metadata unavailable".into());
+        }
+        metadata.FileSize = i64::try_from(size).map_err(|_| "remote size overflow")?;
+        metadata.BasicInfo.LastWriteTime = if let Some(stamp) = local_modified_filetime {
+            i64::try_from(stamp).map_err(|_| "source timestamp overflow")?
+        } else {
+            modified_unix
+                .checked_add(11_644_473_600)
+                .and_then(|v| v.checked_mul(10_000_000))
+                .filter(|v| *v > 0)
+                .ok_or("remote timestamp overflow")?
+        };
+        metadata.BasicInfo.FileAttributes &= FILE_ATTRIBUTE_READONLY
+            | FILE_ATTRIBUTE_HIDDEN
+            | FILE_ATTRIBUTE_SYSTEM
+            | FILE_ATTRIBUTE_ARCHIVE
+            | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+        if metadata.BasicInfo.FileAttributes == 0 {
+            metadata.BasicInfo.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+        }
+        let range = CF_FILE_RANGE {
+            StartingOffset: 0,
+            Length: -1,
+        };
+        let dehydrate = !self.0.directory && local_modified_filetime.is_none();
+        let restore_pin = dehydrate && (before.pinned || preserve_pin);
+        if before.pinned && dehydrate {
+            hr(
+                unsafe {
+                    CfSetPinState(
+                        self.0.handle.0,
+                        CF_PIN_STATE_UNSPECIFIED,
+                        CF_SET_PIN_FLAG_NONE,
+                        ptr::null_mut(),
+                    )
+                },
+                "temporarily release preserved pin for version update",
+            )?;
+        }
+        let updated = hr(
+            unsafe {
+                CfUpdatePlaceholder(
+                    self.0.handle.0,
+                    &metadata,
+                    ptr::null(),
+                    0,
+                    if dehydrate { &range } else { ptr::null() },
+                    if dehydrate { 1 } else { 0 },
+                    CF_UPDATE_FLAG_MARK_IN_SYNC
+                        | if owned_rename {
+                            0
+                        } else {
+                            CF_UPDATE_FLAG_VERIFY_IN_SYNC
+                        }
+                        | if self.0.directory {
+                            CF_UPDATE_FLAG_DISABLE_ON_DEMAND_POPULATION
+                        } else if dehydrate {
+                            CF_UPDATE_FLAG_DEHYDRATE
+                        } else {
+                            0
+                        },
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            },
+            "update verified remote native version",
+        );
+        let restored = if restore_pin {
+            hr(
+                unsafe {
+                    CfSetPinState(
+                        self.0.handle.0,
+                        CF_PIN_STATE_PINNED,
+                        CF_SET_PIN_FLAG_NONE,
+                        ptr::null_mut(),
+                    )
+                },
+                "restore durable pin after version update",
+            )
+        } else {
+            Ok(())
+        };
+        updated?;
+        restored?;
+        let after = node_observation(
+            self.0.handle.0,
+            &self.0.identity,
+            usize::try_from(size).map_err(|_| "remote size overflow")?,
+            self.0.directory,
+        )?;
+        if after.logical_size != size || !after.os_in_sync || after.modified_bytes != 0 {
+            return Err("remote native metadata update not observed".into());
+        }
+        Ok(())
+    }
+    /// Only after a complete fsynced backup has an independent engine owner.
+    /// The same no-write/no-delete lease retains all native bytes throughout.
+    #[cfg(feature = "native-sync")]
+    pub fn revert_after_verified_backup(&self) -> Result<()> {
+        let before = self.0.inspect()?;
+        if !before.resident || before.partial {
+            return Err("backup revert requires complete resident bytes".into());
+        }
+        hr(
+            unsafe { CfRevertPlaceholder(self.0.handle.0, CF_REVERT_FLAG_NONE, ptr::null_mut()) },
+            "revert durably copied native backup",
+        )?;
+        let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+        let mut size = 0;
+        if unsafe {
+            GetFileInformationByHandleEx(
+                self.0.handle.0,
+                FileAttributeTagInfo,
+                (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                size_of_val(&tag) as u32,
+            )
+        } == 0
+            || tag.FileAttributes
+                & (FILE_ATTRIBUTE_REPARSE_POINT
+                    | FILE_ATTRIBUTE_OFFLINE
+                    | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                    | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+                != 0
+            || tag.ReparseTag != 0
+            || unsafe { GetFileSizeEx(self.0.handle.0, &mut size) } == 0
+            || size < 0
+            || size as u64 != before.logical_size
+        {
+            return Err("native backup revert was not observed as complete ordinary data".into());
+        }
+        Ok(())
+    }
+    #[cfg(feature = "native-sync")]
+    pub fn physical_identity(&self) -> Result<(u32, u64)> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(self.0.handle.0, &mut info) } == 0
+            || info.nNumberOfLinks != 1
+        {
+            return Err("native capture physical identity unavailable".into());
+        }
+        Ok((
+            info.dwVolumeSerialNumber,
+            ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+        ))
+    }
+    #[cfg(feature = "native-sync")]
+    pub fn root_registration(&self) -> Result<(u64, Vec<u8>)> {
+        persistent::root_identity(self.0.handle.0)
+    }
+    /// Call only while the engine's acknowledged generation is held and its
+    /// full digest matches this retained native file. The share-none lease
+    /// prevents a write/rename between verification and CfSetInSyncState.
+    pub fn set_in_sync_after_verification(&self) -> Result<()> {
+        hr(
+            unsafe {
+                CfSetInSyncState(
+                    self.0.handle.0,
+                    CF_IN_SYNC_STATE_IN_SYNC,
+                    CF_SET_IN_SYNC_FLAG_NONE,
+                    ptr::null_mut(),
+                )
+            },
+            "acknowledge verified native bytes",
+        )?;
+        if !self.0.inspect()?.os_in_sync {
+            return Err("native sync acknowledgement not observed".into());
+        }
+        Ok(())
+    }
+
+    pub fn modified_time(&self) -> Result<std::time::SystemTime> {
+        use std::os::windows::io::BorrowedHandle;
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(self.0.handle.0) };
+        let file = std::fs::File::from(borrowed.try_clone_to_owned().map_err(|e| e.to_string())?);
+        file.metadata()
+            .and_then(|metadata| metadata.modified())
+            .map_err(|e| e.to_string())
+    }
+    pub fn copy_resident_to(&self, output: &mut impl std::io::Write) -> Result<u64> {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::os::windows::io::BorrowedHandle;
+        let state = self.0.inspect()?;
+        if !state.resident || state.partial {
+            return Err("native capture requires resident bytes".into());
+        }
+        let borrowed = unsafe { BorrowedHandle::borrow_raw(self.0.handle.0) };
+        let mut file =
+            std::fs::File::from(borrowed.try_clone_to_owned().map_err(|e| e.to_string())?);
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let mut buffer = [0u8; 65536];
+        let mut total = 0u64;
+        loop {
+            let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..count])
+                .map_err(|e| e.to_string())?;
+            total = total
+                .checked_add(count as u64)
+                .ok_or("capture size overflow")?;
+        }
+        if total != state.logical_size || self.0.inspect()?.logical_size != state.logical_size {
+            return Err("native capture size changed".into());
+        }
+        Ok(total)
+    }
+}
+pub fn with_native_capture<T>(
+    path: &Path,
+    identity: &[u8],
+    action: impl FnOnce(&NativeCapture<'_>) -> Result<T>,
+) -> Result<T> {
+    let mut lease = RetainedPlaceholder::open_node(path, identity, 0, false)?;
+    // The committed cloud version can have a different size. Residency must
+    // describe the current local generation, under the SAME exclusive lease.
+    let mut current_size = 0i64;
+    if unsafe { GetFileSizeEx(lease.handle.0, &mut current_size) } == 0 || current_size < 0 {
+        return Err("cannot inspect native capture length".into());
+    }
+    lease.size = usize::try_from(current_size).map_err(|_| "native capture length overflow")?;
+    lease.inspect()?;
+    action(&NativeCapture(&lease))
+}
+
 pub fn inspect(path: &Path, engine_state: FileState) -> Result<LocalStatus> {
     status(metadata_handle(path)?.0, engine_state)
 }
@@ -1830,6 +2352,212 @@ pub fn release(path: &Path, engine_state: FileState) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    #[test]
+    fn callback_drain_waits_until_the_owned_scope_finishes() {
+        use std::{sync::mpsc, time::Duration};
+        let source = Arc::new(Source::default());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker_source = source.clone();
+        let worker = std::thread::spawn(move || {
+            let _lease = worker_source.enter_callback();
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let waiting_source = source.clone();
+        let waiter = std::thread::spawn(move || {
+            waiting_tx.send(()).unwrap();
+            waiting_source.wait_callbacks().unwrap();
+            done_tx.send(()).unwrap();
+        });
+        waiting_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        release_tx.send(()).unwrap();
+        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.join().unwrap();
+        waiter.join().unwrap();
+        assert_eq!(*source.callbacks.lock().unwrap(), 0);
+    }
+    #[test]
+    #[ignore = "explicit NEW generated CFAPI root; writable mapped view after file handle close"]
+    #[cfg(all(feature = "native-sync", feature = "native-test-hooks"))]
+    fn writable_mapping_is_a_capture_veto_even_after_the_file_handle_closes() {
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, FILE_MAP_WRITE, MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
+        };
+        struct Bytes;
+        impl HydrationSource for Bytes {
+            fn size(&self, _: &[u8]) -> Result<usize> {
+                Ok(131072)
+            }
+            fn read_range(
+                &self,
+                _: &[u8],
+                _: usize,
+                count: usize,
+                _: &AtomicBool,
+            ) -> Result<Vec<u8>> {
+                Ok(vec![0x51; count])
+            }
+        }
+        let root = PathBuf::from(
+            std::env::var_os("TWODRIVE_APPROVED_MAPPED_CAPTURE_ROOT")
+                .expect("explicit new generated root"),
+        );
+        assert!(
+            root.is_absolute()
+                && !root.exists()
+                && root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("twodrive-cfapi-fixture-office-")
+        );
+        let checkpoint = root.with_extension("receipt.json");
+        let mut owner = persistent::PersistentSession::create_new(
+            &root,
+            b"twodrive-dev-native-v1:generated-office-only",
+            &checkpoint,
+            Arc::new(Bytes),
+        )
+        .unwrap();
+        let path = owner
+            .publish_placeholder(
+                Path::new("generated-mapped.bin"),
+                b"generated-mapped-file",
+                131072,
+                false,
+                1,
+            )
+            .unwrap();
+        let raw = unsafe {
+            CreateFileW(
+                wide(&path).as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                ptr::null(),
+                OPEN_EXISTING,
+                0,
+                ptr::null_mut(),
+            )
+        };
+        assert!(raw != INVALID_HANDLE_VALUE);
+        let file = Handle(raw, false);
+        let raw =
+            unsafe { CreateFileMappingW(file.0, ptr::null(), PAGE_READWRITE, 0, 0, ptr::null()) };
+        assert!(!raw.is_null());
+        let mapping = Handle(raw, false);
+        let view = unsafe { MapViewOfFile(mapping.0, FILE_MAP_WRITE, 0, 0, 0) };
+        assert!(!view.Value.is_null());
+        drop(file);
+        let mut entered = false;
+        let capture = with_native_capture(&path, b"generated-mapped-file", |locked| {
+            entered = true;
+            struct Writer {
+                pointer: *mut u8,
+                bytes: Vec<u8>,
+                changed: bool,
+            }
+            impl std::io::Write for Writer {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    self.bytes.extend_from_slice(bytes);
+                    if !self.changed {
+                        unsafe {
+                            self.pointer.write_volatile(0xa5);
+                            self.pointer.add(131071).write_volatile(0xa5);
+                        }
+                        self.changed = true;
+                    }
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let before = locked.modified_time()?;
+            let mut output = Writer {
+                pointer: view.Value.cast(),
+                bytes: Vec::new(),
+                changed: false,
+            };
+            locked.copy_resident_to(&mut output)?;
+            if locked.modified_time()? != before {
+                return Err("mapped edit changed timestamp".into());
+            }
+            Ok(output.bytes)
+        });
+        assert_ne!(unsafe { UnmapViewOfFile(view) }, 0);
+        drop(mapping);
+        fs::remove_file(&path).unwrap();
+        owner.retire_empty_office_fixture().unwrap();
+        drop(owner);
+        fs::remove_dir(root).unwrap();
+        fs::remove_file(checkpoint).unwrap();
+        assert!(
+            capture.is_err() && !entered,
+            "capture entered despite an active writable mapped view"
+        );
+    }
+    #[test]
+    fn unavailable_fetch_never_opens_an_engine_reader() {
+        struct Recording(Arc<AtomicUsize>);
+        impl HydrationSource for Recording {
+            fn size(&self, _: &[u8]) -> Result<usize> {
+                Ok(4096)
+            }
+            fn begin_read(
+                &self,
+                _: &[u8],
+                _: &AtomicBool,
+            ) -> Result<Option<Box<dyn HydrationRead>>> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+            fn read_range(&self, _: &[u8], _: usize, _: usize, _: &AtomicBool) -> Result<Vec<u8>> {
+                panic!("unavailable callback must not read")
+            }
+        }
+        for stopping in [false, true] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let source = Source {
+                engine: Some(Arc::new(Recording(calls.clone()))),
+                ..Default::default()
+            };
+            source.offline.store(!stopping, Ordering::SeqCst);
+            source.stopping.store(stopping, Ordering::SeqCst);
+            let identity = b"generated-unavailable-object";
+            let info = CF_CALLBACK_INFO {
+                StructSize: size_of::<CF_CALLBACK_INFO>() as u32,
+                CallbackContext: (&source as *const Source).cast_mut().cast(),
+                FileIdentity: identity.as_ptr().cast(),
+                FileIdentityLength: identity.len() as u32,
+                ..Default::default()
+            };
+            let mut parameters = CF_CALLBACK_PARAMETERS {
+                ParamSize: size_of::<CF_CALLBACK_PARAMETERS>() as u32,
+                ..Default::default()
+            };
+            parameters.Anonymous.FetchData.RequiredLength = 4096;
+            // Exercise the callback body; replace only the final OS transfer.
+            // Never pass synthetic connection keys into CldApi itself.
+            unsafe {
+                fetch_with_transfer(&info, &parameters, |_, status, _, _, bytes| {
+                    assert!(status < 0 && bytes.is_empty());
+                    Ok(())
+                })
+            };
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "unavailable reader was opened"
+            );
+            assert!(source.active.lock().unwrap().is_empty());
+            assert_eq!(source.failures.load(Ordering::SeqCst), 1);
+        }
+    }
     #[test]
     fn only_known_unmanaged_hresult_allows_creation() {
         assert!(require_unmanaged(0x80070186u32 as i32).is_ok());

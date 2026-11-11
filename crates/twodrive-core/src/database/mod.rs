@@ -12,6 +12,8 @@ mod delete_retry;
 pub mod local_journal;
 mod metadata;
 mod mutations;
+mod native_events;
+pub use native_events::NativeWatchState;
 mod pins;
 mod queries;
 mod schema;

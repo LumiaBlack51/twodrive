@@ -97,6 +97,9 @@ def main():
                 request("roundtrip.bin", "MOVE", headers={"Destination": f"http://127.0.0.1:{port}/moved.bin", "Overwrite": "F"})
                 request("moved.bin", "DELETE")
                 assert not (root / "moved.bin").exists()
+                from delta_documents import check_documents
+                check_documents(binary, sandbox, root, f"http://127.0.0.1:{port}/",
+                                client_state / "credentials.json", request)
             if args.mount:
                 wait_for(lambda: os.path.ismount(mounted), processes)
                 assert (mounted / "seed.bin").read_bytes() == data
@@ -110,6 +113,17 @@ def main():
                     assert not (root / "denied.txt").exists()
                     print("PASS: kernel read-only FUSE mount; server denies PUT")
                     return
+                modified = bytearray(data)
+                replacement = b"delta mount save!!!!"
+                assert len(replacement) == 20
+                modified[100000:100020] = replacement
+                with (mounted / "seed.bin").open("r+b") as file:
+                    file.seek(100000)
+                    file.write(modified[100000:100020])
+                    file.flush()
+                    os.fsync(file.fileno())
+                wait_for(lambda: (root / "seed.bin").read_bytes() == modified, processes, seconds=90)
+                print("PASS: isolated FUSE existing-file edit/conditional upload byte comparison", flush=True)
                 folder = mounted / "new-folder"
                 folder.mkdir()
                 local = folder / "written.txt"

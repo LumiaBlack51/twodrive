@@ -63,6 +63,60 @@ fn unsupported_graph_names_fail_before_network_io() {
 }
 
 #[test]
+fn invalid_rename_and_folder_names_are_rejected_before_authentication_or_network() {
+    use twodrive_core::{AppPaths, TokenData, TokenStore};
+    let root = std::env::temp_dir().join(format!(
+        "td-name-preflight-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let paths = AppPaths {
+        config_dir: root.clone(),
+        config_path: root.join("config.toml"),
+        data_dir: root.clone(),
+        cache_dir: root.join("cache"),
+        db_path: root.join("db"),
+        mount_dir: root.join("mount"),
+        token_path: root.join("tokens.json"),
+    };
+    TokenStore::new(&paths.token_path)
+        .save(&TokenData {
+            access_token: "synthetic-expired".into(),
+            refresh_token: None,
+            expires_at_unix: 0,
+        })
+        .unwrap();
+    let graph = GraphBackend::from_paths(&paths).unwrap();
+    for path in [
+        "/Draft: proposal.docx",
+        "/folder?/proposal.docx",
+        "/bad*/file",
+        "/bad|name",
+        "/bad\u{0001}name",
+    ] {
+        for error in [
+            graph.rename("synthetic-id", path).unwrap_err(),
+            graph.create_folder(path).unwrap_err(),
+        ] {
+            assert!(
+                error.to_string().contains("unsupported OneDrive file name"),
+                "{error}"
+            );
+        }
+    }
+    for path in ["/Draft： proposal.docx", "/literal%3a.docx", "/valid.docx"] {
+        assert!(
+            graph
+                .rename("synthetic-id", path)
+                .unwrap_err()
+                .to_string()
+                .contains("access token expired")
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn graph_move_resolves_the_parent_item_instead_of_sending_a_path() {
     assert_eq!(
         graph_parent_lookup_url("/"),
@@ -390,6 +444,7 @@ fn upload_session_store_round_trips_with_private_permissions() {
             remote_id: Some("remote-id".to_string()),
             if_match: Some("etag".to_string()),
             create_only: false,
+            source_digest: None,
         },
     );
     store.save(&path).unwrap();
@@ -404,6 +459,102 @@ fn upload_session_store_round_trips_with_private_permissions() {
         0o600
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_same_size_same_time_different_snapshot_cannot_resume_old_fragments() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let (_sandbox, graph) = super::desktop::tests::backend(&server);
+    let source = graph
+        .upload_sessions_path
+        .with_file_name("generated-source.bin");
+    let write = |bytes: &[u8]| {
+        fs::write(&source, bytes).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(123)),
+            )
+            .unwrap();
+    };
+    write(b"snapshot-A");
+    let first = super::upload::source_digest(&source).unwrap();
+    let session = PersistedUploadSession {
+        upload_url: "https://upload.example/generated-only".into(),
+        source_size: 10,
+        source_modified_unix: 123,
+        remote_id: Some("generated-id".into()),
+        if_match: Some("etag-1".into()),
+        create_only: false,
+        source_digest: Some(first.clone()),
+    };
+    graph
+        .save_upload_session("/generated.bin".into(), session.clone())
+        .unwrap();
+    assert!(
+        graph
+            .matching_upload_session(
+                "/generated.bin",
+                10,
+                123,
+                Some("generated-id"),
+                Some("etag-1"),
+                &first
+            )
+            .unwrap()
+            .is_some()
+    );
+    write(b"snapshot-B");
+    let metadata = fs::metadata(&source).unwrap();
+    assert_eq!(metadata.len(), 10);
+    assert_eq!(
+        metadata
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+        123
+    );
+    let second = super::upload::source_digest(&source).unwrap();
+    assert_ne!(first, second);
+    assert!(
+        graph
+            .matching_upload_session(
+                "/generated.bin",
+                10,
+                123,
+                Some("generated-id"),
+                Some("etag-1"),
+                &second
+            )
+            .unwrap()
+            .is_none()
+    );
+    let mut legacy = serde_json::to_value(session).unwrap();
+    legacy.as_object_mut().unwrap().remove("source_digest");
+    graph
+        .save_upload_session(
+            "/generated.bin".into(),
+            serde_json::from_value(legacy).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        graph
+            .matching_upload_session(
+                "/generated.bin",
+                10,
+                123,
+                Some("generated-id"),
+                Some("etag-1"),
+                &first
+            )
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

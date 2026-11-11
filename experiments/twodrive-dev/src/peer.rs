@@ -465,7 +465,11 @@ pub async fn serve(
     max_upload: u64,
 ) -> anyhow::Result<()> {
     prepare_share(&endpoint, &state, root, writable)?;
-    let dav = handler(root)?;
+    let fs = CapFs::new(root)?;
+    let dav = DavHandler::builder()
+        .filesystem(Box::new(fs.clone()))
+        .locksystem(MemLs::new())
+        .build_handler();
     let connections = Arc::new(Semaphore::new(32));
     let streams = Arc::new(Semaphore::new(64));
     let mutations = Arc::new(Mutex::new(()));
@@ -475,6 +479,7 @@ pub async fn serve(
             continue;
         };
         let state = state.clone();
+        let fs = fs.clone();
         let dav = dav.clone();
         let streams = streams.clone();
         let mutations = mutations.clone();
@@ -490,6 +495,7 @@ pub async fn serve(
                     break;
                 };
                 let state = state.clone();
+                let fs = fs.clone();
                 let dav = dav.clone();
                 let id = id.clone();
                 let mutations = mutations.clone();
@@ -509,6 +515,7 @@ pub async fn serve(
                     }
                     let service = service_fn(move |request: Request<Incoming>| {
                         let state = state.clone();
+                        let fs = fs.clone();
                         let dav = dav.clone();
                         let id = id.clone();
                         let mutations = mutations.clone();
@@ -519,7 +526,7 @@ pub async fn serve(
                             if !writable
                                 && !matches!(
                                     request.method().as_str(),
-                                    "GET" | "HEAD" | "OPTIONS" | "PROPFIND"
+                                    "GET" | "HEAD" | "OPTIONS" | "PROPFIND" | "TD-SIGNATURE"
                                 )
                             {
                                 return Ok(dav_error(StatusCode::FORBIDDEN));
@@ -534,14 +541,25 @@ pub async fn serve(
                             {
                                 return Ok(dav_error(StatusCode::FORBIDDEN));
                             }
-                            if request.headers().contains_key("Content-Range")
-                                || request.method().as_str() == "PATCH"
-                            {
+                            if request.headers().contains_key("Content-Range") {
                                 return Ok(dav_error(StatusCode::NOT_IMPLEMENTED));
                             }
                             // This covers chunked bodies too; partial writes never commit.
                             let _guard = mutations.lock().await;
-                            Ok(handle_limited(dav, request, max_upload).await)
+                            if matches!(request.method().as_str(), "TD-SIGNATURE" | "PATCH") {
+                                return Ok(
+                                    crate::delta_http::handle(dav, fs, request, max_upload).await
+                                );
+                            }
+                            let options = request.method() == http::Method::OPTIONS;
+                            let mut response = handle_limited(dav, request, max_upload).await;
+                            if options && response.status().is_success() {
+                                response.headers_mut().insert(
+                                    "Accept-Patch",
+                                    crate::delta::MEDIA_TYPE.parse().unwrap(),
+                                );
+                            }
+                            Ok(response)
                         }
                     });
                     let _ = hyper::server::conn::http1::Builder::new()

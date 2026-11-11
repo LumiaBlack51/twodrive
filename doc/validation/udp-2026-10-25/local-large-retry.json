@@ -1,0 +1,993 @@
+{
+  "schema": 1,
+  "scope": "same-host-two-processes",
+  "independent_nat_established": false,
+  "network_mode": "lan",
+  "continuous_path_evidence": false,
+  "attempts": [
+    {
+      "status": "passed",
+      "files": [
+        {
+          "file": "empty.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "upload_seconds": 0.007325,
+          "download_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "download_seconds": 0.003862,
+          "download_MiB_s": 0.0,
+          "create_collision": "passed"
+        },
+        {
+          "file": "中文 空格/long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-long-.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 4099,
+          "sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "upload_seconds": 0.008655,
+          "download_sha256": "60a62725a6589b4c56d914f383935cf1f09fdb4c6e6814c1545d5ade78281416",
+          "download_seconds": 0.003115,
+          "download_MiB_s": 1.255,
+          "range": "passed"
+        },
+        {
+          "file": "nested/a/b/small.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 65537,
+          "sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "upload_seconds": 0.010384,
+          "download_sha256": "2deb0bd2129a9d3aed91e3cff58b3993752be549642890a3e853ec1065f9b617",
+          "download_seconds": 0.006966,
+          "download_MiB_s": 8.972,
+          "range": "passed"
+        },
+        {
+          "file": "100MiB.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 104857600,
+          "sha256": "4cbf988462cc3ba2e10e3aae9f5268546aa79016359fb45be7dd199c073125c0",
+          "upload_seconds": 1.26091,
+          "download_sha256": "4cbf988462cc3ba2e10e3aae9f5268546aa79016359fb45be7dd199c073125c0",
+          "download_seconds": 0.897321,
+          "download_MiB_s": 111.443,
+          "range": "passed"
+        },
+        {
+          "file": "1GiB.bin",
+          "status": "passed",
+          "stage": "complete",
+          "size": 1073741824,
+          "sha256": "2c06ade942ee3f17a048dd1064b2fab046a4bb95386d8bb41b68dc6711ac2af3",
+          "upload_seconds": 22.188129,
+          "download_sha256": "2c06ade942ee3f17a048dd1064b2fab046a4bb95386d8bb41b68dc6711ac2af3",
+          "download_seconds": 16.727233,
+          "download_MiB_s": 61.218,
+          "range": "passed"
+        },
+        {
+          "case": "owned_remote_collection_cleanup",
+          "status": "passed"
+        }
+      ],
+      "path_coverage": "initial-only",
+      "whole_transfer_transport": "unverified",
+      "connect_seconds": 0.835144,
+      "resource_samples": [
+        {
+          "seconds": 0.0,
+          "role": "server",
+          "cpu_seconds": 0.09375,
+          "rss_bytes": 19734528,
+          "peak_rss_bytes": 19734528
+        },
+        {
+          "seconds": 0.0,
+          "role": "client",
+          "cpu_seconds": 0.046875,
+          "rss_bytes": 19857408,
+          "peak_rss_bytes": 19857408
+        },
+        {
+          "seconds": 0.988,
+          "role": "server",
+          "cpu_seconds": 0.453125,
+          "rss_bytes": 21864448,
+          "peak_rss_bytes": 21864448
+        },
+        {
+          "seconds": 0.988,
+          "role": "client",
+          "cpu_seconds": 0.234375,
+          "rss_bytes": 22175744,
+          "peak_rss_bytes": 24080384
+        },
+        {
+          "seconds": 2.003,
+          "role": "server",
+          "cpu_seconds": 1.484375,
+          "rss_bytes": 21872640,
+          "peak_rss_bytes": 21872640
+        },
+        {
+          "seconds": 2.003,
+          "role": "client",
+          "cpu_seconds": 1.203125,
+          "rss_bytes": 21790720,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 3.01,
+          "role": "server",
+          "cpu_seconds": 2.734375,
+          "rss_bytes": 23199744,
+          "peak_rss_bytes": 23855104
+        },
+        {
+          "seconds": 3.01,
+          "role": "client",
+          "cpu_seconds": 2.890625,
+          "rss_bytes": 21016576,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 4.01,
+          "role": "server",
+          "cpu_seconds": 4.09375,
+          "rss_bytes": 22953984,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 4.01,
+          "role": "client",
+          "cpu_seconds": 4.5625,
+          "rss_bytes": 21069824,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 5.019,
+          "role": "server",
+          "cpu_seconds": 4.796875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 5.019,
+          "role": "client",
+          "cpu_seconds": 5.34375,
+          "rss_bytes": 20963328,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 6.034,
+          "role": "server",
+          "cpu_seconds": 4.796875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 6.034,
+          "role": "client",
+          "cpu_seconds": 5.34375,
+          "rss_bytes": 20963328,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 7.035,
+          "role": "server",
+          "cpu_seconds": 4.796875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 7.035,
+          "role": "client",
+          "cpu_seconds": 5.34375,
+          "rss_bytes": 20963328,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 8.049,
+          "role": "server",
+          "cpu_seconds": 4.796875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 8.049,
+          "role": "client",
+          "cpu_seconds": 5.34375,
+          "rss_bytes": 20963328,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 9.049,
+          "role": "server",
+          "cpu_seconds": 4.796875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 9.049,
+          "role": "client",
+          "cpu_seconds": 5.34375,
+          "rss_bytes": 20963328,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 10.049,
+          "role": "server",
+          "cpu_seconds": 4.796875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 10.049,
+          "role": "client",
+          "cpu_seconds": 5.34375,
+          "rss_bytes": 20996096,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 11.05,
+          "role": "server",
+          "cpu_seconds": 4.796875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 11.05,
+          "role": "client",
+          "cpu_seconds": 5.34375,
+          "rss_bytes": 20996096,
+          "peak_rss_bytes": 24461312
+        },
+        {
+          "seconds": 12.051,
+          "role": "server",
+          "cpu_seconds": 6.15625,
+          "rss_bytes": 21749760,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 12.051,
+          "role": "client",
+          "cpu_seconds": 6.578125,
+          "rss_bytes": 23224320,
+          "peak_rss_bytes": 24846336
+        },
+        {
+          "seconds": 13.066,
+          "role": "server",
+          "cpu_seconds": 7.953125,
+          "rss_bytes": 21827584,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 13.066,
+          "role": "client",
+          "cpu_seconds": 8.125,
+          "rss_bytes": 23642112,
+          "peak_rss_bytes": 24846336
+        },
+        {
+          "seconds": 14.066,
+          "role": "server",
+          "cpu_seconds": 9.859375,
+          "rss_bytes": 21827584,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 14.066,
+          "role": "client",
+          "cpu_seconds": 9.4375,
+          "rss_bytes": 23277568,
+          "peak_rss_bytes": 24846336
+        },
+        {
+          "seconds": 15.08,
+          "role": "server",
+          "cpu_seconds": 11.890625,
+          "rss_bytes": 21803008,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 15.08,
+          "role": "client",
+          "cpu_seconds": 10.90625,
+          "rss_bytes": 23228416,
+          "peak_rss_bytes": 24846336
+        },
+        {
+          "seconds": 16.083,
+          "role": "server",
+          "cpu_seconds": 13.734375,
+          "rss_bytes": 22364160,
+          "peak_rss_bytes": 23928832
+        },
+        {
+          "seconds": 16.084,
+          "role": "client",
+          "cpu_seconds": 12.265625,
+          "rss_bytes": 23883776,
+          "peak_rss_bytes": 24846336
+        },
+        {
+          "seconds": 17.151,
+          "role": "server",
+          "cpu_seconds": 15.125,
+          "rss_bytes": 22880256,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 17.153,
+          "role": "client",
+          "cpu_seconds": 13.734375,
+          "rss_bytes": 24317952,
+          "peak_rss_bytes": 25247744
+        },
+        {
+          "seconds": 18.154,
+          "role": "server",
+          "cpu_seconds": 17.046875,
+          "rss_bytes": 22573056,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 18.154,
+          "role": "client",
+          "cpu_seconds": 15.140625,
+          "rss_bytes": 24473600,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 19.167,
+          "role": "server",
+          "cpu_seconds": 18.8125,
+          "rss_bytes": 22650880,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 19.168,
+          "role": "client",
+          "cpu_seconds": 16.484375,
+          "rss_bytes": 24416256,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 20.182,
+          "role": "server",
+          "cpu_seconds": 20.703125,
+          "rss_bytes": 22560768,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 20.182,
+          "role": "client",
+          "cpu_seconds": 17.96875,
+          "rss_bytes": 23826432,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 21.185,
+          "role": "server",
+          "cpu_seconds": 22.71875,
+          "rss_bytes": 22589440,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 21.185,
+          "role": "client",
+          "cpu_seconds": 19.328125,
+          "rss_bytes": 24125440,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 22.198,
+          "role": "server",
+          "cpu_seconds": 24.484375,
+          "rss_bytes": 22601728,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 22.198,
+          "role": "client",
+          "cpu_seconds": 20.78125,
+          "rss_bytes": 23031808,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 23.2,
+          "role": "server",
+          "cpu_seconds": 26.3125,
+          "rss_bytes": 22556672,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 23.2,
+          "role": "client",
+          "cpu_seconds": 22.3125,
+          "rss_bytes": 23031808,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 24.201,
+          "role": "server",
+          "cpu_seconds": 28.234375,
+          "rss_bytes": 22777856,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 24.201,
+          "role": "client",
+          "cpu_seconds": 23.65625,
+          "rss_bytes": 23867392,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 25.201,
+          "role": "server",
+          "cpu_seconds": 30.265625,
+          "rss_bytes": 22622208,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 25.201,
+          "role": "client",
+          "cpu_seconds": 25.0625,
+          "rss_bytes": 23904256,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 26.217,
+          "role": "server",
+          "cpu_seconds": 32.203125,
+          "rss_bytes": 22663168,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 26.217,
+          "role": "client",
+          "cpu_seconds": 26.59375,
+          "rss_bytes": 24293376,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 27.218,
+          "role": "server",
+          "cpu_seconds": 34.03125,
+          "rss_bytes": 22683648,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 27.218,
+          "role": "client",
+          "cpu_seconds": 28.078125,
+          "rss_bytes": 24006656,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 28.23,
+          "role": "server",
+          "cpu_seconds": 34.828125,
+          "rss_bytes": 22708224,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 28.231,
+          "role": "client",
+          "cpu_seconds": 28.671875,
+          "rss_bytes": 22622208,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 29.236,
+          "role": "server",
+          "cpu_seconds": 34.859375,
+          "rss_bytes": 22708224,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 29.236,
+          "role": "client",
+          "cpu_seconds": 28.671875,
+          "rss_bytes": 22622208,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 30.239,
+          "role": "server",
+          "cpu_seconds": 34.859375,
+          "rss_bytes": 22695936,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 30.239,
+          "role": "client",
+          "cpu_seconds": 28.671875,
+          "rss_bytes": 22609920,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 31.241,
+          "role": "server",
+          "cpu_seconds": 34.859375,
+          "rss_bytes": 22695936,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 31.242,
+          "role": "client",
+          "cpu_seconds": 28.671875,
+          "rss_bytes": 22609920,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 32.252,
+          "role": "server",
+          "cpu_seconds": 34.859375,
+          "rss_bytes": 22695936,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 32.252,
+          "role": "client",
+          "cpu_seconds": 28.671875,
+          "rss_bytes": 22609920,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 33.252,
+          "role": "server",
+          "cpu_seconds": 34.875,
+          "rss_bytes": 22695936,
+          "peak_rss_bytes": 24047616
+        },
+        {
+          "seconds": 33.252,
+          "role": "client",
+          "cpu_seconds": 28.671875,
+          "rss_bytes": 22609920,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 34.261,
+          "role": "server",
+          "cpu_seconds": 36.140625,
+          "rss_bytes": 23527424,
+          "peak_rss_bytes": 24297472
+        },
+        {
+          "seconds": 34.261,
+          "role": "client",
+          "cpu_seconds": 30.171875,
+          "rss_bytes": 21340160,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 35.275,
+          "role": "server",
+          "cpu_seconds": 37.59375,
+          "rss_bytes": 23724032,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 35.275,
+          "role": "client",
+          "cpu_seconds": 32.015625,
+          "rss_bytes": 21319680,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 36.281,
+          "role": "server",
+          "cpu_seconds": 39.0,
+          "rss_bytes": 23400448,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 36.282,
+          "role": "client",
+          "cpu_seconds": 34.109375,
+          "rss_bytes": 21372928,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 37.289,
+          "role": "server",
+          "cpu_seconds": 40.40625,
+          "rss_bytes": 23400448,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 37.289,
+          "role": "client",
+          "cpu_seconds": 36.015625,
+          "rss_bytes": 21463040,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 38.293,
+          "role": "server",
+          "cpu_seconds": 41.921875,
+          "rss_bytes": 23404544,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 38.293,
+          "role": "client",
+          "cpu_seconds": 38.203125,
+          "rss_bytes": 21397504,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 39.298,
+          "role": "server",
+          "cpu_seconds": 43.359375,
+          "rss_bytes": 23629824,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 39.298,
+          "role": "client",
+          "cpu_seconds": 40.203125,
+          "rss_bytes": 21360640,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 40.306,
+          "role": "server",
+          "cpu_seconds": 44.765625,
+          "rss_bytes": 22974464,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 40.306,
+          "role": "client",
+          "cpu_seconds": 42.15625,
+          "rss_bytes": 21389312,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 41.306,
+          "role": "server",
+          "cpu_seconds": 46.3125,
+          "rss_bytes": 23228416,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 41.306,
+          "role": "client",
+          "cpu_seconds": 44.03125,
+          "rss_bytes": 21393408,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 42.312,
+          "role": "server",
+          "cpu_seconds": 47.703125,
+          "rss_bytes": 23822336,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 42.313,
+          "role": "client",
+          "cpu_seconds": 46.171875,
+          "rss_bytes": 21393408,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 43.312,
+          "role": "server",
+          "cpu_seconds": 49.3125,
+          "rss_bytes": 23826432,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 43.312,
+          "role": "client",
+          "cpu_seconds": 48.03125,
+          "rss_bytes": 21389312,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 44.319,
+          "role": "server",
+          "cpu_seconds": 50.828125,
+          "rss_bytes": 23400448,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 44.319,
+          "role": "client",
+          "cpu_seconds": 49.96875,
+          "rss_bytes": 21557248,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 45.322,
+          "role": "server",
+          "cpu_seconds": 52.296875,
+          "rss_bytes": 24223744,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 45.322,
+          "role": "client",
+          "cpu_seconds": 52.171875,
+          "rss_bytes": 21577728,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 46.326,
+          "role": "server",
+          "cpu_seconds": 53.765625,
+          "rss_bytes": 23400448,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 46.326,
+          "role": "client",
+          "cpu_seconds": 54.109375,
+          "rss_bytes": 21585920,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 47.327,
+          "role": "server",
+          "cpu_seconds": 55.3125,
+          "rss_bytes": 23465984,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 47.327,
+          "role": "client",
+          "cpu_seconds": 56.140625,
+          "rss_bytes": 21590016,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 48.329,
+          "role": "server",
+          "cpu_seconds": 56.71875,
+          "rss_bytes": 23404544,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 48.329,
+          "role": "client",
+          "cpu_seconds": 58.015625,
+          "rss_bytes": 21491712,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 49.329,
+          "role": "server",
+          "cpu_seconds": 58.09375,
+          "rss_bytes": 23400448,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 49.33,
+          "role": "client",
+          "cpu_seconds": 59.96875,
+          "rss_bytes": 21450752,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 50.33,
+          "role": "server",
+          "cpu_seconds": 59.546875,
+          "rss_bytes": 23842816,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 50.33,
+          "role": "client",
+          "cpu_seconds": 61.703125,
+          "rss_bytes": 21471232,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 51.332,
+          "role": "server",
+          "cpu_seconds": 61.046875,
+          "rss_bytes": 23400448,
+          "peak_rss_bytes": 24735744
+        },
+        {
+          "seconds": 51.332,
+          "role": "client",
+          "cpu_seconds": 63.5625,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 52.333,
+          "role": "server",
+          "cpu_seconds": 62.53125,
+          "rss_bytes": 24186880,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 52.333,
+          "role": "client",
+          "cpu_seconds": 65.71875,
+          "rss_bytes": 21467136,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 53.334,
+          "role": "server",
+          "cpu_seconds": 63.90625,
+          "rss_bytes": 23826432,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 53.334,
+          "role": "client",
+          "cpu_seconds": 67.46875,
+          "rss_bytes": 21442560,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 54.334,
+          "role": "server",
+          "cpu_seconds": 65.421875,
+          "rss_bytes": 23826432,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 54.334,
+          "role": "client",
+          "cpu_seconds": 69.515625,
+          "rss_bytes": 21422080,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 55.335,
+          "role": "server",
+          "cpu_seconds": 66.921875,
+          "rss_bytes": 23826432,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 55.335,
+          "role": "client",
+          "cpu_seconds": 71.296875,
+          "rss_bytes": 21524480,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 56.341,
+          "role": "server",
+          "cpu_seconds": 68.40625,
+          "rss_bytes": 23650304,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 56.341,
+          "role": "client",
+          "cpu_seconds": 72.875,
+          "rss_bytes": 21483520,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 57.353,
+          "role": "server",
+          "cpu_seconds": 69.859375,
+          "rss_bytes": 24567808,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 57.353,
+          "role": "client",
+          "cpu_seconds": 74.75,
+          "rss_bytes": 21651456,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 58.36,
+          "role": "server",
+          "cpu_seconds": 71.265625,
+          "rss_bytes": 23994368,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 58.36,
+          "role": "client",
+          "cpu_seconds": 76.84375,
+          "rss_bytes": 21635072,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 59.362,
+          "role": "server",
+          "cpu_seconds": 72.65625,
+          "rss_bytes": 23322624,
+          "peak_rss_bytes": 24834048
+        },
+        {
+          "seconds": 59.362,
+          "role": "client",
+          "cpu_seconds": 78.5,
+          "rss_bytes": 21610496,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 60.376,
+          "role": "server",
+          "cpu_seconds": 74.0625,
+          "rss_bytes": 23769088,
+          "peak_rss_bytes": 24842240
+        },
+        {
+          "seconds": 60.376,
+          "role": "client",
+          "cpu_seconds": 80.375,
+          "rss_bytes": 21401600,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 61.383,
+          "role": "server",
+          "cpu_seconds": 75.484375,
+          "rss_bytes": 23691264,
+          "peak_rss_bytes": 24842240
+        },
+        {
+          "seconds": 61.383,
+          "role": "client",
+          "cpu_seconds": 82.203125,
+          "rss_bytes": 21434368,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 62.386,
+          "role": "server",
+          "cpu_seconds": 76.90625,
+          "rss_bytes": 23347200,
+          "peak_rss_bytes": 24842240
+        },
+        {
+          "seconds": 62.386,
+          "role": "client",
+          "cpu_seconds": 84.4375,
+          "rss_bytes": 21762048,
+          "peak_rss_bytes": 25743360
+        },
+        {
+          "seconds": 63.393,
+          "role": "server",
+          "cpu_seconds": 78.25,
+          "rss_bytes": 23777280,
+          "peak_rss_bytes": 24842240
+        },
+        {
+          "seconds": 63.394,
+          "role": "client",
+          "cpu_seconds": 86.5,
+          "rss_bytes": 21585920,
+          "peak_rss_bytes": 25743360
+        }
+      ],
+      "initial_transports": [
+        "direct-udp"
+      ],
+      "owned_processes_stopped": true,
+      "shared_files_remaining": 0,
+      "seconds": 64.889116
+    }
+  ],
+  "resume_supported": false,
+  "cpu_memory_sampling": "1s-Windows-owned-backends",
+  "started_utc": "2026-10-25T12:05:39Z",
+  "binary_sha256": "b1185b615eb63b266cc30baf3cfb7dbf8c5b1746e68117dcece92b1af034de17",
+  "seconds": 64.897882,
+  "passed": 1,
+  "failed": 0,
+  "soak_duration_met": false
+}

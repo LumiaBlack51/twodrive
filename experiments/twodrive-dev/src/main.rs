@@ -12,7 +12,7 @@ use twodrive_dev::model::CloudBackend;
 use twodrive_dev::{
     peer::{self, Network},
     state::{Credentials, Invitation, State},
-    webdav::WebDavBackend,
+    webdav::{UploadMode, WebDavBackend},
 };
 
 #[cfg(all(feature = "mount", target_os = "linux"))]
@@ -125,6 +125,9 @@ enum Command {
         ticket_file: Option<PathBuf>,
         #[arg(long, default_value = "127.0.0.1:4918")]
         listen: SocketAddr,
+        /// Force full PUT for the optional mount instead of negotiated delta uploads.
+        #[arg(long)]
+        full_upload: bool,
         /// Also mount using the isolated Linux FUSE adapter (requires --features mount).
         #[arg(long)]
         mount: Option<PathBuf>,
@@ -150,6 +153,9 @@ enum Command {
     },
     /// Connect to an existing HTTPS WebDAV service or a local peer gateway.
     Webdav {
+        /// Always upload full files, retaining conditional overwrite checks.
+        #[arg(long)]
+        full_upload: bool,
         #[arg(long)]
         url: String,
         /// Private JSON with username/password; never include passwords in the URL.
@@ -328,6 +334,7 @@ fn main() -> anyhow::Result<()> {
             twodrive_dev::test_agent::verify_report(&input, device, &out)?
         }
         Command::Webdav {
+            full_upload,
             url,
             auth_file,
             write,
@@ -340,7 +347,12 @@ fn main() -> anyhow::Result<()> {
                 .as_ref()
                 .map(|auth| auth.username.clone())
                 .unwrap_or_default();
-            let backend = WebDavBackend::new(&url, credentials, write)?;
+            let backend =
+                WebDavBackend::new(&url, credentials, write)?.with_upload_mode(if full_upload {
+                    UploadMode::Full
+                } else {
+                    UploadMode::Auto
+                });
             match action {
                 DavAction::List => {
                     for entry in backend.list_all()? {
@@ -369,13 +381,28 @@ fn main() -> anyhow::Result<()> {
                     path,
                     if_match,
                 } => {
-                    backend.upload_file_with_version(
+                    let outcome = backend.upload_controlled_with_mode(
                         &path,
                         &source,
-                        None,
                         if_match.as_deref(),
-                        &mut |_, _| Ok(()),
+                        if full_upload {
+                            UploadMode::Full
+                        } else {
+                            UploadMode::Auto
+                        },
+                        std::sync::Arc::new(|_, _| Ok(())),
                     )?;
+                    println!(
+                        "upload={} bytes={} reused={} signature={}",
+                        if outcome.kind == twodrive_dev::webdav::UploadKind::Delta {
+                            "delta"
+                        } else {
+                            "full"
+                        },
+                        outcome.uploaded_bytes,
+                        outcome.reused_bytes,
+                        outcome.signature_bytes
+                    );
                 }
                 DavAction::Mkdir { path } => {
                     backend.create_folder(&path)?;
@@ -427,6 +454,7 @@ fn main() -> anyhow::Result<()> {
             })?;
         }
         Command::Connect {
+            full_upload,
             ticket_file,
             listen,
             mount,
@@ -461,7 +489,12 @@ fn main() -> anyhow::Result<()> {
                     &format!("http://{address_local}/"),
                     Some(credentials),
                     write,
-                )?;
+                )?
+                .with_upload_mode(if full_upload {
+                    UploadMode::Full
+                } else {
+                    UploadMode::Auto
+                });
                 let mount_state = State::new(state.dir.join("mount"))?;
                 mount_dav(
                     mount_state,

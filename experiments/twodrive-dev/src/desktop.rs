@@ -217,6 +217,9 @@ struct App {
 }
 impl App {
     fn saved_session(&self, p: &Profile) -> Option<Value> {
+        if p.kind == "smb" {
+            return None;
+        }
         let session: Value = self.state.read(&format!("session-{}.json", p.id)).ok()?;
         (session["kind"].as_str() == Some(&p.kind)
             && session["revision"].as_str() == Some(&p.revision)
@@ -485,13 +488,13 @@ impl App {
         self.network = Arc::default();
         Ok(())
     }
-    fn connect(&mut self, id: &str, cancel: &AtomicBool) -> anyhow::Result<Value> {
+    fn connect(&mut self, id: &str, cancel: &Arc<AtomicBool>) -> anyhow::Result<Value> {
         self.open_connection(id, cancel, false)
     }
     fn open_connection(
         &mut self,
         id: &str,
-        cancel: &AtomicBool,
+        cancel: &Arc<AtomicBool>,
         resume: bool,
     ) -> anyhow::Result<Value> {
         self.refresh_inactive();
@@ -516,6 +519,7 @@ impl App {
         } else {
             providers::connect(&p, &self.args, cancel, network.clone())?
         };
+        connection.backend.set_operation_cancel(cancel.clone());
         let entries = connection.backend.list_directory_checked("/", &mut || {
             ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
             Ok(())
@@ -615,7 +619,8 @@ impl App {
                     .as_ref()
                     .is_some_and(providers::uses_readonly_bridge)
                 || (c.backup() && c.rename && c.delete));
-        value["mount"] = json!(self.backend.is_some() && supported_mount);
+        value["mount"] =
+            json!(supported_mount && self.backend.as_ref().is_some_and(|b| b.supports_mount()));
         value
     }
     fn status(&mut self) -> anyhow::Result<Value> {
