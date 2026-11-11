@@ -124,6 +124,8 @@ class _OverviewPageState extends State<OverviewPage> {
                         decoration: BoxDecoration(
                           color: problem
                               ? const Color(0xffffe8df)
+                              : c.connectedProfiles.isEmpty
+                              ? const Color(0xffe5e9f0)
                               : const Color(0xffc5f4d3),
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -132,6 +134,8 @@ class _OverviewPageState extends State<OverviewPage> {
                           style: TextStyle(
                             color: problem
                                 ? Colors.deepOrange
+                                : c.connectedProfiles.isEmpty
+                                ? const Color(0xff778295)
                                 : const Color(0xff2e8553),
                             fontWeight: FontWeight.w600,
                           ),
@@ -139,7 +143,7 @@ class _OverviewPageState extends State<OverviewPage> {
                       ),
                       const Spacer(),
                       IconButton.filled(
-                        tooltip: c.paused ? '恢复同步' : '暂停同步',
+                        tooltip: c.paused ? '恢复挂载与备份' : '暂停挂载与备份',
                         onPressed: enabled && c.connectedProfiles.isNotEmpty
                             ? c.pauseToggle
                             : null,
