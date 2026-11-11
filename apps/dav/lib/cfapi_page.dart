@@ -262,7 +262,13 @@ class _CfapiPageState extends State<CfapiPage> {
                 if (preparing)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: Text(working ? '原生目录正在后台准备，原有挂载继续运行。' : retryPrepare ? '上次准备在所有者建立前中断，可保留诊断并重试。' : '准备尚未完成，可继续校验现有原生目录。'),
+                    child: Text(
+                      working
+                          ? '原生目录正在后台准备，原有挂载继续运行。'
+                          : retryPrepare
+                          ? '上次准备在所有者建立前中断，可保留诊断并重试。'
+                          : '准备尚未完成，可继续校验现有原生目录。',
+                    ),
                   ),
                 if (working)
                   const Padding(

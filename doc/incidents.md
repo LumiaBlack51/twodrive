@@ -5,6 +5,37 @@
 本轮 SMB 后续交付：2026-11-07 用户已授权提交至 dev、等待 CI/Dot 并清理本轮临时产物。以下各条“仅本地候选/未提交”描述初次记录时的状态；源码 `7e600c6` 已推送，[PR #59](https://github.com/LumiaBlack51/twodrive/pull/59) 目标 dev，首轮 CI 发现测试依赖边界问题，修复见 TD-20261107-07；新 head 的 CI/Dot 待完成；本轮测试缓存、一次性脚本和可再生成运行组件已清理，保留源码/正式回归及已有用户工作。最新提交与审查记录统一见 [SMB 指南](smb-readonly-dev.md#dev-提交与审查2026-11-07) 和[验证汇总](smb-readonly-validation-2026-11-07.json)。尚未发布、部署或进入写入阶段。
 
 
+## TD-20261111-11：PR #63 的桌面与 Debian 自动检查失败
+
+- 日期：2026-11-11
+- 状态：已定位并修复，待托管 CI 复验。
+- 影响版本与环境：PR #63 提交 `75221de` 的 Linux、Windows 桌面和 Debian 打包任务。
+- 关联历史故障：TD-20261108-08 使用同一历史 Debian 包，本次下载及摘要验证已通过；TD-20261013-11 记录 Windows 托盘焦点回归，本次超时发生在交互检查之前。
+
+### 症状与复现
+
+Linux 桌面在 `dart format --set-exit-if-changed` 步骤退出。Windows 桌面已构建，原生日志出现托盘 `configure`，随后窗口烟测等待 30 秒超时。Debian 已构建并通过依赖、包内容和归档清单检查，兼容性校验在 Nautilus 扩展处失败。
+
+### 根因与证据
+
+Flutter 3.41.8 的 Dart 3.11.5 会重排 `cfapi_page.dart` 内一处过长的表达式。Windows 运行器先创建名为 `TwoDrive Development` 的窗口，Dart 启动时调用 `setTitle` 将它改成 `TwoDrive`，随后才启动引擎；按旧标题查找无法通过引擎锁和托盘就绪的联合判断。Debian 对比要求 Nautilus 扩展与 0.2.14-1 字节一致，而 `1a8e180` 已按计划更新 DAV 状态与角标行为。
+
+### 解决办法与恢复操作
+
+按 CI 工具链格式化对应 Dart 文件。通过现有 `--window-title` 参数为 Windows 烟测设置独立标题，继续核对窗口所属进程、引擎锁和原生托盘就绪属性。Debian 校验将包内 Nautilus 扩展与检出的源码比较，并保留旧包权限、Python shebang 归一化及其他运行文件的历史对比。
+
+### 验证结果与边界
+
+已在同版 Dart 复现原格式失败，修复后 58 个文件格式检查、Flutter 静态分析和 Linux Flutter 121 项测试通过。Nautilus 的 40 项单元测试及两个 Python 校验脚本的语法检查通过。用原失败作业生成的同一份 Debian 包重现旧校验失败，新校验通过 11 项运行文件对比；换成有额外一行的扩展源码时仍失败。包依赖、内容和两份上传清单的校验也通过。Windows 原生交互、Debian 的 Lintian 和容器升级仍由托管作业复验。未执行本机应用升级或真实云端操作。
+
+### 防复发措施与后续
+
+Windows 烟测保留后台隐藏、重复开关、位置稳定、失焦和 Escape 断言，并在超时时分别报告窗口、引擎和托盘状态。Debian 保留固定旧包摘要、缺失依赖反例、权限和运行集成校验。
+
+### 交付记录
+
+[PR #63](https://github.com/LumiaBlack51/twodrive/pull/63) · [原桌面 CI](https://github.com/LumiaBlack51/twodrive/actions/runs/42957534526) · [原 Debian CI](https://github.com/LumiaBlack51/twodrive/actions/runs/42957534489)
+
 ## TD-20261111-10：升级前 CFAPI 状态过期且正常退出未完成
 
 - 日期：2026-11-11；状态：调查中，根因未确认。影响本机旧运行包 7ca58d931f25；与本次 PR 审查五项已确认缺陷分开记录。

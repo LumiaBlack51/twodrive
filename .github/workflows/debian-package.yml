@@ -28,7 +28,7 @@ jobs:
         # -d is restricted to this upstream CI; all native dependencies above
         # are provisioned. Official distribution builds must satisfy Build-Depends.
         run: bash scripts/build-deb.sh -d -j2 > /tmp/debian-build.log 2>&1
-      - name: Check artifacts, unchanged runtime payload and Lintian
+      - name: Check artifacts, runtime payload and Lintian
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -41,7 +41,7 @@ jobs:
           fi
           grep 'missing generated/runtime dependency: libc6' /tmp/old-package-regression.log
           python3 scripts/test-debian-package.py dist/debian/twodrive_*_amd64.deb
-          python3 scripts/test-debian-compatibility.py /tmp/old-twodrive.deb dist/debian/twodrive_*_amd64.deb
+          python3 scripts/test-debian-compatibility.py /tmp/old-twodrive.deb dist/debian/twodrive_*_amd64.deb --nautilus-source packaging/nautilus/twodrive_nautilus.py
           lintian --profile debian --fail-on error dist/debian/*.changes | tee dist/debian/lintian.log
       - name: Disposable install and upgrade lifecycle
         run: |
