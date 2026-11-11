@@ -106,6 +106,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     run('git', 'diff', '--quiet', 'HEAD', '--', '.')
+    run('python3', 'scripts/check-local-package-locks.py', stdout=subprocess.DEVNULL)
     version = subprocess.check_output(['dpkg-parsechangelog', '-S', 'Version'], text=True).strip()
     upstream = version.rsplit('-', 1)[0]
     epoch = int(subprocess.check_output(['git', 'log', '-1', '--format=%ct'], text=True))

@@ -160,11 +160,17 @@ impl GraphBackend {
             // Limit metadata even if a server disregards $top; never include response text in errors.
             use std::io::Read;
             let mut bytes = Vec::new();
-            response
-                .take(256 * 1024 + 1)
+            if response
+                .take(4 * 1024 * 1024 + 1)
                 .read_to_end(&mut bytes)
-                .map_err(|_| anyhow::anyhow!("network_unavailable"))?;
-            anyhow::ensure!(bytes.len() <= 256 * 1024, "metadata_page_too_large");
+                .is_err()
+            {
+                attempt += 1;
+                anyhow::ensure!(attempt < 3, "network_unavailable");
+                super::http::checked_delay(Duration::from_millis(250 << attempt), check)?;
+                continue;
+            }
+            anyhow::ensure!(bytes.len() <= 4 * 1024 * 1024, "metadata_page_too_large");
             return serde_json::from_slice(&bytes)
                 .map_err(|_| anyhow::anyhow!("invalid_graph_metadata"));
         }
@@ -337,6 +343,81 @@ pub(super) mod tests {
         let mut backend = GraphBackend::from_paths(&paths).unwrap();
         backend.test_endpoint = Some(format!("http://{}", server.server_addr()));
         backend
+    }
+
+    #[test]
+    fn incomplete_readonly_metadata_body_retries_the_same_request() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let dummy = Server::http("127.0.0.1:0").unwrap();
+        let mut graph = backend(&dummy);
+        graph.test_endpoint = Some(format!("http://{address}"));
+        let worker = std::thread::spawn(move || {
+            for truncated in [true, false] {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0u8];
+                    socket.read_exact(&mut byte).unwrap();
+                    header.push(byte[0]);
+                    assert!(header.len() < 8192);
+                }
+                assert!(header.starts_with(b"GET /v1.0/me/drive "));
+                if truncated {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2000\r\nConnection: close\r\n\r\n{").unwrap();
+                } else {
+                    let body = br#"{"value":[]}"#;
+                    write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    socket.write_all(body).unwrap();
+                }
+            }
+        });
+        assert!(
+            graph
+                .browse_json("https://graph.microsoft.com/v1.0/me/drive", &mut || Ok(()))
+                .unwrap()["value"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn large_metadata_page_retains_a_bounded_response_budget() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let backend = backend(&server);
+        let worker = std::thread::spawn(move || {
+            for size in [512 * 1024, 4 * 1024 * 1024 + 1] {
+                let q = server.recv().unwrap();
+                q.respond(Response::from_string(
+                    serde_json::json!({"value":[],"generated_metadata": "x".repeat(size)})
+                        .to_string(),
+                ))
+                .unwrap();
+            }
+        });
+        let v = backend
+            .browse_json("https://graph.microsoft.com/v1.0/me/drive", &mut || Ok(()))
+            .unwrap();
+        assert_eq!(v["generated_metadata"].as_str().unwrap().len(), 512 * 1024);
+        assert_eq!(
+            backend
+                .browse_json("https://graph.microsoft.com/v1.0/me/drive", &mut || Ok(()))
+                .unwrap_err()
+                .to_string(),
+            "metadata_page_too_large"
+        );
+        worker.join().unwrap();
     }
 
     #[test]

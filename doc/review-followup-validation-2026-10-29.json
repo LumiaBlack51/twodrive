@@ -1,0 +1,75 @@
+{
+  "scope": "2026-10-29 PR #47 review follow-up; disposable accounts only",
+  "production_base": "e0778de927b599c7c521b30aa31aa44142582294",
+  "real_user_cloud_requests": 0,
+  "user_runtime_updated": false,
+  "old_failures": {
+    "baidu_cache_namespace": "new regression compiled and failed with equal A/B cache paths",
+    "linux_mount_admission_and_legacy_binding": "two regressions compiled and failed before production fixes",
+    "linux_write_lock_fixture": "same 0700 error reproduced in WSL2",
+    "windows_sharing_fixture": "same locked-upload error reproduced locally",
+    "cfapi_windows_compile": "hosted E0433 logs on 59f21b8; missing write_lock/write_recovery modules"
+  },
+  "tests": {
+    "windows-tests": {
+      "passed_executions": 138,
+      "ignored": 7
+    },
+    "linux-tests": {
+      "passed_executions": 130,
+      "ignored": 4
+    },
+    "cfapi-tests": {
+      "passed_executions": 76,
+      "ignored": 4
+    },
+    "cfapi-linux-tests": {
+      "passed_executions": 26,
+      "ignored": 0
+    },
+    "flutter": {
+      "passed": 81,
+      "format_check_passed": true
+    }
+  },
+  "windows_native": {
+    "scope": "disposable accounts and real WinFsp only",
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "checks": {
+      "password_required_before_permission_change": true,
+      "native_seek_edit_create_rename_delete_and_gui_upload": true,
+      "other_account_mount_and_content_preserved": true,
+      "relock_and_restart_restore_readable_readonly_mounts": true,
+      "conflict_blocks_teardown_and_crash_restart_retains_local_edit_without_overwriting": true,
+      "changed_account_binding_uses_new_cache_and_never_replays_old_edit": true,
+      "clean_quit_unmounts_both_accounts": true
+    }
+  },
+  "linux_native": {
+    "scope": "actual Linux FUSE and one disposable loopback account",
+    "real_cloud_requests": 0,
+    "checks": {
+      "unlocked_pending_writes_still_block_unmount_and_quit": true,
+      "legacy_writable_binding_restores_readonly_without_replaying_pending_content": true,
+      "locked_quit_preserves_pending_content_and_releases_mount": true,
+      "explicit_password_unlock_remounts_and_recovers_original_pending_bytes": true,
+      "normal_teardown_releases_owned_mount": true
+    },
+    "passed": true
+  },
+  "checks": {
+    "windows_and_linux_strict_clippy": true,
+    "cfapi_windows_and_linux_strict_clippy": true,
+    "rustfmt": true,
+    "windows_release_bins_built": true,
+    "linux_debug_bins_built": true,
+    "linux_release_built": false,
+    "windows_and_linux_synthetic_sharing": true
+  },
+  "live_validation_limits": [
+    "No real Baidu/WinFsp cross-root replay was injected",
+    "No real cloud writes or editor compatibility acceptance",
+    "Hosted CI must be assessed on the pushed final head"
+  ]
+}

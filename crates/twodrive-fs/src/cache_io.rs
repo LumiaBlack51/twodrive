@@ -23,7 +23,8 @@ pub(crate) fn write_slice(path: &Path, offset: u64, data: &[u8]) -> anyhow::Resu
 pub(crate) fn has_existing_cache(record: &FileRecord) -> bool {
     matches!(
         record.state,
-        FileState::Cached
+        FileState::LocalOnly
+            | FileState::Cached
             | FileState::Pinned
             | FileState::Writing
             | FileState::Dirty

@@ -74,6 +74,7 @@ impl GraphBackend {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::CloudBackend;
     use tiny_http::{Response, Server};
     use twodrive_core::{AppPaths, TokenData, TokenStore, now_unix};
     pub(crate) struct Sandbox(std::path::PathBuf);
@@ -107,24 +108,66 @@ pub(crate) mod tests {
         (Sandbox(root), graph)
     }
     #[test]
-    fn metadata_root_uses_the_root_resource_without_an_empty_path_suffix() {
-        use crate::CloudBackend;
+    fn mount_metadata_uses_root_resource_and_preserves_child_paths_and_absence() {
         let server = Server::http("127.0.0.1:0").unwrap();
         let (_sandbox, graph) = backend(&server);
-        let worker = std::thread::spawn(move || {
-            let request = server.recv().unwrap();
-            let path = request.url().to_string();
-            request
-                .respond(Response::from_string(
-                    r#"{"id":"actual-root","name":"root","folder":{},"eTag":"root-v1"}"#,
-                ))
-                .unwrap();
-            path
+        let serving = std::thread::spawn(move || {
+            for expected in [
+                "/v1.0/me/drive/root",
+                "/v1.0/me/drive/root:/Course%20Work/notes%20%231.txt",
+                "/v1.0/me/drive/root:/missing.txt",
+            ] {
+                let request = server
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                let matched = request.method().as_str() == "GET" && request.url() == expected;
+                let (status, body) = if !matched {
+                    (400, serde_json::json!({"error":{"code":"invalidRequest"}}))
+                } else if expected.ends_with("/root") {
+                    (
+                        200,
+                        serde_json::json!({"id":"opaque-root","name":"root","folder":{},"size":-1,"eTag":"root-version"}),
+                    )
+                } else if expected.ends_with("/missing.txt") {
+                    (404, serde_json::json!({"error":{"code":"itemNotFound"}}))
+                } else {
+                    (
+                        200,
+                        serde_json::json!({"id":"opaque-child","name":"notes #1.txt","file":{},"size":7,"eTag":"child-version"}),
+                    )
+                };
+                request
+                    .respond(Response::from_string(body.to_string()).with_status_code(status))
+                    .unwrap();
+                if !matched {
+                    return false;
+                }
+            }
+            true
         });
-        let metadata = graph.get_metadata_by_path("/").unwrap().unwrap();
-        assert_eq!(worker.join().unwrap(), "/v1.0/me/drive/root");
-        assert!(metadata.is_dir && metadata.path == "/" && metadata.remote_id == "actual-root");
+        let root = graph.get_metadata_by_path("/").unwrap().unwrap();
+        assert!(root.is_dir);
+        assert_eq!(root.remote_id, "opaque-root");
+        assert_eq!(root.path, "/");
+        assert_eq!(root.size, 0);
+        let file = graph
+            .get_metadata_by_path("/Course Work/notes #1.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.remote_id, "opaque-child");
+        assert_eq!(file.path, "/Course Work/notes #1.txt");
+        assert_eq!(file.parent_path, "/Course Work");
+        assert_eq!(file.size, 7);
+        assert!(
+            graph
+                .get_metadata_by_path("/missing.txt")
+                .unwrap()
+                .is_none()
+        );
+        assert!(serving.join().unwrap());
     }
+
     #[test]
     fn shallow_directory_preserves_ids_versions_and_bounded_pagination() {
         let server = Server::http("127.0.0.1:0").unwrap();
@@ -221,5 +264,203 @@ pub(crate) mod tests {
             super::super::upload::upload_session_request_body_for(false)["item"]["@microsoft.graph.conflictBehavior"],
             "replace"
         );
+    }
+
+    fn saved_create(
+        graph: &GraphBackend,
+        server: &Server,
+        create_only: bool,
+        size: u64,
+        source: &std::path::Path,
+    ) {
+        graph
+            .save_upload_session(
+                "/file".into(),
+                super::super::upload::PersistedUploadSession {
+                    upload_url: format!("http://{}/private-session", server.server_addr()),
+                    source_size: size,
+                    source_modified_unix: 1,
+                    source_digest: Some(super::super::upload::source_digest(source).unwrap()),
+                    remote_id: None,
+                    if_match: None,
+                    create_only,
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn rebuilt_backup_cannot_resume_changed_same_size_or_legacy_unbound_bytes() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("source");
+        std::fs::write(&source, b"data").unwrap();
+        saved_create(&graph, &server, true, 4, &source);
+        std::fs::write(&source, b"evil").unwrap();
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(&source, b"data").unwrap();
+        graph
+            .upload_sessions
+            .lock()
+            .unwrap()
+            .sessions
+            .get_mut("/file")
+            .unwrap()
+            .source_digest = None;
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            server.try_recv().unwrap().is_none(),
+            "unbound bytes must never query or mutate the original upload session"
+        );
+    }
+
+    #[test]
+    fn desktop_backup_resumes_only_the_original_create_session_after_snapshot_rebuild() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("rebuilt-snapshot");
+        std::fs::write(&source, b"data").unwrap();
+        saved_create(&graph, &server, true, 4, &source);
+        let serving = std::thread::spawn(move || {
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            assert_eq!(q.url(), "/v1.0/me/drive/root:/file");
+            q.respond(Response::from_string(r#"{"id":"placeholder","name":"file","size":0,"file":{},"eTag":"placeholder-version"}"#)).unwrap();
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            assert_eq!(q.url(), "/private-session");
+            q.respond(Response::from_string(r#"{"nextExpectedRanges":["2-"]}"#))
+                .unwrap();
+            let mut q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "PUT");
+            assert_eq!(q.url(), "/private-session");
+            assert!(
+                q.headers()
+                    .iter()
+                    .any(|h| h.field.equiv("Content-Range") && h.value.as_str() == "bytes 2-3/4")
+            );
+            let mut body = Vec::new();
+            q.as_reader().read_to_end(&mut body).unwrap();
+            assert_eq!(body, b"ta");
+            q.respond(
+                Response::from_string(
+                    r#"{"id":"completed-id","name":"file","size":4,"file":{},"eTag":"finished"}"#,
+                )
+                .with_status_code(201),
+            )
+            .unwrap();
+        });
+        let mut progress = Vec::new();
+        let uploaded = graph
+            .resume_desktop_create_upload("/file", &source, &mut |done, total| {
+                progress.push((done, total));
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        serving.join().unwrap();
+        assert_eq!(uploaded.etag, "finished");
+        assert_eq!(progress.first(), Some(&(2, 4)));
+        assert_eq!(progress.last(), Some(&(4, 4)));
+        assert!(graph.upload_sessions.lock().unwrap().sessions.is_empty());
+    }
+
+    #[test]
+    fn desktop_backup_resume_rejects_unowned_sessions_and_changed_or_committed_targets() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("source");
+        std::fs::write(&source, b"data").unwrap();
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        for (owned, size) in [(false, 4), (true, 5)] {
+            saved_create(&graph, &server, owned, size, &source);
+            assert!(
+                graph
+                    .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(
+            server.try_recv().unwrap().is_none(),
+            "unowned source queried remote"
+        );
+        saved_create(&graph, &server, true, 4, &source);
+        let serving = std::thread::spawn(move || {
+            for body in [
+                r#"{"id":"other","name":"file","size":4,"file":{},"eTag":"other-version"}"#,
+                r#"{"id":"directory","name":"file","size":0,"folder":{},"eTag":"folder-version"}"#,
+            ] {
+                let q = server.recv().unwrap();
+                assert_eq!(q.method().as_str(), "GET");
+                assert_eq!(q.url(), "/v1.0/me/drive/root:/file");
+                q.respond(Response::from_string(body)).unwrap();
+            }
+            assert!(
+                server
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .unwrap()
+                    .is_none(),
+                "changed target triggered session mutation"
+            );
+        });
+        for _ in 0..2 {
+            assert!(
+                graph
+                    .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        serving.join().unwrap();
+        assert_eq!(graph.upload_sessions.lock().unwrap().sessions.len(), 1);
+    }
+
+    #[test]
+    fn expired_backup_session_does_not_create_a_replacement_or_overwrite_placeholder() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let (sandbox, graph) = backend(&server);
+        let source = sandbox.0.join("source");
+        std::fs::write(&source, b"data").unwrap();
+        saved_create(&graph, &server, true, 4, &source);
+        let serving = std::thread::spawn(move || {
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            q.respond(Response::from_string(r#"{"id":"placeholder","name":"file","size":0,"file":{},"eTag":"placeholder-version"}"#)).unwrap();
+            let q = server.recv().unwrap();
+            assert_eq!(q.method().as_str(), "GET");
+            assert_eq!(q.url(), "/private-session");
+            q.respond(Response::empty(404)).unwrap();
+            assert!(
+                server
+                    .recv_timeout(std::time::Duration::from_millis(100))
+                    .unwrap()
+                    .is_none(),
+                "expired session mutated cloud"
+            );
+        });
+        assert!(
+            graph
+                .resume_desktop_create_upload("/file", &source, &mut |_, _| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        serving.join().unwrap();
+        assert_eq!(graph.upload_sessions.lock().unwrap().sessions.len(), 1);
     }
 }

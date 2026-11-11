@@ -108,7 +108,7 @@ impl CloudBackend for DelayedBackend {
     }
 }
 
-fn test_paths(name: &str) -> (PathBuf, AppPaths) {
+pub(super) fn test_paths(name: &str) -> (PathBuf, AppPaths) {
     let root = std::env::temp_dir().join(format!(
         "twodrive-daemon-{name}-{}-{}",
         std::process::id(),
@@ -192,6 +192,7 @@ fn known_folder_state_persists_pending_uploads() {
             snapshot: FileSnapshot {
                 size: 12,
                 modified_unix: 34,
+                modified_nanos: 0,
             },
         },
     );
@@ -251,6 +252,7 @@ fn missing_pending_known_folder_file_is_pruned() {
         FileSnapshot {
             size: 5,
             modified_unix: 10,
+            modified_nanos: 0,
         },
     );
     state.pending.insert(
@@ -260,6 +262,7 @@ fn missing_pending_known_folder_file_is_pruned() {
             snapshot: FileSnapshot {
                 size: 5,
                 modified_unix: 10,
+                modified_nanos: 0,
             },
         },
     );
@@ -286,6 +289,7 @@ fn first_start_baseline_preserves_tracked_snapshots_and_adds_history() {
     let old_snapshot = FileSnapshot {
         size: 3,
         modified_unix: 4,
+        modified_nanos: 0,
     };
     state
         .files
@@ -410,5 +414,412 @@ fn completed_known_folder_job_is_persisted_while_slower_job_runs() {
     );
     assert!(final_state.pending.is_empty());
     assert_eq!(final_state.files.len(), 2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn dependency_subtree_is_excluded_from_scan_events_and_old_queue() {
+    let (root, paths) = test_paths("excluded-dependencies");
+    paths.ensure().unwrap();
+    let source = root.join("source");
+    let dependency = source.join("app/node_modules/pkg/index.js");
+    fs::create_dir_all(dependency.parent().unwrap()).unwrap();
+    fs::write(&dependency, b"dependency").unwrap();
+    let source_file = source.join("app/index.js");
+    fs::write(&source_file, b"source").unwrap();
+    let config = Config::default();
+    let mapping = KnownFolderRoot {
+        local: source,
+        remote: "/Code".into(),
+    };
+    let mut state = KnownFolderState::default();
+    let mut jobs = Vec::new();
+    super::scan::collect_local_path(&config, &mapping, &mapping.local, &state, &mut jobs).unwrap();
+    assert_eq!(
+        jobs.len(),
+        1,
+        "recursive scan must prune dependency subtrees"
+    );
+    assert_eq!(jobs[0].local_path, source_file);
+    let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+        .add_path(dependency.clone());
+    let mut pending = HashSet::new();
+    assert!(!queue_addition_event(
+        &event,
+        &[mapping],
+        &config,
+        &mut pending
+    ));
+    let snapshot = FileSnapshot::from_metadata(&fs::metadata(&dependency).unwrap());
+    state.pending.insert(
+        dependency.to_string_lossy().into_owned(),
+        PendingKnownFolderUpload {
+            remote_path: "/Code/app/node_modules/pkg/index.js".into(),
+            snapshot,
+        },
+    );
+    state.save(&paths.data_dir).unwrap();
+    let db = Database::new(paths.db_path.clone());
+    db.init().unwrap();
+    let backend = MockBackend::new();
+    retry_known_folder_uploads(&paths, &backend, &db, &config, &mut state).unwrap();
+    assert!(
+        backend
+            .get_metadata_by_path("/Code/app/node_modules/pkg/index.js")
+            .unwrap()
+            .is_none(),
+        "legacy queued exclusions must not upload"
+    );
+    assert!(dependency.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hidden_ancestor_event_cannot_bypass_scan_filter() {
+    let mapping = KnownFolderRoot {
+        local: "/source".into(),
+        remote: "/Code".into(),
+    };
+    let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+        .add_path("/source/app/.git/objects/abc".into());
+    assert!(!queue_addition_event(
+        &event,
+        &[mapping],
+        &Config::default(),
+        &mut HashSet::new()
+    ));
+}
+
+#[test]
+fn event_burst_coalesces_and_has_a_fixed_pending_bound() {
+    let mappings = [KnownFolderRoot {
+        local: "/source".into(),
+        remote: "/Code".into(),
+    }];
+    let mut pending = HashSet::new();
+    for index in 0..4096 {
+        let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+            .add_path(format!("/source/app/{index}.txt").into());
+        queue_addition_event(&event, &mappings, &Config::default(), &mut pending);
+        assert!(pending.len() <= 1024, "pending events must be bounded");
+    }
+    let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::Folder))
+        .add_path("/source".into());
+    queue_addition_event(&event, &mappings, &Config::default(), &mut pending);
+    assert_eq!(pending, HashSet::from([PathBuf::from("/source")]));
+}
+
+#[derive(Debug)]
+struct ExistingDirectoryBackend {
+    inner: MockBackend,
+    creates: AtomicUsize,
+    lookups: AtomicUsize,
+}
+
+impl CloudBackend for ExistingDirectoryBackend {
+    fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+        self.inner.list_all()
+    }
+    fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+        self.inner.download(id)
+    }
+    fn upload(&self, path: &str, data: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+        self.inner.upload(path, data)
+    }
+    fn create_folder(&self, _path: &str) -> anyhow::Result<MetadataEntry> {
+        self.creates.fetch_add(1, Ordering::SeqCst);
+        anyhow::bail!("HTTP 409 code=nameAlreadyExists");
+    }
+    fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        self.lookups.fetch_add(1, Ordering::SeqCst);
+        self.inner.get_metadata_by_path(path)
+    }
+    fn rename(&self, id: &str, path: &str) -> anyhow::Result<MetadataEntry> {
+        self.inner.rename(id, path)
+    }
+    fn delete(&self, id: &str) -> anyhow::Result<()> {
+        self.inner.delete(id)
+    }
+}
+
+#[test]
+fn existing_remote_directory_is_resolved_once_and_file_is_rejected() {
+    let (root, paths) = test_paths("existing-remote-directory");
+    paths.ensure().unwrap();
+    let db = Database::new(paths.db_path.clone());
+    db.init().unwrap();
+    let backend = ExistingDirectoryBackend {
+        inner: MockBackend::new(),
+        creates: AtomicUsize::new(0),
+        lookups: AtomicUsize::new(0),
+    };
+    backend.inner.create_folder("/Code").unwrap();
+    for _ in 0..8 {
+        super::uploads::ensure_remote_dir(&backend, &db, "/Code").unwrap();
+    }
+    assert_eq!(backend.lookups.load(Ordering::SeqCst), 1);
+    assert!(backend.creates.load(Ordering::SeqCst) <= 1);
+    backend.inner.upload("/occupied", b"file".to_vec()).unwrap();
+    assert!(super::uploads::ensure_remote_dir(&backend, &db, "/occupied/child").is_err());
+    assert!(db.get_by_path("/occupied/child").unwrap().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_state_migration_and_incremental_completion_preserve_unrelated_rows() {
+    let (root, paths) = test_paths("state-migration");
+    paths.ensure().unwrap();
+    let mut legacy = KnownFolderState {
+        baseline_initialized: true,
+        ..KnownFolderState::default()
+    };
+    for index in 0..1000 {
+        legacy.files.insert(
+            format!("/source/old-{index}"),
+            FileSnapshot {
+                size: 10,
+                modified_unix: 20,
+                modified_nanos: 0,
+            },
+        );
+    }
+    let local = "/source/new".to_string();
+    let snapshot = FileSnapshot {
+        size: 30,
+        modified_unix: 40,
+        modified_nanos: 0,
+    };
+    legacy.pending.insert(
+        local.clone(),
+        PendingKnownFolderUpload {
+            remote_path: "/remote/new".into(),
+            snapshot: snapshot.clone(),
+        },
+    );
+    let original = serde_json::to_vec(&legacy).unwrap();
+    fs::write(paths.data_dir.join("known-folders-state.json"), &original).unwrap();
+    let mut state = KnownFolderState::load(&paths.data_dir).unwrap();
+    assert!(state.baseline_initialized);
+    assert_eq!(state.files.len(), 1000);
+    let before = state.storage.as_ref().unwrap().total_changes();
+    state
+        .complete_upload(local.clone(), snapshot.clone())
+        .unwrap();
+    let changed = state.storage.as_ref().unwrap().total_changes() - before;
+    assert_eq!(
+        changed, 2,
+        "completion must change only its snapshot and queue row"
+    );
+    assert_eq!(
+        fs::read(paths.data_dir.join("known-folders-state.json")).unwrap(),
+        original
+    );
+    drop(state);
+    let state = KnownFolderState::load(&paths.data_dir).unwrap();
+    assert_eq!(state.files.get(&local), Some(&snapshot));
+    assert!(state.pending.is_empty());
+    assert_eq!(state.files.len(), 1001);
+    drop(state);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rate_limited_uploads_survive_restart_and_retry_latest_source() {
+    let (root, paths) = test_paths("deferred-upload-rate");
+    paths.ensure().unwrap();
+    let db = Database::new(paths.db_path.clone());
+    db.init().unwrap();
+    let backend = MockBackend::new();
+    let mut config = Config::default();
+    config.known_folders.max_project_uploads_per_window = 2;
+    let mut state = KnownFolderState::default();
+    config.known_folders.upload_rate_roots = vec![root.to_string_lossy().into_owned()];
+    for generation in 0..3 {
+        let mut jobs = Vec::new();
+        for index in 0..4 {
+            let local = root.join(format!("{index}.txt"));
+            fs::write(&local, vec![b'a'; 8 + generation]).unwrap();
+            jobs.push(KnownFolderUploadJob {
+                snapshot: FileSnapshot::from_metadata(&fs::metadata(&local).unwrap()),
+                local_path: local,
+                remote_path: format!("/Downloads/project/{index}.txt"),
+            });
+        }
+        process_known_folder_uploads(&paths, &backend, &db, &config, jobs, &mut state).unwrap();
+        if generation < 2 {
+            assert!(
+                state.pending.is_empty(),
+                "first uploads and ordinary first edits must remain unrestricted"
+            );
+        }
+    }
+    assert_eq!(state.files.len(), 4);
+    assert_eq!(state.pending.len(), 2);
+    assert_eq!(
+        KnownFolderState::load(&paths.data_dir)
+            .unwrap()
+            .pending
+            .len(),
+        2
+    );
+    let (local, remote) = state
+        .pending
+        .iter()
+        .next()
+        .map(|(local, p)| (local.clone(), p.remote_path.clone()))
+        .unwrap();
+    fs::write(&local, b"latest contents while deferred").unwrap();
+    // Reload the durable queue rather than depending on runner disk speed and
+    // a one-second wall-clock window. Sliding expiry is tested with virtual time.
+    drop(state);
+    let mut state = KnownFolderState::load(&paths.data_dir).unwrap();
+    retry_known_folder_uploads(&paths, &backend, &db, &config, &mut state).unwrap();
+    assert!(state.pending.is_empty());
+    let uploaded = backend.get_metadata_by_path(&remote).unwrap().unwrap();
+    assert_eq!(
+        backend.download(&uploaded.remote_id).unwrap(),
+        b"latest contents while deferred"
+    );
+    drop(state);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn same_second_same_size_changes_have_distinct_snapshots() {
+    let (root, paths) = test_paths("subsecond-save");
+    paths.ensure().unwrap();
+    let local = root.join("code.txt");
+    let mut snapshots = Vec::new();
+    for nanos in [100_000_000, 200_000_000] {
+        fs::write(&local, b"same size").unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&local)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + Duration::new(1_790_000_000, nanos)),
+            )
+            .unwrap();
+        snapshots.push(FileSnapshot::from_metadata(&fs::metadata(&local).unwrap()));
+    }
+    assert_eq!(
+        (snapshots[0].size, snapshots[0].modified_unix),
+        (snapshots[1].size, snapshots[1].modified_unix)
+    );
+    assert_ne!(snapshots[0], snapshots[1]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn watcher_ingress_drops_exclusions_and_marks_both_overflow_kinds() {
+    use super::events::{MAX_PENDING_PATHS, enqueue_watch_event};
+    use std::sync::atomic::AtomicBool;
+    let config = Config::default();
+    let roots = [KnownFolderRoot {
+        local: "/source".into(),
+        remote: "/Code".into(),
+    }];
+    let (tx, rx) = std::sync::mpsc::sync_channel(MAX_PENDING_PATHS);
+    let overflow = AtomicBool::new(false);
+    let create = |path: PathBuf| {
+        notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+            .add_path(path)
+    };
+    enqueue_watch_event(
+        &tx,
+        &overflow,
+        &roots,
+        &config,
+        Ok(create("/source/node_modules/pkg/index.js".into())),
+    );
+    assert!(rx.try_recv().is_err());
+    for index in 0..MAX_PENDING_PATHS + 1 {
+        enqueue_watch_event(
+            &tx,
+            &overflow,
+            &roots,
+            &config,
+            Ok(create(format!("/source/{index}").into())),
+        );
+    }
+    assert!(overflow.swap(false, Ordering::AcqRel));
+    assert_eq!(rx.try_iter().count(), MAX_PENDING_PATHS);
+    enqueue_watch_event(
+        &tx,
+        &overflow,
+        &roots,
+        &config,
+        Ok(notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan)),
+    );
+    assert!(overflow.load(Ordering::Acquire));
+    let save = notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Data(
+        notify::event::DataChange::Content,
+    )))
+    .add_path("/source/code.rs".into());
+    assert!(queue_addition_event(
+        &save,
+        &roots,
+        &config,
+        &mut HashSet::new()
+    ));
+}
+
+#[test]
+fn regex_filename_is_excluded_from_scan_events_and_old_queue() {
+    let (root, paths) = test_paths("excluded-regex");
+    paths.ensure().unwrap();
+    let source = root.join("source");
+    let dependency = source.join("app/notes.SCRATCH");
+    fs::create_dir_all(dependency.parent().unwrap()).unwrap();
+    fs::write(&dependency, b"dependency").unwrap();
+    let source_file = source.join("app/index.js");
+    fs::write(&source_file, b"source").unwrap();
+    let mut config = Config::default();
+    config.sync.exclude_name_regexes =
+        twodrive_core::NameExclusions::new(vec![r"(?i)\.scratch$".into()]).unwrap();
+    let mapping = KnownFolderRoot {
+        local: source,
+        remote: "/Code".into(),
+    };
+    let mut state = KnownFolderState::default();
+    let mut jobs = Vec::new();
+    super::scan::collect_local_path(&config, &mapping, &mapping.local, &state, &mut jobs).unwrap();
+    assert_eq!(
+        jobs.len(),
+        1,
+        "recursive scan must prune dependency subtrees"
+    );
+    assert_eq!(jobs[0].local_path, source_file);
+    let event = notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+        .add_path(dependency.clone());
+    let mut pending = HashSet::new();
+    assert!(!queue_addition_event(
+        &event,
+        &[mapping],
+        &config,
+        &mut pending
+    ));
+    let snapshot = FileSnapshot::from_metadata(&fs::metadata(&dependency).unwrap());
+    state.pending.insert(
+        dependency.to_string_lossy().into_owned(),
+        PendingKnownFolderUpload {
+            remote_path: "/Code/app/notes.SCRATCH".into(),
+            snapshot,
+        },
+    );
+    state.save(&paths.data_dir).unwrap();
+    let db = Database::new(paths.db_path.clone());
+    db.init().unwrap();
+    let backend = MockBackend::new();
+    retry_known_folder_uploads(&paths, &backend, &db, &config, &mut state).unwrap();
+    assert!(
+        backend
+            .get_metadata_by_path("/Code/app/notes.SCRATCH")
+            .unwrap()
+            .is_none(),
+        "legacy queued exclusions must not upload"
+    );
+    assert!(dependency.exists());
     fs::remove_dir_all(root).unwrap();
 }

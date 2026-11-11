@@ -1,4 +1,5 @@
-Historical upstream hand-built packages. The original placeholder contacts are preserved for provenance. These were not Debian archive uploads.
+Historical hand-built upstream package changelog (not Debian archive uploads).
+Original contents and author attribution follow unchanged.
 
 twodrive (0.2.14-1) unstable; urgency=medium
 

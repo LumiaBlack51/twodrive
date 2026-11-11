@@ -1,0 +1,233 @@
+{
+  "version": "0.2.19-1",
+  "source_commit": "f32f5482d7b6991224963256f6874485492211ea",
+  "merge_commit": "ec1f508914cae241e1dc6a9f7afa1d69a4853556",
+  "source_tag": "v0.2.19-1",
+  "annotated_tag_object": "fca8264a8b9e034c52f9feb305db823f883ac5d2",
+  "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/43",
+  "debian_workflow": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705432959",
+  "ci_checks": [
+    {
+      "name": "Debian packaging policy",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705432916,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705432916/job/119584242881"
+    },
+    {
+      "name": "Native checks (Linux)",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705432955,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705432955/job/119584243317"
+    },
+    {
+      "name": "Native checks (Windows)",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705432955,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705432955/job/119584243524"
+    },
+    {
+      "name": "Debian package",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705432959,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705432959/job/119584243427"
+    },
+    {
+      "name": "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705432998,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705432998/job/119584243344"
+    },
+    {
+      "name": "test (ubuntu-latest, --features mount, target/release/twodrive-dev)",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705432998,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705432998/job/119584243622"
+    },
+    {
+      "name": "windows",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705433017,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705433017/job/119584243531"
+    },
+    {
+      "name": "linux",
+      "status": "completed",
+      "state": "SUCCESS",
+      "run_id": 39705433017,
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/39705433017/job/119584243674"
+    }
+  ],
+  "local_checks": {
+    "rust_default_passed": 191,
+    "rust_default_ignored": 10,
+    "explicit_fuse_tests_passed": 9,
+    "nautilus_python_passed": 25,
+    "settings_python_passed": 4,
+    "release_guard_tests_passed": 6,
+    "package_lock_tests_passed": 2,
+    "rustfmt_passed": true,
+    "strict_clippy_passed": true,
+    "old_implementation_failed_three_new_regressions": true,
+    "delivered_package_isolated_daemon_fuse_retention_restore_removal": "passed",
+    "prior_0_2_18_to_0_2_19_container_upgrade_remove_reinstall_purge": "passed",
+    "production_database_private_copy_logical_rows_unchanged": true,
+    "database_tables_checked": 5
+  },
+  "packaging": {
+    "builder": "dpkg-buildpackage/debhelper",
+    "offline_compilation": true,
+    "project_artifacts_unsigned": true,
+    "upstream_ci_rustup_build_depends_bypass": true,
+    "lintian_errors": 0,
+    "lintian_warnings": [
+      "newer-standards-version 4.7.4 (checker knows 4.6.2)"
+    ],
+    "manifests": [
+      {
+        "manifest": "twodrive_0.2.19-1.dsc",
+        "members": 3
+      },
+      {
+        "manifest": "twodrive_0.2.19-1_amd64.changes",
+        "members": 7
+      },
+      {
+        "manifest": "twodrive_0.2.19-1_amd64.buildinfo",
+        "members": 3
+      }
+    ],
+    "source_files_match_git": 304,
+    "source_commit": "f32f5482d7b6991224963256f6874485492211ea",
+    "debian_tracked_files_checked": 17
+  },
+  "local_upgrade": {
+    "version": "0.2.19",
+    "running_daemon_matches_debian_package": true,
+    "database_integrity": "ok",
+    "queue_pin_and_trash_records_preserved": true,
+    "config_credentials_unchanged_at_upgrade": true,
+    "custom_unit_unchanged": true,
+    "existing_recovery_files_unchanged": true,
+    "referenced_pending_cache_files_backed_up": 0,
+    "full_cache_or_old_backups_not_copied": true
+  },
+  "verification_limits": [
+    "Synthetic MockBackend filesystem validation; not real OneDrive end-to-end deletion or recovery.",
+    "GNOME trash UI automation was not run.",
+    "Cloud-only trash payloads are not prefetched and still need network access.",
+    "No real user trash was emptied."
+  ],
+  "verified_at": "2026-10-22T09:48:44.935219+08:00",
+  "release": {
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.19-1",
+    "published": true,
+    "latest": true,
+    "prerelease": false,
+    "assets_verified_before_and_after_publication": 11,
+    "asset_metadata": {
+      "twodrive_0.2.19-1_amd64.deb.sha256": {
+        "bytes": 94,
+        "sha256": "a7a8d8f8384a3427759f6c7869c4ead4419686af3e30409c3a84e8645c7b5efa"
+      },
+      "twodrive_0.2.19.orig-vendor.tar.xz": {
+        "bytes": 33605288,
+        "sha256": "3093e96c4517c2ad4ac5482812ea945505491653c5321b9c9ed2128ad63757f2"
+      },
+      "twodrive_0.2.19-1_amd64.deb": {
+        "bytes": 2834998,
+        "sha256": "ced67a031da64939468a752e6f27a8467a0310dd7152f93ace94f875a26c5888"
+      },
+      "twodrive_0.2.19-1_amd64.buildinfo": {
+        "bytes": 13168,
+        "sha256": "c48397b1c1d643c19633dfb6d70ad2132d86dd0633a070fc9d8c4e8f43955640"
+      },
+      "twodrive_0.2.19-1.dsc": {
+        "bytes": 1428,
+        "sha256": "1b1453814834d39eebef078f8e3fe445d66d24214325a7bb5889a6fc639c3edb"
+      },
+      "verification.json": {
+        "bytes": 4566,
+        "sha256": "5454a1fc3da81c4c148a6b02210b374fae7c2921a8e3281797d8f7879a8d8f43"
+      },
+      "twodrive_0.2.19-1.debian.tar.xz": {
+        "bytes": 46824,
+        "sha256": "cbb293daafd81bcc94b13aaa9c2762f15ef24cf4f53fe7a38fddde4c2efa73c6"
+      },
+      "twodrive_0.2.19.orig.tar.xz": {
+        "bytes": 1632096,
+        "sha256": "a2ae47936d823bc25ae1fca1b7961e3c7dd854e0c880ec593397229f440fdffa"
+      },
+      "twodrive_0.2.19-1_amd64.changes": {
+        "bytes": 2782,
+        "sha256": "ada4629b79fa45af351a9bfcda832290904ca138e574fc7f5b0ff201463e5cf8"
+      },
+      "SHA256SUMS": {
+        "bytes": 960,
+        "sha256": "9ae7b76cdd3056922b6e527ac7e47acabef62d35c33a1fee581a50f40b3bebe2"
+      },
+      "twodrive-dbgsym_0.2.19-1_amd64.ddeb": {
+        "bytes": 40960352,
+        "sha256": "ae640d6f2bfb6975e8e914f95058bf9fb45738768bde328f6fa1c5003a66aa19"
+      }
+    }
+  },
+  "release_upload_recovery": {
+    "workflow": "https://github.com/LumiaBlack51/twodrive/actions/runs/39709587762",
+    "status": "passed",
+    "reused_verified_artifact_run": 39705432959,
+    "no_rebuild": true,
+    "draft_kept_until_local_guard_passed": true,
+    "temporary_workflow_restored_before_record_pr": true
+  },
+  "cleanup": {
+    "deleted": [
+      {
+        "kind": "workspace Cargo debug build",
+        "allocated_bytes": 4119306240
+      },
+      {
+        "kind": "remaining build and validation helpers",
+        "allocated_bytes": 278528
+      },
+      {
+        "kind": "downloaded Debian artifacts and release staging",
+        "allocated_bytes": 253554688
+      },
+      {
+        "kind": "initial mock validation sandbox",
+        "allocated_bytes": 135168
+      },
+      {
+        "kind": "delivered-package mock validation sandbox",
+        "allocated_bytes": 102400
+      },
+      {
+        "kind": "obsolete 0.2.17 rollback twodrive",
+        "allocated_bytes": 6193152
+      },
+      {
+        "kind": "obsolete 0.2.17 rollback twodrive-daemon",
+        "allocated_bytes": 5853184
+      },
+      {
+        "kind": "generated Python bytecode in scripts",
+        "allocated_bytes": 73728
+      },
+      {
+        "kind": "generated Python bytecode in packaging/nautilus",
+        "allocated_bytes": 94208
+      }
+    ],
+    "total_allocated_bytes": 4385591296,
+    "retained_rollback_version": "0.2.18",
+    "scope": "Allocated blocks of task-owned deleted paths, not a full-disk free-space delta"
+  },
+  "final_record_time": "2026-10-22T10:10:36.639239+08:00"
+}

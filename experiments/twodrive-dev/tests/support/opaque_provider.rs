@@ -17,11 +17,23 @@ type Files = BTreeMap<String, (MetadataEntry, Vec<u8>)>;
 pub struct OpaqueProvider {
     files: Arc<Mutex<Files>>,
     pub caps: Capabilities,
+    pub download_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub metadata_lookups: Arc<Mutex<Vec<String>>>,
+    pub directory_lookups: Arc<Mutex<Vec<String>>>,
+    pub upload_delay: std::time::Duration,
+    pub delete_delay: std::time::Duration,
+    pub parent_browsing: bool,
 }
 impl Default for OpaqueProvider {
     fn default() -> Self {
         Self {
             files: Arc::default(),
+            download_gate: None,
+            metadata_lookups: Arc::default(),
+            directory_lookups: Arc::default(),
+            upload_delay: std::time::Duration::ZERO,
+            delete_delay: std::time::Duration::ZERO,
+            parent_browsing: false,
             caps: Capabilities {
                 upload: true,
                 mkdir: true,
@@ -33,6 +45,11 @@ impl Default for OpaqueProvider {
     }
 }
 impl OpaqueProvider {
+    #[allow(dead_code)] // This shared fixture also serves cache-independent test binaries.
+    pub fn with_parent_browsing(mut self) -> Self {
+        self.parent_browsing = true;
+        self
+    }
     pub fn with_caps(mut self, caps: Capabilities) -> Self {
         self.caps = caps;
         self
@@ -106,6 +123,10 @@ impl CloudBackend for OpaqueProvider {
         Ok(self.files.lock().unwrap().get(id).map(|(m, _)| m.clone()))
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        self.metadata_lookups.lock().unwrap().push(path.to_owned());
+        if path == "/" {
+            return Ok(Some(MetadataEntry::new_dir("opaque-root", "/", 42, "1")));
+        }
         Ok(self.list_all()?.into_iter().find(|m| m.path == path))
     }
     fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
@@ -117,6 +138,14 @@ impl CloudBackend for OpaqueProvider {
         w: &mut dyn Write,
         progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
     ) -> anyhow::Result<u64> {
+        while self
+            .download_gate
+            .as_ref()
+            .is_some_and(|gate| !gate.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            progress(0)?;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         let data = self.download(id)?;
         w.write_all(&data)?;
         progress(data.len() as u64)?;
@@ -171,16 +200,21 @@ impl CloudBackend for OpaqueProvider {
         Ok(m)
     }
     fn delete(&self, id: &str) -> anyhow::Result<()> {
+        std::thread::sleep(self.delete_delay);
         self.by_id(id)?;
         self.files.lock().unwrap().remove(id);
         Ok(())
     }
 }
 impl Provider for OpaqueProvider {
+    fn browse_parent_metadata(&self) -> bool {
+        self.parent_browsing
+    }
     fn capabilities(&self) -> Capabilities {
         self.caps
     }
     fn list_directory(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+        self.directory_lookups.lock().unwrap().push(path.to_owned());
         Ok(self
             .list_all()?
             .into_iter()
@@ -195,6 +229,7 @@ impl Provider for OpaqueProvider {
         version: Option<&str>,
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
+        std::thread::sleep(self.upload_delay);
         self.upload_file_with_version(path, source, id, version, &mut |done, total| {
             progress(done, total)
         })

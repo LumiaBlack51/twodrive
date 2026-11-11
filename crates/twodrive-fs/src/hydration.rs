@@ -73,6 +73,10 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         return Ok(cache_path.clone());
     }
 
+    anyhow::ensure!(
+        record.state != twodrive_core::FileState::LocalOnly,
+        "local-only content is unavailable; preserve its metadata for recovery"
+    );
     if !db.begin_hydration(&record.metadata.remote_id, generation)? {
         return Err(hydration_cancelled().into());
     }

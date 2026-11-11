@@ -1,0 +1,203 @@
+{
+  "status": "verified",
+  "verification_time": "2026-10-19T18:03:53.825701+08:00",
+  "release_state_at_verification": "draft",
+  "tag": "v0.2.17-1",
+  "source_revision": "48d91632d45c03f0b9084fc0c3c71e57d832fe3e",
+  "source_is_ancestor_of_main": true,
+  "main_merge_commit": "78eda152d34896439d286ca834045d6a041a8eb0",
+  "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/37",
+  "checks": [
+    {
+      "name": "Debian package",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477653/job/117993489185"
+    },
+    {
+      "name": "Debian packaging policy",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477486/job/117993488406"
+    },
+    {
+      "name": "test (ubuntu-latest, --features mount, target/release/twodrive-dev)",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477593/job/117993488538"
+    },
+    {
+      "name": "Native checks (Windows)",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477707/job/117993489196"
+    },
+    {
+      "name": "windows",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477598/job/117993489133"
+    },
+    {
+      "name": "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477593/job/117993488907"
+    },
+    {
+      "name": "Native checks (Linux)",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477707/job/117993488586"
+    },
+    {
+      "name": "linux",
+      "conclusion": "SUCCESS",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477598/job/117993489398"
+    }
+  ],
+  "packaging": {
+    "build_system": "dpkg-buildpackage and debhelper, tracked debian/",
+    "version": "0.2.17-1",
+    "workflow": "https://github.com/LumiaBlack51/twodrive/actions/runs/39232477653",
+    "dependencies": "locked vendored sources; Cargo offline/frozen",
+    "compiler_exception": "Documented Ubuntu/rustup dpkg dependency-check exception; all other native dependencies provisioned; unsigned upstream artifacts, not a Debian archive upload",
+    "lintian_errors": 0,
+    "lintian_warnings": [
+      "W: twodrive: debian-changelog-line-too-long [usr/share/doc/twodrive/changelog.Debian.gz:8]",
+      "W: twodrive source: newer-standards-version 4.7.4 (current is 4.6.2)"
+    ],
+    "source_files_compared_with_git": 319,
+    "source_comparison": "Git file bytes, symlink targets and executable bits; generated dependency licenses checked separately",
+    "debug_package_validation": {
+      "twodrive": {
+        "build_id": "76fed54cb669292fe45ef83847eb8c7328f3cc2d",
+        "debug_info_and_line_present": true
+      },
+      "twodrive-daemon": {
+        "build_id": "689053082804629294486904a58cee44468aad52",
+        "debug_info_and_line_present": true
+      }
+    },
+    "manifest_members_verified": {
+      "twodrive_0.2.17-1.dsc": 3,
+      "twodrive_0.2.17-1_amd64.buildinfo": 3,
+      "twodrive_0.2.17-1_amd64.changes": 7
+    },
+    "artifacts": {
+      "twodrive-dbgsym_0.2.17-1_amd64.ddeb": {
+        "bytes": 40792162,
+        "sha256": "a02afed9057f81c64e638eca0dc65d12f10539df53410f6e5429ee259b7258e8"
+      },
+      "twodrive_0.2.17-1.debian.tar.xz": {
+        "bytes": 46544,
+        "sha256": "d1ced20ba448af54642458d4e19993581e36ec925c3d9fb178cc2316c59f2959"
+      },
+      "twodrive_0.2.17-1.dsc": {
+        "bytes": 1428,
+        "sha256": "b5e94ea1d5dd8918a2bc08d8e53d70c2e2b59c5ec4fd172e06aa9f321160a46a"
+      },
+      "twodrive_0.2.17-1_amd64.buildinfo": {
+        "bytes": 13168,
+        "sha256": "3942ca60ead737da090a5b4f7bc4065b3ac59e02c207a4ab23477ad6a55b1ff5"
+      },
+      "twodrive_0.2.17-1_amd64.changes": {
+        "bytes": 2874,
+        "sha256": "f5f7e82b3731e524772c620a99f1a57dcc59ac2d799b297982279b51a1be8b1a"
+      },
+      "twodrive_0.2.17-1_amd64.deb": {
+        "bytes": 2808452,
+        "sha256": "f6f6d6669c3500478932fc51605852a8e3620897877abe592a6da7023c769364"
+      },
+      "twodrive_0.2.17.orig-vendor.tar.xz": {
+        "bytes": 33590348,
+        "sha256": "c7de9d2def2ac35cd0c55ab14ac36a3911a3673415da0cdbbcfaa96b975c233d"
+      },
+      "twodrive_0.2.17.orig.tar.xz": {
+        "bytes": 1615016,
+        "sha256": "e6fb4217465ee7c9a4fdcde5ae856bfa8c2a1a85bbcbaa15793fef7cad7f1aa9"
+      }
+    }
+  },
+  "mechanism_validation": {
+    "old_runtime_implementation_failures": 5,
+    "default_rust_passed": 184,
+    "default_ignored": 10,
+    "mock_fuse_explicit_passed": 9,
+    "slow_sync_core_passed": 48,
+    "slow_sync_core_seconds": 193.85,
+    "nautilus_passed": 25,
+    "settings_passed": 4,
+    "release_guard_passed": 6,
+    "workspace_lock_regressions_passed": 2,
+    "strict_clippy_and_formatting": "passed",
+    "native_windows_linux": "passed",
+    "old_ipc_fixture_fails_new_fixture_passes": true,
+    "final_package_mock_daemon_smoke": "passed"
+  },
+  "independent_offline_source_validation": {
+    "network": "Docker --network none",
+    "cargo_home": "empty at start, created inside source tree",
+    "compiler": "rustc 1.96.0",
+    "command": "dpkg-buildpackage --build=binary --no-sign -d -j2",
+    "rust_tests_passed": 184,
+    "input": "actual final downloaded dsc, extracted and built without changes",
+    "preparation_comparison": {
+      "byte_equal_files": 16363,
+      "vendor_checksum_manifests_equal_except_cargo_comment": 262
+    },
+    "vendor_checksums_verified_after_build_and_clean": 16043,
+    "source_clean": "passed; vendor unchanged",
+    "claim": "same source inputs rebuilt successfully; no cross-compiler binary reproducibility claim"
+  },
+  "upgrade_lifecycle": {
+    "from_version": "0.2.16-1",
+    "to_version": "0.2.17-1",
+    "result": "passed",
+    "scope": "disposable Ubuntu install, upgrade, remove, reinstall, purge; synthetic account/cache/recovery hashes retained",
+    "input": "exact final downloaded deb",
+    "input_sha256": "f6f6d6669c3500478932fc51605852a8e3620897877abe592a6da7023c769364",
+    "stable_runtime_integration_files_preserved": 15
+  },
+  "local_install": {
+    "version": "0.2.17",
+    "installation_layout": "existing per-user binaries extracted from final Debian package",
+    "cli_sha256": "c17eac911abba7c227e6fd794951b48047a368073d0f11d0749671c8b194fb07",
+    "daemon_sha256": "5406baadcb7b20b3d3b56470180bd2758859a4eafbc11738ce07ca57b27e0144",
+    "running_daemon_matches_package": true,
+    "installed_cli_matches_package": true,
+    "database_integrity": "ok",
+    "backup_database_integrity": "ok",
+    "queue_identities_preserved": true,
+    "config_credentials_unchanged": true,
+    "unit_unchanged": true,
+    "ppt_zip_crc_ok": true,
+    "metadata_jobs": 3,
+    "delete_jobs": 1,
+    "ppt_complete_read_matches_pre_upgrade": true,
+    "scoped_backup": "database/queue, config, referenced unsynced content and previous executables; complete cache not copied"
+  },
+  "real_onedrive_read_only_probe": {
+    "release_cli_real_graph_download": true,
+    "cloud_version_stable": true,
+    "download_matches_production_mount": true,
+    "zip_crc_ok": true,
+    "cloud_file_mutations_by_probe": false
+  },
+  "backup_cleanup": {
+    "files_removed": 2740,
+    "logical_bytes_removed": 41710531964,
+    "scope": "byte/hash-verified duplicates and obsolete backup executables; unique pending/recovery data retained; live cache untouched",
+    "physical_block_reclamation_measured": false
+  },
+  "verification_limits": [
+    "Original production event ordering is unknown; regression races use MockBackend.",
+    "Real OneDrive covered a read-only complete download and production-mount ZIP/byte comparison; no actual Office cloud-edit/delta/re-download round trip.",
+    "No Windows FUSE or production Windows/CFAPI acceptance test.",
+    "Debug packages retained and manifest-verified; debugger source mapping was not separately accepted. The existing Ubuntu debugedit emits an unsupported DWARF form diagnostic while package creation succeeds.",
+    "Unsigned upstream package; no Debian archive admission, complete distribution Rust/license audit or cross-compiler reproducible-build claim."
+  ],
+  "publication": {
+    "tag_name": "v0.2.17-1",
+    "html_url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.17-1",
+    "published_at": "2026-10-19T10:04:09Z",
+    "draft": false,
+    "prerelease": false,
+    "target_commitish": "48d91632d45c03f0b9084fc0c3c71e57d832fe3e",
+    "verified_assets": 11
+  },
+  "post_publication_asset_verification": "passed: exact 11 assets, remote sizes/SHA-256, immutable source tag, stable Latest"
+}

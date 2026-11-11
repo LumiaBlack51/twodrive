@@ -18,3 +18,9 @@ mod native_local_fixture;
 #[cfg(all(windows, feature = "native-local-fixture"))]
 #[path = "../../twodrive-dev/src/provider.rs"]
 mod provider;
+#[cfg(all(windows, feature = "native-local-fixture"))]
+#[path = "../../twodrive-dev/src/provider_guard.rs"]
+mod provider_guard;
+
+#[path = "../../twodrive-dev/src/sync_policy.rs"]
+mod sync_policy;

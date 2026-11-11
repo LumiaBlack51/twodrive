@@ -21,6 +21,12 @@ battery_sync_interval = "60m"
 ac_download_concurrency = 4
 battery_download_concurrency = 1
 
+[sync]
+# Rust regexes on filenames; TOML literal strings preserve backslashes.
+# Shared by FUSE writes and known-folder uploads; apply after restart.
+# Office owner files (~$...) are always local-only, even with no custom rules.
+exclude_name_regexes = [] # Example: ['(?i)\.bak$', '^scratch-[0-9]+\.txt$']
+
 [known_folders]
 enabled = false
 mode = "upload_only"
@@ -28,6 +34,14 @@ debounce = "5s"
 rescan_interval = "0s"
 startup_scan = false
 upload_deletes = false
+# Exact names apply to every component below a source, including old queues.
+exclude_names = ["node_modules"]
+# Sliding churn budgets; first uploads and admitted-generation retries are free.
+upload_rate_window = "20s"
+max_file_uploads_per_window = 25
+max_project_uploads_per_window = 180
+# Optional absolute/~ project roots. Otherwise detect only after a hot threshold.
+upload_rate_roots = []
 exclude_suffixes = [
     ".crdownload",
     ".part",

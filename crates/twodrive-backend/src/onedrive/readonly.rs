@@ -69,6 +69,16 @@ fn account_name(v: &serde_json::Value) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("missing_account_display_name"))
 }
 impl GraphBackend {
+    pub fn readonly_quota(
+        &self,
+        check: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let value = self.browse_json(
+            "https://graph.microsoft.com/v1.0/me/drive?$select=quota",
+            check,
+        )?;
+        Ok(value["quota"].clone())
+    }
     /// Display metadata only; stable account/drive bindings still use IDs.
     pub fn readonly_account_name(
         &self,
@@ -108,7 +118,7 @@ impl GraphBackend {
         let base = endpoint(&["drives", &identity.drive, "root", "delta"])?;
         let previous = db.cloud_delta(identity)?;
         let mut replace = previous.is_none();
-        let mut url = previous.unwrap_or_else(|| format!("{base}?$top=100"));
+        let mut url = previous.unwrap_or_else(|| format!("{base}?$top=500&$select=id,name,parentReference,folder,file,size,eTag,lastModifiedDateTime,deleted,remoteItem,package"));
         let mut seen = HashSet::new();
         let mut pages = 0;
         db.cloud_begin(identity)?;
@@ -127,7 +137,9 @@ impl GraphBackend {
                     replace = true;
                     db.cloud_begin(identity)?;
                     seen.clear();
-                    url = format!("{base}?$top=100");
+                    url = format!(
+                        "{base}?$top=500&$select=id,name,parentReference,folder,file,size,eTag,lastModifiedDateTime,deleted,remoteItem,package"
+                    );
                     continue;
                 }
                 other => other?,
@@ -315,6 +327,24 @@ mod tests {
         ));
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+    #[test]
+    fn quota_is_read_from_drive_without_listing_or_requesting_new_permissions() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let graph = super::super::browse::tests::backend(&server);
+        let worker = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            assert_eq!(request.method(), &tiny_http::Method::Get);
+            assert_eq!(request.url(), "/v1.0/me/drive?$select=quota");
+            request.respond(Response::from_string(r#"{"quota":{"total":1000,"used":200,"remaining":750},"owner":{"private":"not-used"}}"#)).unwrap();
+        });
+        let quota = graph.readonly_quota(&mut || Ok(())).unwrap();
+        assert_eq!(quota["remaining"], 750);
+        assert!(quota["owner"].is_null());
+        worker.join().unwrap();
     }
     #[test]
     fn signed_in_account_name_comes_from_me_and_never_from_an_id() {

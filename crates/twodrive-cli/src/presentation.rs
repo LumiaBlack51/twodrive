@@ -199,7 +199,7 @@ pub(crate) fn emblem_for_state(state: FileState) -> &'static str {
         }
         FileState::Cached => "emblem-twodrive-synced",
         FileState::Pinned => "emblem-twodrive-pinned",
-        FileState::Dirty => "emblem-documents",
+        FileState::LocalOnly | FileState::Dirty => "emblem-documents",
         FileState::Conflict | FileState::Error => "emblem-twodrive-error",
     }
 }

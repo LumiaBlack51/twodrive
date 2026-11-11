@@ -1,5 +1,5 @@
 use super::Database;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::fs;
 use std::path::Path;
 
@@ -10,11 +10,14 @@ impl Database {
     /// Claim the inspected cache/remote baseline before a delayed first write.
     /// A concurrent delta or upload completion must not supply a newer ETag
     /// for bytes that were opened from an older cached version.
+    /// A worker merely starting this same dirty generation does not change
+    /// that baseline; its later acknowledgement must leave Writing intact.
     pub fn begin_cached_write(&self, record: &FileRecord) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
-            "UPDATE files SET state = 'writing'
+            "UPDATE files SET state = ?8
              WHERE remote_id = ?1 AND cache_path IS ?2 AND cloud_remote_id IS ?3
-               AND etag = ?4 AND state = ?5 AND size = ?6 AND modified_unix = ?7",
+               AND etag = ?4 AND (state = ?5 OR (?5 = 'dirty' AND state = 'uploading'))
+               AND size = ?6 AND modified_unix = ?7",
             params![
                 record.metadata.remote_id,
                 record
@@ -24,6 +27,38 @@ impl Database {
                 record.cloud_remote_id,
                 record.metadata.etag,
                 record.state.as_str(),
+                record.metadata.size as i64,
+                record.metadata.modified_unix,
+                if self.excludes_upload(record) {
+                    "local_only"
+                } else {
+                    "writing"
+                }
+            ],
+        )? == 1)
+    }
+
+    /// Claim a truncating open before touching cache bytes. Publish its zero
+    /// size as Writing, never as an uploadable handle-less generation.
+    pub fn begin_truncated_write(&self, record: &FileRecord, cache: &Path) -> anyhow::Result<bool> {
+        Ok(self.connect()?.execute(
+            "UPDATE files SET state = ?1, size = 0,
+            cache_path = ?2, cache_accessed_unix = ?3, modified_unix = ?3
+            WHERE remote_id = ?4 AND state = ?5 AND cache_path IS ?6
+                AND cloud_remote_id IS ?7 AND etag = ?8 AND size = ?9 AND modified_unix = ?10",
+            params![
+                if self.excludes_upload(record) {
+                    "local_only"
+                } else {
+                    "writing"
+                },
+                cache.to_string_lossy(),
+                now_unix(),
+                record.metadata.remote_id,
+                record.state.as_str(),
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
+                record.cloud_remote_id,
+                record.metadata.etag,
                 record.metadata.size as i64,
                 record.metadata.modified_unix
             ],
@@ -50,6 +85,59 @@ impl Database {
         )? == 1)
     }
 
+    /// The backend call has returned an error. A known target cannot become an
+    /// orphan; keep its old ETag so an uncertain server commit still conflicts.
+    /// Unknown create claims and deletion tombstones retain their uncertainty.
+    pub fn retire_failed_known_upload_claim(&self, record: &FileRecord) -> anyhow::Result<()> {
+        if record.cloud_remote_id.is_none() {
+            return Ok(());
+        }
+        self.connect()?.execute(
+            "UPDATE files SET upload_path = NULL, upload_target_id = NULL,
+            upload_cache_path = NULL WHERE remote_id = ?1 AND cloud_remote_id IS ?2
+                AND upload_target_id IS ?2 AND upload_path = ?3 AND upload_cache_path IS ?4",
+            params![
+                record.metadata.remote_id,
+                record.cloud_remote_id,
+                record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy())
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Startup only, before workers exist. Preserve unbound/unknown create
+    /// claims and all tombstones; known targets retain their version baseline.
+    pub fn retire_interrupted_known_upload_claims(&self) -> anyhow::Result<()> {
+        self.connect()?.execute(
+            "UPDATE files SET upload_path = NULL, upload_target_id = NULL,
+            upload_cache_path = NULL WHERE upload_target_id IS NOT NULL
+                AND cloud_remote_id = upload_target_id",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_failed_upload(
+        &self,
+        record: &FileRecord,
+        state: FileState,
+    ) -> anyhow::Result<()> {
+        self.connect()?.execute(
+            "UPDATE files SET state = ?1
+            WHERE remote_id = ?2 AND state = 'uploading' AND path = ?3
+                AND cache_path IS ?4 AND etag = ?5",
+            params![
+                state.as_str(),
+                record.metadata.remote_id,
+                record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
+                record.metadata.etag
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn mark_state(&self, remote_id: &str, state: FileState) -> anyhow::Result<()> {
         let conn = self.connect()?;
         conn.execute(
@@ -59,10 +147,82 @@ impl Database {
         Ok(())
     }
 
+    /// A backup-style save can leave the original cloud identity on an excluded
+    /// local backup. Hand it to the new original without accepting a newer
+    /// remote version as the user's baseline or uploading the backup itself.
+    pub fn adopt_excluded_backup_identity(
+        &self,
+        record: &FileRecord,
+        remote: &crate::MetadataEntry,
+    ) -> anyhow::Result<Option<FileRecord>> {
+        if record.cloud_remote_id.is_some()
+            || self.excludes_upload(record)
+            || record.metadata.path != remote.path
+            || record.state != FileState::Dirty
+        {
+            return Ok(None);
+        }
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let owner: Option<(String, String)> = tx
+            .query_row(
+                "SELECT remote_id, etag FROM files WHERE cloud_remote_id = ?1
+                AND remote_id <> ?2 AND state = 'local_only' AND is_dir = 0
+                AND cache_path IS NOT NULL AND etag <> '' AND upload_path IS NULL
+                AND NOT EXISTS (SELECT 1 FROM pending_metadata_operations WHERE local_id = files.remote_id)",
+                params![remote.remote_id, record.metadata.remote_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((owner_id, baseline_etag)) = owner else {
+            return Ok(None);
+        };
+        let deleting: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending_deletes
+            WHERE cloud_remote_id = ?1 OR remote_id = ?1 OR local_id IN (?2, ?3))",
+            params![remote.remote_id, owner_id, record.metadata.remote_id],
+            |row| row.get(0),
+        )?;
+        if deleting {
+            return Ok(None);
+        }
+        tx.execute(
+            "UPDATE files SET cloud_remote_id = NULL, etag = '' WHERE remote_id = ?1",
+            params![owner_id],
+        )?;
+        let claimed = tx.execute(
+            "UPDATE files SET cloud_remote_id = ?1, etag = ?2
+            WHERE remote_id = ?3 AND cloud_remote_id IS NULL AND state = 'dirty'
+                AND path = ?4 AND cache_path IS ?5 AND size = ?6 AND modified_unix = ?7
+                AND etag = ?8 AND upload_path IS NULL",
+            params![
+                remote.remote_id,
+                baseline_etag,
+                record.metadata.remote_id,
+                record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
+                record.metadata.size as i64,
+                record.metadata.modified_unix,
+                record.metadata.etag
+            ],
+        )?;
+        if claimed != 1 {
+            return Ok(None);
+        } // Roll back the detach too.
+        tx.execute(
+            "DELETE FROM pending_metadata_operations WHERE local_id = ?1",
+            params![owner_id],
+        )?;
+        tx.commit()?;
+        self.get_by_remote_id(&record.metadata.remote_id)
+    }
+
     /// Claim only the snapshot inspected by the worker. Network preflight can
     /// overlap a rename/replacement or a reopen on the FUSE thread.
     pub fn begin_upload(&self, record: &FileRecord) -> anyhow::Result<bool> {
-        if !matches!(record.state, FileState::Dirty | FileState::Uploading) {
+        if self.excludes_upload(record)
+            || !matches!(record.state, FileState::Dirty | FileState::Uploading)
+        {
             return Ok(false);
         }
         let changed = self.connect()?.execute(
@@ -96,7 +256,7 @@ impl Database {
     pub fn mark_dirty_with_size(&self, remote_id: &str, size: u64) -> anyhow::Result<()> {
         let conn = self.connect()?;
         let changed = conn.execute(
-            "UPDATE files SET state = ?1, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            "UPDATE files SET state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
             params![
                 FileState::Dirty.as_str(),
                 i64::try_from(size).unwrap_or(i64::MAX),
@@ -267,6 +427,7 @@ impl Database {
             r#"
             UPDATE files
             SET state = CASE
+                    WHEN state = 'local_only' THEN state
                     WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned'
                     ELSE ?1
                 END,
@@ -448,7 +609,7 @@ impl Database {
             params![record.metadata.path], |row| row.get(0))?;
         tx.execute(
             "UPDATE files SET download_generation = download_generation + 1,
-             release_pending = CASE WHEN state = 'online_only' OR (state = 'hydrating' AND cache_path IS NULL) THEN 0 ELSE 1 END,
+             release_pending = CASE WHEN state = 'local_only' OR state = 'online_only' OR (state = 'hydrating' AND cache_path IS NULL) THEN 0 ELSE 1 END,
              state = CASE WHEN state = 'hydrating' AND cache_path IS NULL THEN 'online_only' ELSE state END
              WHERE is_dir = 0 AND pin_explicit = 0 AND pin_origin_remote_id IS NULL
              AND (path = ?1 OR ?1 = '/' OR substr(path, 1, length(?1) + 1) = ?1 || '/')",
@@ -512,6 +673,94 @@ fn is_mount_trash_path(path: &str) -> bool {
         return false;
     };
     !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod write_claim_tests {
+    use super::*;
+    use crate::NameExclusions;
+
+    #[test]
+    fn promoted_backup_first_write_survives_an_upload_claim() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::new(root.path().join("db"))
+            .with_name_exclusions(NameExclusions::new(vec![r"\.bak$".into()]).unwrap());
+        db.init().unwrap();
+        let cache = root.path().join("cache");
+        fs::write(&cache, b"old backup").unwrap();
+        db.create_local_file("backup", "/report.bak", &cache)
+            .unwrap();
+        db.mark_dirty_with_size("backup", 10).unwrap();
+        db.move_subtree_and_queue("backup", "/promoted.txt")
+            .unwrap();
+        let inspected = db.get_by_remote_id("backup").unwrap().unwrap();
+        assert_eq!(inspected.state, FileState::Dirty);
+        // The worker wins after the FUSE thread inspected the first-write
+        // baseline, but has not changed either the bytes or remote version.
+        assert!(db.begin_upload(&inspected).unwrap());
+        assert!(db.begin_cached_write(&inspected).unwrap());
+        fs::write(&cache, b"new backup").unwrap();
+        let old_ack = crate::MetadataEntry::new_file("cloud-backup", "/promoted.txt", 10, 1, "v1");
+        let current = db
+            .commit_uploaded("backup", "/promoted.txt", &old_ack, &cache)
+            .unwrap();
+        assert_eq!(current.state, FileState::Writing);
+        assert_eq!(fs::read(&cache).unwrap(), b"new backup");
+        db.mark_dirty_with_size("backup", 10).unwrap();
+        let next = db.get_by_remote_id("backup").unwrap().unwrap();
+        assert_eq!(next.cloud_remote_id.as_deref(), Some("cloud-backup"));
+        assert_eq!(next.metadata.etag, "v1");
+        assert!(db.begin_upload(&next).unwrap());
+        let new_ack = crate::MetadataEntry::new_file("cloud-backup", "/promoted.txt", 10, 2, "v2");
+        let saved = db
+            .commit_uploaded("backup", "/promoted.txt", &new_ack, &cache)
+            .unwrap();
+        assert_eq!(saved.state, FileState::Cached);
+        assert_eq!(saved.metadata.etag, "v2");
+    }
+
+    #[test]
+    fn upload_claim_does_not_allow_a_changed_first_write_baseline() {
+        for change in [
+            "etag = 'external-v2'",
+            "cloud_remote_id = 'replacement'",
+            "cache_path = 'replacement-cache'",
+            "size = size + 1",
+            "modified_unix = modified_unix + 1",
+            "state = 'conflict'",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let db = Database::new(root.path().join("db"));
+            db.init().unwrap();
+            let cache = root.path().join("cache");
+            fs::write(&cache, b"original").unwrap();
+            db.upsert_metadata(&crate::MetadataEntry::new_file(
+                "file",
+                "/report.txt",
+                8,
+                1,
+                "v1",
+            ))
+            .unwrap();
+            db.mark_cached("file", &cache).unwrap();
+            db.mark_dirty_with_size("file", 8).unwrap();
+            let inspected = db.get_by_remote_id("file").unwrap().unwrap();
+            assert!(db.begin_upload(&inspected).unwrap());
+            db.connect()
+                .unwrap()
+                .execute(
+                    &format!("UPDATE files SET {change} WHERE remote_id = 'file'"),
+                    [],
+                )
+                .unwrap();
+            assert!(!db.begin_cached_write(&inspected).unwrap(), "{change}");
+            assert_ne!(
+                db.get_by_remote_id("file").unwrap().unwrap().state,
+                FileState::Writing
+            );
+            assert_eq!(fs::read(&cache).unwrap(), b"original");
+        }
+    }
 }
 
 #[cfg(test)]

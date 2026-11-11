@@ -13,6 +13,8 @@ pub enum FileState {
     Hydrating,
     Cached,
     Pinned,
+    /// Durable local bytes excluded from cloud uploads. Never evict as a cache.
+    LocalOnly,
     Writing,
     Dirty,
     Uploading,
@@ -27,6 +29,7 @@ impl FileState {
             Self::Hydrating => "hydrating",
             Self::Cached => "cached",
             Self::Pinned => "pinned",
+            Self::LocalOnly => "local_only",
             Self::Writing => "writing",
             Self::Dirty => "dirty",
             Self::Uploading => "uploading",
@@ -51,6 +54,7 @@ impl FromStr for FileState {
             "hydrating" => Ok(Self::Hydrating),
             "cached" => Ok(Self::Cached),
             "pinned" => Ok(Self::Pinned),
+            "local_only" => Ok(Self::LocalOnly),
             "writing" => Ok(Self::Writing),
             "dirty" => Ok(Self::Dirty),
             "uploading" => Ok(Self::Uploading),
@@ -70,6 +74,8 @@ pub struct MetadataEntry {
     pub is_dir: bool,
     pub size: u64,
     pub modified_unix: i64,
+    /// Optional known creation time; not a fabricated cloud timestamp.
+    pub created_unix: Option<i64>,
     pub etag: String,
 }
 
@@ -113,6 +119,7 @@ impl MetadataEntry {
             is_dir,
             size,
             modified_unix,
+            created_unix: None,
             etag: etag.into(),
         }
     }

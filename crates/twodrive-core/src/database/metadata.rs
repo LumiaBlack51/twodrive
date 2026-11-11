@@ -202,7 +202,7 @@ impl Database {
                     SELECT 1 FROM files
                     WHERE path = ?1
                       AND remote_id <> ?2
-                      AND state IN ('writing', 'dirty', 'uploading', 'conflict')
+                      AND state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict')
                 )
                 "#,
                 params![entry.path, local_id],
@@ -213,7 +213,7 @@ impl Database {
                 SELECT EXISTS(
                     SELECT 1 FROM files
                     WHERE remote_id = ?1
-                      AND state IN ('writing', 'dirty', 'uploading', 'conflict')
+                      AND state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict')
                 )
                 "#,
                 params![local_id],

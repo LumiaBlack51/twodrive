@@ -19,6 +19,7 @@ impl NativeSession {
         &mut self,
         check_stop: &mut dyn FnMut() -> anyhow::Result<()>,
     ) -> anyhow::Result<RemoteProgress> {
+        self.coordinator.control.checkpoint("remote.index")?;
         check_stop()?;
         let provider = crate::native_account::NativeAccount::new(
             self.configuration.account.clone(),
@@ -29,6 +30,7 @@ impl NativeSession {
         let db = self.coordinator.bridge.journal().database();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         let mut check = || {
+            self.coordinator.control.checkpoint("remote.index")?;
             check_stop()?;
             ensure!(
                 std::time::Instant::now() < deadline,
@@ -49,17 +51,47 @@ impl NativeSession {
         let root = db
             .get_state_value("native_cloud_root_id")?
             .context("native cloud root missing")?;
-        let plan = NamespacePlan::build(
-            &db.cloud_items(&self.configuration.identity)?,
-            &root,
-            self.coordinator.root().as_os_str().encode_wide().count(),
-            twodrive_local_files::names::ordinal_ignorecase_cmp,
-        )
-        .map_err(anyhow::Error::msg)?;
+        let items = db.cloud_items(&self.configuration.identity)?;
+        let (plan, excluded) = if self.configuration.ordinary_only {
+            let mut protected = self
+                .coordinator
+                .bridge
+                .journal()
+                .native_projections(self.coordinator.binding()?)?
+                .into_iter()
+                .map(|p| p.cloud_id)
+                .collect::<HashSet<_>>();
+            protected.extend(
+                db.all_records()?
+                    .into_iter()
+                    .filter_map(|r| r.cloud_remote_id),
+            );
+            NamespacePlan::build_ordinary(
+                &items,
+                &root,
+                self.coordinator.root().as_os_str().encode_wide().count(),
+                &protected,
+                twodrive_local_files::names::ordinal_ignorecase_cmp,
+            )
+            .map_err(anyhow::Error::msg)?
+        } else {
+            (
+                NamespacePlan::build(
+                    &items,
+                    &root,
+                    self.coordinator.root().as_os_str().encode_wide().count(),
+                    twodrive_local_files::names::ordinal_ignorecase_cmp,
+                )
+                .map_err(anyhow::Error::msg)?,
+                0,
+            )
+        };
+        crate::state::State::new(self.state.clone())?.save("native-exclusions.json", &serde_json::json!({"ordinary_only":self.configuration.ordinary_only,"excluded_objects":excluded}))?;
         let metadata = plan
             .entries
             .iter()
             .map(|entry| {
+                self.coordinator.control.checkpoint("remote.plan")?;
                 let modified = time::OffsetDateTime::parse(
                     entry
                         .item
@@ -111,6 +143,7 @@ impl NativeCoordinator {
         let binding = self.binding()?.to_string();
         let mut progress = RemoteProgress::default();
         for removal in self.bridge.journal().native_remote_removals(&binding)? {
+            self.control.checkpoint("remote.removal.replay")?;
             self.last_successful_watch = None;
             match self.bridge.apply_native_remote_removal(
                 &self.owner,
@@ -131,6 +164,7 @@ impl NativeCoordinator {
             .into_iter()
             .filter(|p| p.state == "published" && !remaining.contains(&p.cloud_id))
         {
+            self.control.checkpoint("remote.remove")?;
             self.last_successful_watch = None;
             let result = (|| -> anyhow::Result<()> {
                 ensure!(
@@ -259,6 +293,7 @@ impl NativeCoordinator {
         let mut progress = RemoteProgress::default();
         let binding = self.binding()?.to_string();
         for update in self.bridge.journal().native_remote_updates(&binding)? {
+            self.control.checkpoint("remote.update.replay")?;
             self.last_successful_watch = None;
             match self.bridge.apply_native_remote_version(
                 &self.owner,
@@ -288,6 +323,7 @@ impl NativeCoordinator {
             .map(|p| (p.cloud_id.clone(), p))
             .collect::<HashMap<_, _>>();
         for entry in metadata {
+            self.control.checkpoint("remote.apply")?;
             if unchanged.get(&entry.remote_id).is_some_and(|p| {
                 p.directory == entry.is_dir
                     && p.path == entry.path

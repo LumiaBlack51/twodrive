@@ -46,7 +46,7 @@ def install(bundle, engine_dir, data, bin_dir, preserve_runtime=False):
     runtime = app / 'runtime'
     try:
         shutil.copytree(bundle, stage, dirs_exist_ok=True)
-        for name in ['twodrive-dev', 'twodrive-dav-engine']:
+        for name in ['twodrive-dev', 'twodrive-dav-engine', 'twodrive-provider-login']:
             shutil.copy2(engine_dir / name, stage / name)
             (stage / name).chmod(0o755)
         if not (stage / 'twodrive_dav').is_file():
@@ -62,27 +62,29 @@ def install(bundle, engine_dir, data, bin_dir, preserve_runtime=False):
     bin_dir.mkdir(parents=True, exist_ok=True)
     launcher = bin_dir / 'twodrive-dav'
     # exec argv is constructed in Python, so install paths need no shell expansion.
-    launcher.write_text('#!/usr/bin/env python3\nimport os, sys, subprocess\n'
+    # GTK 3's Wayland backend cannot apply skip-taskbar / skip-pager hints.
+    # Use X11/XWayland when available so a tray panel remains a utility window.
+    # A positioning component does not change that protocol limitation.
+    launcher.write_text('#!/usr/bin/env python3\nimport os, sys\n'
         + 'if "GDK_BACKEND" not in os.environ and os.environ.get("DISPLAY"):\n'
-        + '    backend = "x11"\n'
-        + '    if os.environ.get("WAYLAND_DISPLAY"):\n'
-        + '        try:\n'
-        + '            probe = subprocess.run(["gdbus", "call", "--session", "--dest", "org.gnome.Shell", "--object-path", "/app/twodrive/TrayAnchor", "--method", "app.twodrive.TrayAnchor1.GetAnchor", "0"], capture_output=True, timeout=1)\n'
-        + '            if probe.returncode == 0: backend = "wayland"\n'
-        + '        except (OSError, subprocess.TimeoutExpired): pass\n'
-        + '    os.environ["GDK_BACKEND"] = backend\n'
+        + '    os.environ["GDK_BACKEND"] = "x11"\n'
+        + 'os.environ.setdefault("TWODRIVE_TRAY_BACKEND", "sni")\n'
         + 'program = ' + repr(str(runtime / 'twodrive_dav')) + '\n'
         + 'os.execv(program, [program, "--state", ' + repr(str(app / 'state'))
         + ', "--launcher", ' + repr(str(launcher)) + '] + sys.argv[1:])\n')
     launcher.chmod(0o755)
     icons = data / 'icons/hicolor/scalable/apps'
     icons.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(runtime / 'data/flutter_assets/assets/cloud-connected.svg', icons / 'twodrive-dav.svg')
+    icon = runtime / 'data/flutter_assets/assets/app-icon.svg'
+    if not icon.is_file():
+        icon = runtime / 'data/flutter_assets/assets/cloud-connected.svg'
+    for name in ['twodrive-dav.svg', 'twodrive-dav-minimal.svg']:
+        shutil.copy2(icon, icons / name)
     applications = data / 'applications'
     applications.mkdir(parents=True, exist_ok=True)
     (applications / 'app.twodrive.twodrive_dav.desktop').write_text(
-        '[Desktop Entry]\nType=Application\nName=TwoDrive Development\nComment=WebDAV files and TwoDrive paired shares\n'
-        + 'Exec=' + quote_exec(str(launcher)) + '\nIcon=twodrive-dav\nTerminal=false\n'
+        '[Desktop Entry]\nType=Application\nName=TwoDrive\nComment=WebDAV files and TwoDrive paired shares\n'
+        + 'Exec=' + quote_exec(str(launcher)) + '\nIcon=twodrive-dav-minimal\nTerminal=false\n'
         + 'Categories=Network;FileTransfer;\nStartupWMClass=app.twodrive.twodrive_dav\n')
     # Deliberately do not create or modify XDG_CONFIG_HOME/autostart.
     if previous.exists() and not preserve_runtime:

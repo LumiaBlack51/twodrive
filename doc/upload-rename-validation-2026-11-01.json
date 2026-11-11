@@ -1,0 +1,231 @@
+{
+  "schema": 1,
+  "date": "2026-11-01",
+  "timezone": "Asia/Shanghai",
+  "application_version": "0.2.20",
+  "debian_version": "0.2.20-1",
+  "source_commit": "bd8e2632155936a5c5719b6630771d86b650452c",
+  "source_tag": "v0.2.20-1",
+  "main_merge_commit": "4225af3c51c41b14fc16485cb29b9b353bda52bf",
+  "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/51",
+  "ci": {
+    "all_eight_checks_success": true,
+    "head_sha": "bd8e2632155936a5c5719b6630771d86b650452c",
+    "native": "https://github.com/LumiaBlack51/twodrive/actions/runs/41279948843",
+    "debian": "https://github.com/LumiaBlack51/twodrive/actions/runs/41279948755",
+    "policy": "https://github.com/LumiaBlack51/twodrive/actions/runs/41279948916",
+    "independent_workspace": "https://github.com/LumiaBlack51/twodrive/actions/runs/41279948756",
+    "full_lite": "https://github.com/LumiaBlack51/twodrive/actions/runs/41279948770"
+  },
+  "local_validation": {
+    "default_rust_passed": 214,
+    "default_ignored": 11,
+    "explicit_isolated_fuse_passed": 10,
+    "nautilus_python_passed": 25,
+    "helper_python_passed": 12,
+    "strict_clippy": true,
+    "format": true,
+    "mock_package_daemon_smoke": true,
+    "real_60_second_retention_smoke": true,
+    "old_code_failures_proven": [
+      "active-owned cloud ID deleted by late upload cleanup",
+      "atomic save cancels target pending move",
+      "invalid rename/folder names lack pre-auth validation",
+      "missing upload target loops",
+      "clean initial-upload echo violates cloud ID uniqueness",
+      "three delayed recovery-copy rename/ancestor cases"
+    ]
+  },
+  "debian_validation": {
+    "builder": "dpkg-buildpackage/debhelper",
+    "build_offline": true,
+    "project_packages_unsigned": true,
+    "manifest_sha256_references_verified": 13,
+    "upstream_source_files_verified": 306,
+    "tracked_debian_files_verified": 16,
+    "debian_copyright_includes_generated_dependency_notices": true,
+    "vendored_files_checked_in_ci": 16043,
+    "runtime_integration_files_compared": 11,
+    "upgrade_remove_reinstall_purge_preserve_synthetic_user_state": true,
+    "lintian_errors": 0,
+    "lintian_warnings": [
+      "two debian-changelog-line-too-long warnings",
+      "newer-standards-version: checker knows 4.6.2, package declares 4.7.4"
+    ]
+  },
+  "downloaded_artifact": {
+    "id": 13072479248,
+    "size": 79149258,
+    "sha256": "228e375a27709c020f9c5a6ed4b057fa1d513df9b7c490d9220a2c823d3ab227"
+  },
+  "artifacts": {
+    "twodrive-dbgsym_0.2.20-1_amd64.ddeb": {
+      "size": 40987310,
+      "sha256": "e0037080ec58de8975a4092fe6b861b11676a585412a273c4a06e5ec277faa3f"
+    },
+    "twodrive_0.2.20-1.debian.tar.xz": {
+      "size": 47068,
+      "sha256": "1e295d2b7fa4cb003bedfd8f8526b2cc7d80dbfc3b680ac3bc7c1f2c615e2f5a"
+    },
+    "twodrive_0.2.20-1.dsc": {
+      "size": 1428,
+      "sha256": "9b7145791d067bc86d394583d0fde390878528350c8313900e3ac3cfc4ed283a"
+    },
+    "twodrive_0.2.20-1_amd64.buildinfo": {
+      "size": 13170,
+      "sha256": "80381ce03b79eeacfbf703f6046d867843628bcc3516b26a45c893aa33254a31"
+    },
+    "twodrive_0.2.20-1_amd64.changes": {
+      "size": 3224,
+      "sha256": "cda2bdf4bf4f59a9ee59866965262ed8aa8bff1a01fd2ba0169e104d686ab5d0"
+    },
+    "twodrive_0.2.20-1_amd64.deb": {
+      "size": 2846268,
+      "sha256": "52c88fd07aa2e90468aed55e3b9533bd470cb2304caf2edeadfd3701d83dbaf9"
+    },
+    "twodrive_0.2.20.orig-vendor.tar.xz": {
+      "size": 33584832,
+      "sha256": "4a43f5e78c69574dd6b09ed19baf53e0743be28e1fbdbc0ec9085e6d3d2d86c8"
+    },
+    "twodrive_0.2.20.orig.tar.xz": {
+      "size": 1646076,
+      "sha256": "8c6095071a396df702f176d436f3822c2149f44f92d72ed841daf06cbfe34217"
+    }
+  },
+  "local_upgrade": {
+    "binary_versions": {
+      "twodrive": "twodrive 0.2.20",
+      "twodrive-daemon": "twodrive-daemon 0.2.20"
+    },
+    "binary_sha256": {
+      "twodrive": "c0b9d6893eecae34e2884a0aaa1c268fab83b81e5fc2c50627bc3dd43fd0bd2e",
+      "twodrive-daemon": "d84463869aa57bc3ee5f963ed11ca64e19a7fdbc18b7b9b71b8d5f989d7c4f33"
+    },
+    "service_active": true,
+    "mounted": true,
+    "minimal_private_state_and_unsynced_backup": true,
+    "recovery": {
+      "quick_check": "ok",
+      "states": [],
+      "cache_sha256_matches": true,
+      "pending_metadata_preserved": true,
+      "pending_delete_identities_preserved": true,
+      "config_unchanged": true,
+      "active_transfers": 0,
+      "cloud_sha256_matches": true,
+      "cloud_sha1_matches": true
+    }
+  },
+  "limits": [
+    "The historical actor and exact sequence that removed the original cloud ID were not established.",
+    "Concurrency and mounted regression backends are simulated, not a real OneDrive race replay.",
+    "The live recovery copy matches OneDrive server SHA-256/SHA-1 metadata; no full redownload comparison was performed.",
+    "Existing unrelated metadata and denied deletion tasks were preserved.",
+    "No claim of Debian archive acceptance or universal prevention of every 404."
+  ],
+  "post_publication": {
+    "tagName": "v0.2.20-1",
+    "targetCommitish": "bd8e2632155936a5c5719b6630771d86b650452c",
+    "isDraft": false,
+    "isPrerelease": false,
+    "publishedAt": "2026-11-01T06:42:43Z",
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.20-1",
+    "latest": true,
+    "assets": [
+      {
+        "name": "SHA256SUMS",
+        "size": 960,
+        "state": "uploaded",
+        "digest": "sha256:d77ce4f0eb5703ac2c9e3734edbba8f71151480c8de2370e1d7fa1ff834e5f7c"
+      },
+      {
+        "name": "twodrive-dbgsym_0.2.20-1_amd64.ddeb",
+        "size": 40987310,
+        "state": "uploaded",
+        "digest": "sha256:e0037080ec58de8975a4092fe6b861b11676a585412a273c4a06e5ec277faa3f"
+      },
+      {
+        "name": "twodrive_0.2.20-1.debian.tar.xz",
+        "size": 47068,
+        "state": "uploaded",
+        "digest": "sha256:1e295d2b7fa4cb003bedfd8f8526b2cc7d80dbfc3b680ac3bc7c1f2c615e2f5a"
+      },
+      {
+        "name": "twodrive_0.2.20-1.dsc",
+        "size": 1428,
+        "state": "uploaded",
+        "digest": "sha256:9b7145791d067bc86d394583d0fde390878528350c8313900e3ac3cfc4ed283a"
+      },
+      {
+        "name": "twodrive_0.2.20-1_amd64.buildinfo",
+        "size": 13170,
+        "state": "uploaded",
+        "digest": "sha256:80381ce03b79eeacfbf703f6046d867843628bcc3516b26a45c893aa33254a31"
+      },
+      {
+        "name": "twodrive_0.2.20-1_amd64.changes",
+        "size": 3224,
+        "state": "uploaded",
+        "digest": "sha256:cda2bdf4bf4f59a9ee59866965262ed8aa8bff1a01fd2ba0169e104d686ab5d0"
+      },
+      {
+        "name": "twodrive_0.2.20-1_amd64.deb",
+        "size": 2846268,
+        "state": "uploaded",
+        "digest": "sha256:52c88fd07aa2e90468aed55e3b9533bd470cb2304caf2edeadfd3701d83dbaf9"
+      },
+      {
+        "name": "twodrive_0.2.20-1_amd64.deb.sha256",
+        "size": 94,
+        "state": "uploaded",
+        "digest": "sha256:c3ca9b21ff2da34ff240ba7eb79d9d7ac3d0692e597ac2a81d6b8c7c63228557"
+      },
+      {
+        "name": "twodrive_0.2.20.orig-vendor.tar.xz",
+        "size": 33584832,
+        "state": "uploaded",
+        "digest": "sha256:4a43f5e78c69574dd6b09ed19baf53e0743be28e1fbdbc0ec9085e6d3d2d86c8"
+      },
+      {
+        "name": "twodrive_0.2.20.orig.tar.xz",
+        "size": 1646076,
+        "state": "uploaded",
+        "digest": "sha256:8c6095071a396df702f176d436f3822c2149f44f92d72ed841daf06cbfe34217"
+      },
+      {
+        "name": "verification.json",
+        "size": 4987,
+        "state": "uploaded",
+        "digest": "sha256:dc9a1c1defb614578b44ebbf6f0e287740f270324fb3f2ee667b3de7dd7545c1"
+      }
+    ]
+  },
+  "post_upgrade_observation": {
+    "delta_completed": 10,
+    "dirty_upload_remains_queued": 0,
+    "queued_upload_failed": 0,
+    "observed_seconds": 555,
+    "integrity_check": "ok",
+    "pending_file_states": []
+  },
+  "cleanup": {
+    "status": "completed",
+    "removed_path_allocated_bytes": 4899696640,
+    "removed_path_logical_bytes": 4875820352,
+    "unique_inodes_audited": 11810,
+    "scope": [
+      "this turn build target",
+      "two disposable development/reproduction worktrees",
+      "verified CI download/extraction/release staging",
+      "one-shot scripts and logs",
+      "isolated mock sandboxes and synthetic expired-token fixture"
+    ],
+    "preserved": [
+      "current installed 0.2.20 programs",
+      "minimal private SQLite/config/queue/unsynced backup",
+      "one verified 0.2.19 fallback pair",
+      "pre-existing user checkout, uncommitted investigations, backups and recovery"
+    ],
+    "note": "Audited allocation of removed paths, not a whole-disk free-space delta."
+  }
+}

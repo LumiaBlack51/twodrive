@@ -42,6 +42,8 @@ def main():
                               capture_output=True, text=True, timeout=20).stdout
 
     run("init-mock")
+    config = root / "config/twodrive/config.toml"
+    config.write_text('[cache]\nretain_for = "1s"\n')
     database = root / "data/twodrive/twodrive.sqlite3"
 
     def record(path):
@@ -76,6 +78,62 @@ def main():
             renamed.unlink()
             assert record("/renamed-smoke.txt") is None
             assert not (root / "config/twodrive/tokens.json").exists()
+            # Model the on-mount freedesktop trash format using only synthetic
+            # files. Never invoke a session-wide "empty trash" command.
+            trash = mount / f".Trash-{os.getuid()}"
+            (trash / "files").mkdir(parents=True)
+            (trash / "info").mkdir()
+            trash_records = []
+            for name in ("restore-me.txt", "empty-me.txt"):
+                source = mount / name
+                source.write_bytes(b"recoverable trash payload\n")
+                wait_for(lambda: record(f"/{name}")[0] == "cached", process, "trash source upload")
+                payload = trash / "files" / name
+                source.rename(payload)
+                info = trash / "info" / f"{name}.trashinfo"
+                info.write_text(f"[Trash Info]\nPath={name}\nDeletionDate=2026-01-01T12:00:00\n")
+                for path in (payload, info):
+                    relative = "/" + path.relative_to(mount).as_posix()
+                    wait_for(lambda: record(relative)[0] == "cached", process, "trash upload")
+                    trash_records.append((relative, Path(record(relative)[1]), path.read_bytes()))
+            with sqlite3.connect(database) as connection:
+                connection.executemany("UPDATE files SET cache_accessed_unix=1 WHERE path=?",
+                                       [(relative,) for relative, _, _ in trash_records])
+            run("cache", "prune")
+            for relative, cache, expected in trash_records:
+                assert record(relative)[0] == "cached", f"CLI prune released trash: {relative}"
+                assert cache.read_bytes() == expected
+            # The daemon must call retention itself, without a CLI prune. Keep
+            # the production 60-second cadence in this real isolated process.
+            sample.read_bytes()
+            deadline = time.monotonic() + 75
+            while record("/README-cloud.txt")[0] != "online_only" and time.monotonic() < deadline:
+                assert process.poll() is None, "daemon exited during automatic retention"
+                time.sleep(0.1)
+            assert record("/README-cloud.txt")[0] == "online_only", "daemon never applied configured cache retention"
+            assert b"Welcome" in sample.read_bytes()
+            for relative, cache, expected in trash_records:
+                assert record(relative)[0] == "cached", f"daemon released trash: {relative}"
+                assert cache.read_bytes() == expected
+            restored = mount / "restored-from-trash.txt"
+            (trash / "files/restore-me.txt").rename(restored)
+            (trash / "info/restore-me.txt.trashinfo").unlink()
+            assert restored.read_bytes() == b"recoverable trash payload\n"
+            (trash / "files/empty-me.txt").unlink()
+            (trash / "info/empty-me.txt.trashinfo").unlink()
+            wait_for(lambda: all(record(relative) is None for relative, _, _ in trash_records),
+                     process, "trash removal")
+            # Explicit removal still reaches the backend and reclaims cache.
+            wait_for(lambda: all(not cache.exists() for _, cache, _ in trash_records[1:]),
+                     process, "trash delete cache cleanup")
+            restored_cache = Path(record("/restored-from-trash.txt")[1])
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE files SET cache_accessed_unix=1 WHERE path='/restored-from-trash.txt'")
+            run("cache", "prune")
+            assert record("/restored-from-trash.txt")[0] == "online_only"
+            assert not restored_cache.exists(), "restored file kept the trash exemption"
+            print("PASS: daemon automatically releases expired cache and can download it again", flush=True)
+            print("PASS: CLI/daemon retention preserves trash info/payloads; restore and explicit removal work", flush=True)
             print("PASS: isolated daemon hydration/write/upload/move/delete/pin/release", flush=True)
         finally:
             if os.path.ismount(mount):

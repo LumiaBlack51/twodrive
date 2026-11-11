@@ -52,6 +52,7 @@ impl NativeCoordinator {
         let entries = self.observed_entries()?;
         let mut changes = Vec::new();
         for entry in &entries {
+            self.control.checkpoint("residency.scan")?;
             let Some(p) = entry.identity.as_ref().and_then(|tag| projections.get(tag)) else {
                 continue;
             };
@@ -79,6 +80,7 @@ impl NativeCoordinator {
             ..Default::default()
         };
         for entry in entries.into_iter().filter(|e| !e.directory) {
+            self.control.checkpoint("residency.apply")?;
             let Some(p) = entry.identity.as_ref().and_then(|tag| projections.get(tag)) else {
                 continue;
             };

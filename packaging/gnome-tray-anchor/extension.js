@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {ownIndicator, panelBounds} from './geometry.js';
+import {ownIndicator, panelBounds, reservePanel} from './geometry.js';
 
 const XML = `<node><interface name="app.twodrive.TrayAnchor1">
  <method name="GetAnchor"><arg type="u" direction="in"/>
@@ -61,7 +61,22 @@ export default class TwoDriveTrayAnchor extends Extension {
             if (!monitor)
                 continue;
             const area = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
-            return [true, ...[x, y, w, h, area.x, area.y, area.width, area.height].map(Math.round)];
+            let usable = [area.x, area.y, area.width, area.height];
+            // The dock may be visible while intellihide keeps it out of the
+            // workarea. Read only the ancestor bar containing our own icon.
+            let bar = null;
+            for (let actor = icon.get_parent(); actor && actor !== global.stage; actor = actor.get_parent()) {
+                const [px, py] = actor.get_transformed_position();
+                const [pw, ph] = actor.get_transformed_size();
+                const horizontal = pw >= ph * 2 && ph <= monitor.height / 4;
+                const vertical = ph >= pw * 2 && pw <= monitor.width / 4;
+                if (pw > 0 && ph > 0 && (horizontal || vertical) &&
+                    x >= px && y >= py && x + w <= px + pw + 1 && y + h <= py + ph + 1)
+                    bar = [px, py, pw, ph];
+            }
+            if (bar) usable = reservePanel(usable, bar,
+                [monitor.x, monitor.y, monitor.width, monitor.height]);
+            return [true, ...[x, y, w, h, ...usable].map(Math.round)];
         }
         return [false, 0, 0, 0, 0, 0, 0, 0, 0];
     }

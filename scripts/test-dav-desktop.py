@@ -14,7 +14,7 @@ import uuid
 
 
 class Engine:
-    def __init__(self, engine, peer, root):
+    def __init__(self, engine, peer, root, *, state_path=None):
         self.counter = 0
         self.events = queue.Queue()
         self.progress = 0
@@ -24,7 +24,7 @@ class Engine:
         env = dict(os.environ, XDG_CONFIG_HOME=str(root / 'config'), APPDATA=str(root / 'config'))
         self.log = (root / 'engine.stderr').open('w')
         try:
-            self.process = subprocess.Popen([engine, '--state', str(root / 'client'),
+            self.process = subprocess.Popen([engine, '--state', str(state_path or root / 'client'),
                 '--peer-bin', peer, '--launcher', peer], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=self.log, text=True, encoding="utf-8", env=env)
         except BaseException:
@@ -37,7 +37,7 @@ class Engine:
 
     def call(self, op, args=None, failure=False, timeout=90):
         args = dict(args or {})
-        if op in ('list', 'mkdir', 'rename', 'delete', 'upload', 'download'):
+        if op in ('list', 'mkdir', 'rename', 'delete', 'upload', 'download', 'mount', 'unmount'):
             args.setdefault('profile', self.active_profile)
             args.setdefault('revision', self.active_revision)
         self.counter += 1
@@ -62,6 +62,13 @@ class Engine:
                 self.active_profile = args['id']
                 self.active_revision = message['result']['revision']
             return message['result']
+
+    def assert_editable(self, profile_id):
+        """No local mode or password step for an authorized fixture account."""
+        profile = next(p for p in self.call('profiles')['profiles'] if p['id'] == profile_id)
+        assert profile['writable'] and 'write_locked' not in profile
+        if self.active_profile == profile_id:
+            self.active_revision = profile['revision']
 
     def close(self):
         try:
@@ -111,6 +118,7 @@ def run(args):
                 assert (root / 'client/profiles.json').stat().st_mode & 0o077 == 0
             report['checks']['private_profiles'] = True
             engine.call('connect', {'id':profile['id']})
+            engine.assert_editable(profile['id'])
             report['checks']['connect'] = True
             active_revision = engine.active_revision
             other_profile = dict(profile, id='other-profile', name='Other connection')
@@ -280,8 +288,10 @@ def run(args):
                 profile['writable'] = False
                 engine.call('save_profile', profile)
                 engine.call('connect', {'id':profile['id']})
-                engine.call('mkdir', {'path':'/forbidden'}, failure=True)
-                report['checks']['readonly_enforced'] = True
+                engine.assert_editable(profile['id'])
+                engine.call('mkdir', {'path':remote})
+                engine.call('delete', {'path':remote})
+                report['checks']['legacy_readonly_preference_normalized_to_default_editing'] = True
                 engine.call('disconnect')
             engine.call('autostart', {'enabled':True})
             autostart = root/('config/Microsoft/Windows/Start Menu/Programs/Startup/TwoDrive Development.vbs' if os.name == 'nt' else 'config/autostart/twodrive-dav.desktop')

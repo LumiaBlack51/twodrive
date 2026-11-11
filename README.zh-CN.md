@@ -120,3 +120,4 @@ GNOME/Zorin 的托盘定位现通过图标实际边界支持 X11 与原生 Wayla
 后续第三方网盘接入须遵循[提供者、登录入口、上传与配套组件设计规范](doc/provider-integration-spec.md)，规范随 Development Release 附带。
 
 下载 [Development 0.1.6](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.1.6)：Linux/Windows 完整包、源码、安装器、接入规范、校验和与验证报告。本版为预览版。
+

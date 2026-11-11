@@ -1,8 +1,10 @@
 # TwoDrive Development desktop
 
-The current dev Flutter desktop supports paired devices, WebDAV/NAS, OneDrive and Google Drive with separate private account state. See [connection setup and actual verification](storage-connections-dev.md). Its installer does not manage the stable OneDrive daemon. The linked 0.1.1 release is the earlier preview; later local/source changes are recorded separately.
+The current dev Flutter desktop supports paired devices, WebDAV/NAS, OneDrive, Google Drive, iCloud Drive and Baidu Netdisk with separate private account state. See [connection setup and actual verification](storage-connections-dev.md). Its installer does not manage the stable OneDrive daemon. The linked 0.1.1 release is the earlier preview; later local/source changes are recorded separately.
 
 Download the [Development 0.1.1 Linux/Windows release](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.1.1), then verify its SHA256SUMS before running. The stable Linux daemon is separately available in [0.2.12-1](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.12-1).
+
+Current Linux adaptation and explicitly scoped validation are recorded in [the PR47 Linux guide](linux-zorin-2026-10-29.md).
 
 ## Provider boundary (0.1.1)
 
@@ -36,7 +38,7 @@ connection or synchronization failures keep the error icon.
 Requirements: Flutter 3.41.8, Rust 1.96, GTK 3 development files, clang, CMake,
 Ninja, pkg-config, FUSE 3 and a session D-Bus StatusNotifierItem host. Current
 native acceptance now includes isolated GNOME 46 GTK X11 and native GTK Wayland.
-The optional TwoDrive-only GNOME component provides actual icon geometry and compositor positioning; first installation may need the next desktop login to load. The launcher selects native Wayland when that component is available, preserving explicit GDK_BACKEND. Other Wayland compositors are not verified. See [positioning, installation and boundaries](tray-positioning-2026-10-14.md).
+The optional TwoDrive-only GNOME component provides actual icon geometry and compositor positioning; first installation may need the next desktop login to load. The launcher prefers X11/XWayland when DISPLAY is available so the tray utility can stay out of the taskbar and window switcher, preserving explicit GDK_BACKEND. GTK 3 native Wayland cannot apply taskbar-hiding hints, so forcing that backend does not guarantee a hidden Dock icon. Other Wayland compositors are not verified. See [positioning, installation and boundaries](tray-positioning-2026-10-14.md).
 
 ```bash
 cargo build --locked --release --manifest-path experiments/twodrive-dev/Cargo.toml --features mount
@@ -44,6 +46,8 @@ cd apps/dav
 flutter pub get --enforce-lockfile
 flutter build linux --release
 cd ../..
+# Keep the pinned supporting component beside the portable runtime.
+python3 scripts/install-rclone-component.py --platform linux-amd64 --destination apps/dav/build/linux/x64/release/bundle
 python3 scripts/install-dav-desktop.py \
   --bundle apps/dav/build/linux/x64/release/bundle \
   --engine-dir experiments/twodrive-dev/target/release \
@@ -51,11 +55,41 @@ python3 scripts/install-dav-desktop.py \
 ~/.local/bin/twodrive-dav
 ```
 
-Public product name: **TwoDrive Development**. Internal `dav` paths and binary
+Public product name for this Linux source branch: **TwoDrive**. Internal `dav` paths and binary
 names are retained for isolation and do not rename the product. Runtime lives in
 `~/.local/share/twodrive-dav/runtime`; private profiles/cache/backup metadata live
 under `~/.local/share/twodrive-dav/state`. The autostart entry, if explicitly enabled,
 is `~/.config/autostart/twodrive-dav.desktop`.
+
+By default, normal startup restores every saved, still-valid account, including
+accounts disconnected during the previous run. **Disconnect** ends the current
+connection without deleting its saved login. In Settings, **启动时恢复已登录账号**
+controls restoration on the next app start; disabling it leaves accounts offline
+until manually connected. Changing this preference does not disconnect or connect
+accounts in the running app. Explicit maintenance `--restore-connections` requests
+continue to select their specified accounts.
+
+**连接后自动挂载** independently controls automatic file-manager mounting after both
+manual connection and startup restoration. Disabling it still allows connection
+restoration, but sends no automatic mount request and does not remove existing
+mounts. Both preferences persist across app restarts. OS login autostart only
+launches the app; these choices decide its connection/mount behavior.
+
+The first
+iCloud root metadata check retries Rclone temporary errors (exit code 5) after
+2, 5 and 10 seconds, for at most four attempts. Each attempt keeps the existing
+component timeout and cancellation checks. This also applies when reconnecting;
+it never replays a file mutation, opens a login prompt or discards cached data.
+Other errors are reported immediately. An exhausted retry budget still requires
+checking the connection or login; startup does not retry indefinitely.
+
+After an interrupted Linux desktop session, startup can recover an abandoned
+native mount only when its filesystem/source and user match, its account binding
+is unchanged, no worker holds its private lock, and a directory request confirms
+ENOTCONN. The mount identity is checked again before a normal unmount. Live,
+foreign, stacked or unverified mounts remain untouched; local cached edits stay
+in place for the existing worker recovery. This does not require changing FUSE
+system permissions or enabling access for other users.
 
 ## Safety and recovery
 
@@ -67,6 +101,22 @@ no-clobber rename. Credentials are private and omitted from profile listing IPC.
 
 Folder backup configurations never delete source or remote files. Symlinks,
 overlapping mappings, home/root, mount and private-state sources are rejected.
+The backup page's **备份到** selector chooses a registered cloud account using
+the normal account-selection flow. Its tasks are stored and displayed separately;
+switching the target never migrates an existing task. Only accounts advertising
+automatic backup are selectable (currently OneDrive, Google Drive and compatible
+WebDAV/paired connections; iCloud and Baidu do not yet support automatic backup).
+The confirmation shows the destination account and folder. Pending choices and
+new settings requests bind profile ID plus revision; stale choices are discarded,
+and failed settings reads block edits until reloaded. The engine checks a supplied
+revision while retaining compatibility with older unversioned settings clients.
+An interrupted new OneDrive backup can resume its original persisted create-only
+upload session after the rebuilt snapshot matches the durable intent digest.
+Only a still-active session and its empty target are eligible; a changed source,
+nonempty target, old-version update or expired session retains conflict protection.
+Recovery sends the remaining fragments through the same session, without creating
+a replacement session or deleting the unfinished target. Recent completion records
+remain visible while subsequent files upload.
 A private snapshot is streamed with bounded memory; durable upload intent is
 written before PUT. A restarted worker reconciles an ambiguous committed PUT by
 remote content hash before accepting its new ETag. Remote version conflicts stop

@@ -1,5 +1,6 @@
 #include "status_tray.h"
 #include "tray_geometry.h"
+#include "tray_workarea.h"
 #include <unistd.h>
 #include <string>
 #include <algorithm>
@@ -24,7 +25,7 @@ struct Tray {
   guint watcher = 0;
   std::string name;
   std::string icon;
-  std::string title = "TwoDrive Development";
+  std::string title = "TwoDrive";
   twodrive::TrayAnchor anchor;
   bool host_anchor = false;
   GtkStatusIcon* legacy = nullptr;
@@ -74,11 +75,6 @@ gboolean position_mapped_panel(gpointer data) {
   if (tray->panel && gtk_widget_get_visible(GTK_WIDGET(tray->window))) {
     ++tray->placement_attempts;
     const auto bounds = tray->anchor.panel();
-#ifdef GDK_WINDOWING_X11
-    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->window))))
-      gdk_window_move_resize(gtk_widget_get_window(GTK_WIDGET(tray->window)),
-          bounds.x, bounds.y, bounds.width, bounds.height);
-#endif
     // Wayland does not accept application-selected absolute window positions.
     // GNOME places only this PID's panel using the actual compositor tray actor.
     if (tray->host_anchor) {
@@ -90,6 +86,13 @@ gboolean position_mapped_panel(gpointer data) {
       if (result && tray->placement_attempts < 20 &&
           (!placed || tray->placement_attempts < 4)) return G_SOURCE_CONTINUE;
     }
+#ifdef GDK_WINDOWING_X11
+    // A session may still have an older positioning component loaded. Apply
+    // our dock-safe bounds after its reply, so it cannot reintroduce overlap.
+    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->window))))
+      gdk_window_move_resize(gtk_widget_get_window(GTK_WIDGET(tray->window)),
+          bounds.x, bounds.y, bounds.width, bounds.height);
+#endif
     gtk_widget_set_opacity(GTK_WIDGET(tray->window), 1.0);
   }
   tray->reposition = 0;
@@ -97,6 +100,11 @@ gboolean position_mapped_panel(gpointer data) {
 }
 gboolean mapped(GtkWidget*, GdkEvent*, gpointer data) {
   auto* tray = static_cast<Tray*>(data);
+  if (tray->panel) {
+    // Keep the mapped utility surface out of the taskbar and window switcher.
+    gtk_window_set_skip_taskbar_hint(tray->window, TRUE);
+    gtk_window_set_skip_pager_hint(tray->window, TRUE);
+  }
   if (tray->panel && !tray->reposition) {
     tray->placement_attempts = 0;
     tray->reposition = g_timeout_add(25, position_mapped_panel, tray);
@@ -110,7 +118,17 @@ void capture_anchor(Tray* tray, gint x, gint y) {
   if (host) {
     g_variant_get(host, "(biiiiiiii)", &found, &ix, &iy, &iw, &ih, &ax, &ay, &aw, &ah);
     if (found && iw > 0 && ih > 0 && aw > 0 && ah > 0) {
-      tray->anchor.capture_icon({ix, iy, iw, ih}, {ax, ay, aw, ah});
+      auto* display = gtk_widget_get_display(GTK_WIDGET(tray->window));
+      g_autoptr(GVariant) state = twodrive::current_display_state(tray->bus);
+      const int ui_scale = twodrive::legacy_ui_scale(tray->bus, state);
+      const auto scale = twodrive::host_coordinate_scale(display, state, ui_scale);
+      const auto icon = twodrive::host_rectangle_to_gdk({ix, iy, iw, ih}, scale);
+      const auto area = twodrive::host_rectangle_to_gdk({ax, ay, aw, ah}, scale);
+      auto* monitor = gdk_display_get_monitor_at_point(display,
+          icon.x + icon.width / 2, icon.y + icon.height / 2);
+      const auto usable = twodrive::configured_dock_workarea(
+          tray->bus, monitor, area, state, ui_scale);
+      tray->anchor.capture_icon(icon, usable);
       tray->host_anchor = true;
       return;
     }
@@ -124,7 +142,9 @@ void capture_anchor(Tray* tray, gint x, gint y) {
   auto* monitor = gdk_display_get_monitor_at_point(display, x, y);
   GdkRectangle area;
   gdk_monitor_get_workarea(monitor, &area);
-  tray->anchor.capture(x, y, {area.x, area.y, area.width, area.height});
+  const auto usable = twodrive::configured_dock_workarea(tray->bus, monitor,
+      {area.x, area.y, area.width, area.height});
+  tray->anchor.capture(x, y, usable);
   if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray anchor: point=%d,%d work=%d,%d,%d,%d", x, y, area.x, area.y, area.width, area.height);
 }
 const char* kXml = R"XML(
@@ -256,6 +276,13 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
     if (panel && !tray->anchor.valid) capture_anchor(tray, 0, 0);
     const auto bounds = tray->anchor.panel();
     if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray bounds: %d,%d %dx%d", bounds.x, bounds.y, bounds.width, bounds.height);
+    // This surface alternates between a tray utility and the dashboard.
+    // Apply its role before mapping, and restore normal window participation
+    // when returning to the dashboard. Do not rely only on the Dart hint.
+    gtk_window_set_type_hint(tray->window,
+        panel ? GDK_WINDOW_TYPE_HINT_UTILITY : GDK_WINDOW_TYPE_HINT_NORMAL);
+    gtk_window_set_skip_taskbar_hint(tray->window, panel);
+    gtk_window_set_skip_pager_hint(tray->window, panel);
     gtk_window_set_decorated(tray->window, !panel);
     gtk_window_set_resizable(tray->window, TRUE);
     GdkGeometry geometry = {};
@@ -284,7 +311,7 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
     tray->icon = fl_value_get_string(icon);
     FlValue* title = fl_value_lookup_string(args, "title");
     tray->title = title && fl_value_get_type(title) == FL_VALUE_TYPE_STRING
-        ? fl_value_get_string(title) : "TwoDrive Development";
+        ? fl_value_get_string(title) : "TwoDrive";
     const char* desktop = g_getenv("XDG_CURRENT_DESKTOP");
     bool gnome = desktop && (g_strrstr(desktop, "GNOME") || g_strrstr(desktop, "Zorin"));
 #ifdef GDK_WINDOWING_X11
@@ -292,6 +319,7 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
 #else
     gnome = false;
 #endif
+    if (g_strcmp0(g_getenv("TWODRIVE_TRAY_BACKEND"), "sni") == 0) gnome = false;
     if (gnome) {
       if (!tray->legacy) {
         tray->legacy = gtk_status_icon_new();

@@ -50,6 +50,67 @@ struct TestDatabase {
     root: PathBuf,
 }
 
+#[test]
+fn repeated_excluded_backup_replacement_preserves_the_last_saved_cloud_baseline() {
+    let test = TestDatabase::new("repeated-excluded-backup");
+    let db = test
+        .db
+        .clone()
+        .with_name_exclusions(NameExclusions::new(vec![r"\.bak$".into()]).unwrap());
+    let original_cache = test.root.join("original");
+    fs::write(&original_cache, b"original").unwrap();
+    let original = MetadataEntry::new_file("cloud-document", "/report.txt", 8, 1, "v0");
+    db.upsert_metadata(&original).unwrap();
+    db.mark_cached("cloud-document", &original_cache).unwrap();
+    db.move_subtree_and_queue("cloud-document", "/report.txt.bak")
+        .unwrap();
+    let first_cache = test.root.join("first");
+    fs::write(&first_cache, b"first save").unwrap();
+    db.create_local_file("local-upload-first", "/report.txt", &first_cache)
+        .unwrap();
+    db.mark_dirty_with_size("local-upload-first", 10).unwrap();
+    let first = db.get_by_path("/report.txt").unwrap().unwrap();
+    let first = db
+        .adopt_excluded_backup_identity(&first, &original)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.metadata.etag, "v0");
+    assert!(db.begin_upload(&first).unwrap());
+    let saved = MetadataEntry::new_file("cloud-document", "/report.txt", 10, 2, "v1");
+    db.commit_uploaded("local-upload-first", "/report.txt", &saved, &first_cache)
+        .unwrap();
+    let backup = db.get_by_path("/report.txt.bak").unwrap().unwrap();
+    assert!(backup.cloud_remote_id.is_none());
+    db.replace_file_locally(
+        "local-upload-first",
+        &backup.metadata.remote_id,
+        "/report.txt.bak",
+    )
+    .unwrap();
+    let second_cache = test.root.join("second");
+    fs::write(&second_cache, b"second save").unwrap();
+    db.create_local_file("local-upload-second", "/report.txt", &second_cache)
+        .unwrap();
+    db.mark_dirty_with_size("local-upload-second", 11).unwrap();
+    // A newer remote version must never become the baseline for these bytes.
+    let remote_winner =
+        MetadataEntry::new_file("cloud-document", "/report.txt", 21, 3, "external-v2");
+    let reopened = Database::new(db.path())
+        .with_name_exclusions(NameExclusions::new(vec![r"\.bak$".into()]).unwrap());
+    let second = reopened.get_by_path("/report.txt").unwrap().unwrap();
+    let adopted = reopened
+        .adopt_excluded_backup_identity(&second, &remote_winner)
+        .unwrap()
+        .expect("the second backup save must retain an owner");
+    assert_eq!(adopted.cloud_remote_id.as_deref(), Some("cloud-document"));
+    assert_eq!(adopted.metadata.etag, "v1");
+    assert_ne!(adopted.metadata.etag, remote_winner.etag);
+    assert!(reopened.pending_deletes().unwrap().is_empty());
+    let backup = reopened.get_by_path("/report.txt.bak").unwrap().unwrap();
+    assert_eq!(fs::read(backup.cache_path.unwrap()).unwrap(), b"first save");
+    assert!(backup.cloud_remote_id.is_none());
+}
+
 impl TestDatabase {
     fn new(name: &str) -> Self {
         let root = std::env::temp_dir().join(format!(
@@ -1836,4 +1897,66 @@ fn delta_metadata_does_not_undo_a_pending_local_move() {
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn excluded_replacement_keeps_both_identities_when_it_cannot_transfer_safely() {
+    for pending_claim in [0, 1, 2] {
+        let test = TestDatabase::new("excluded-replace-protection");
+        let db = test
+            .db
+            .clone()
+            .with_name_exclusions(NameExclusions::new(vec![r"\.bak$".into()]).unwrap());
+        for (id, path) in [("source", "/report.txt"), ("backup", "/report.txt.bak")] {
+            let cache = test.root.join(id);
+            fs::write(&cache, id.as_bytes()).unwrap();
+            db.upsert_metadata(&MetadataEntry::new_file(
+                id,
+                path,
+                id.len() as u64,
+                1,
+                "old-etag",
+            ))
+            .unwrap();
+            db.mark_cached(id, &cache).unwrap();
+        }
+        if pending_claim != 0 {
+            // A detached prior backup, but an unresolved upload on the source.
+            Connection::open(db.path())
+                .unwrap()
+                .execute(
+                    "UPDATE files SET cloud_remote_id=NULL WHERE remote_id='backup'",
+                    [],
+                )
+                .unwrap();
+            if pending_claim == 2 {
+                Connection::open(db.path())
+                    .unwrap()
+                    .execute(
+                        "UPDATE files SET cloud_remote_id=NULL WHERE remote_id='source'",
+                        [],
+                    )
+                    .unwrap();
+            }
+            db.mark_dirty_with_size("source", 6).unwrap();
+            assert!(
+                db.begin_upload(&db.get_by_remote_id("source").unwrap().unwrap())
+                    .unwrap()
+            );
+        }
+        let before_source = db.get_by_remote_id("source").unwrap().unwrap();
+        let before_backup = db.get_by_remote_id("backup").unwrap().unwrap();
+        assert!(
+            db.replace_file_locally("source", "backup", "/report.txt.bak")
+                .is_err()
+        );
+        for (id, before) in [("source", before_source), ("backup", before_backup)] {
+            let after = db.get_by_remote_id(id).unwrap().unwrap();
+            assert_eq!(after.cloud_remote_id, before.cloud_remote_id);
+            assert_eq!(after.metadata.etag, before.metadata.etag);
+            assert_eq!(after.metadata.path, before.metadata.path);
+            assert_eq!(fs::read(after.cache_path.unwrap()).unwrap(), id.as_bytes());
+        }
+        assert!(db.pending_deletes().unwrap().is_empty());
+    }
 }

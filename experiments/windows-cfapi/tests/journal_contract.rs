@@ -542,7 +542,7 @@ fn only_current_generation_and_verified_receipt_can_acknowledge() {
     let state = j.snapshot(ID).unwrap();
     assert_eq!(state.generation, state.acknowledged_generation);
     assert_eq!(state.state, FileState::Cached);
-    assert!(!j.with_clean_cache(ID, 0, |_, _| Ok(())).unwrap().is_some());
+    assert!(j.with_clean_cache(ID, 0, |_, _| Ok(())).unwrap().is_none());
     assert!(
         j.with_clean_cache(ID, 1, |file, expected| Ok(digest(file)? == expected))
             .unwrap()

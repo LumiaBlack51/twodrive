@@ -239,6 +239,18 @@ fn reconcile_intent(
     }
     Ok(())
 }
+
+fn resume_matching_create(
+    record: &Record,
+    source_hash: &str,
+    resume: impl FnOnce() -> anyhow::Result<Option<twodrive_dev::model::MetadataEntry>>,
+) -> anyhow::Result<Option<twodrive_dev::model::MetadataEntry>> {
+    if record.etag.is_none() && record.intent.as_deref() == Some(source_hash) {
+        resume()
+    } else {
+        Ok(None)
+    }
+}
 pub fn run(
     state: &State,
     p: &Profile,
@@ -295,6 +307,12 @@ pub fn run(
                             .file_name()
                             .into_string()
                             .map_err(|_| anyhow::anyhow!("文件名不是 UTF-8"))?;
+                        if backend
+                            .sync_policy()
+                            .excludes_backup_entry(&name, kind.is_dir())
+                        {
+                            continue;
+                        }
                         ensure!(!name.contains(['\\', '\0']), "文件名不能映射到远端路径");
                         let source = item.path().canonicalize()?;
                         ensure!(source.starts_with(&root), "备份路径离开所选目录");
@@ -318,29 +336,48 @@ pub fn run(
                         let spool = s.dir.join("snapshot");
                         let hash = snapshot(&source, &spool, &paused)?;
                         let record = manifest.files.entry(dest.clone()).or_default();
-                        reconcile_intent(&backend, &dest, record, &paused)?;
-                        if record.hash != hash {
-                            let etag = record.etag.clone();
-                            record.intent = Some(hash.clone());
-                            s.save("manifest.json", &manifest)?;
-                            let report_path = s.dir.clone();
-                            let pause_path = paused.clone();
-                            let mut active_status = status.clone();
-                            let last =
-                                std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
-                            let display = name.clone();
-                            active_status["state"] = json!("uploading");
-                            let uploaded = backend.upload_path(&dest, &spool, etag.as_deref(), Arc::new(move |done, total| {
+                        let report_path = s.dir.clone();
+                        let pause_path = paused.clone();
+                        let mut active_status = status.clone();
+                        active_status["recent"] = json!(recent);
+                        let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
+                        let display = name.clone();
+                        active_status["state"] = json!("uploading");
+                        let progress: twodrive_dev::provider::Progress = Arc::new(
+                            move |done, total| {
                                 ensure!(!pause_path.exists(), "同步已暂停");
                                 let mut last = last.lock().unwrap();
-                                if done == 0 || done == total || last.elapsed() > Duration::from_millis(200) {
+                                if done == 0
+                                    || done == total
+                                    || last.elapsed() > Duration::from_millis(200)
+                                {
                                     let mut report = active_status.clone();
                                     report["active"] = json!([{"name":display,"kind":"upload","bytes_done":done,"bytes_total":total}]);
-                                    State::new(report_path.clone())?.save("report.json", &report)?;
+                                    State::new(report_path.clone())?
+                                        .save("report.json", &report)?;
                                     *last = Instant::now();
                                 }
                                 Ok(())
-                            }))?;
+                            },
+                        );
+                        let mut uploaded = resume_matching_create(record, &hash, || {
+                            backend.resume_create_upload(&dest, &spool, progress.clone())
+                        })?;
+                        if uploaded.is_none() {
+                            reconcile_intent(&backend, &dest, record, &paused)?;
+                            if record.hash != hash {
+                                let etag = record.etag.clone();
+                                record.intent = Some(hash.clone());
+                                s.save("manifest.json", &manifest)?;
+                                uploaded = Some(backend.upload_path(
+                                    &dest,
+                                    &spool,
+                                    etag.as_deref(),
+                                    progress,
+                                )?);
+                            }
+                        }
+                        if let Some(uploaded) = uploaded {
                             let record = manifest.files.get_mut(&dest).unwrap();
                             record.hash = hash;
                             record.etag = Some(uploaded.etag);
@@ -379,6 +416,49 @@ pub fn run(
 mod tests {
     use super::super::test_provider::OpaqueProvider;
     use super::*;
+    #[test]
+    fn only_unchanged_create_intents_can_resume_the_owned_session() {
+        let record = Record {
+            intent: Some("original-digest".into()),
+            ..Default::default()
+        };
+        let entry = twodrive_dev::model::MetadataEntry {
+            remote_id: "opaque-resumed".into(),
+            path: "/backup/file".into(),
+            parent_path: "/backup".into(),
+            name: "file".into(),
+            is_dir: false,
+            size: 4,
+            modified_unix: 0,
+            created_unix: None,
+            etag: "completed".into(),
+        };
+        assert!(
+            resume_matching_create(&record, "original-digest", || Ok(Some(entry)))
+                .unwrap()
+                .is_some()
+        );
+        for (record, digest) in [
+            (record, "changed-source"),
+            (
+                Record {
+                    intent: Some("original-digest".into()),
+                    etag: Some("old-version".into()),
+                    ..Default::default()
+                },
+                "original-digest",
+            ),
+            (Record::default(), "original-digest"),
+        ] {
+            assert!(
+                resume_matching_create(&record, digest, || panic!(
+                    "unverified source/version resumed"
+                ))
+                .unwrap()
+                .is_none()
+            );
+        }
+    }
     #[test]
     fn backup_recovery_uses_opaque_ids_and_preserves_conflicts() {
         let p = OpaqueProvider::default();

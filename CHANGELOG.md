@@ -8,6 +8,22 @@ User-facing highlights moved from the former README. Releases hold published ass
 
 Includes stable 0.2.14 diagnostics and durable deletion backoff, plus the earlier stable local unlink fix. Linux mount status separates local deletion from unconfirmed/rejected cloud cleanup and offers an explicit retry action. Direct desktop file deletion retains its synchronous error behavior. Original-object access restrictions remain unresolved; permissions and targets are unchanged.
 
+## 0.2.18 — Cache retirement and automatic retention
+
+Superseded saves and clean remote versions enter a durable reclamation queue. Open readers/writers, upload claims and pending deletions defer removal; unknown cache and recovery files are preserved. The daemon now applies `cache.retain_for` (default 30 days) in its background maintenance cycle, with pin, in-progress and recent-access protection.
+
+## 0.2.16 — Repeated moves preserve the file
+
+A rename from an outdated directory view now recognizes when cloud metadata has already moved the same file to the destination. It refreshes the directory names while preserving file contents and open handles. Database replacement also preserves self-replacements, rejects moved targets, and rolls back when the target update does not take effect.
+
+The stale-inode and database regressions fail with the previous implementation and pass with the fix; an isolated FUSE regression covers the system rename and an open descriptor. These controlled tests use a mock cloud, while recovery of the reported file was independently verified against real Graph bytes. See [TD-20261017-01](doc/incidents.md#td-20261017-01文件管理器移动-pdf-返回输入输出错误). The English and Chinese homepages now describe shipped stable features, with development previews documented separately.
+
+## 0.2.15 — Metadata writer contention
+
+Metadata imports through clones of the same Database now queue the complete write operation, including pin recomputation, to avoid exhausting SQLite's lock wait under shared storage contention. Reads remain concurrent; independent instances and processes still use SQLite's normal lock arbitration. The schema and recovery formats are unchanged.
+
+The controlled regression failed on the old code and passes with the fix; Windows CI also repeats the core suite at higher concurrency. This does not establish a real OneDrive end-to-end test or eliminate every possible SQLite Busy error. See [TD-20261015-16](doc/incidents.md#td-20261015-16同实例元数据写者竞争耗尽-sqlite-锁等待).
+
 ## 0.2.14 — Diagnose and defer rejected cloud deletions
 
 Ordinary Graph/OAuth failures retain bounded, safe error codes and request correlation without remote messages or URLs. Pending deletions back off durably across restart while retaining caches and same-name protection. Status distinguishes local removal from unconfirmed cloud deletion; `retry-deletes` makes retained work eligible again. This does not establish or bypass the original object's access restriction.

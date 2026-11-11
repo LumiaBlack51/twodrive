@@ -6,6 +6,7 @@ import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/main.dart';
 import 'package:twodrive_dav/profile_dialog.dart';
 import 'package:twodrive_dav/tray_panel.dart';
+import 'package:twodrive_dav/connection_card.dart';
 
 void main() {
   testWidgets(
@@ -119,7 +120,7 @@ void main() {
       await tester.pumpAndSettle();
       final inactive = find.ancestor(
         of: find.text('Other account'),
-        matching: find.byType(ListTile),
+        matching: find.byType(ConnectionCard),
       );
       final edit = find.descendant(
         of: inactive,
@@ -234,6 +235,8 @@ void main() {
         },
       ];
       await tester.pumpWidget(DavApp(client: c));
+      await tester.tap(find.text('文件').first);
+      await tester.pumpAndSettle();
       expect(find.text('上传'), findsNothing);
       expect(find.byTooltip('新建文件夹'), findsNothing);
       await tester.tap(find.byType(PopupMenuButton<String>));
