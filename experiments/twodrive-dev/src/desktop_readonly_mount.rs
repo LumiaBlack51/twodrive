@@ -689,6 +689,19 @@ mod tests {
         assert!(!created.exists());
     }
     #[test]
+    #[cfg(windows)]
+    fn support_help_describes_default_editable_mounts_without_local_unlock() {
+        let metadata = support();
+        assert_eq!(metadata["editable"], true);
+        assert_eq!(metadata["readonly"], false);
+        let help = metadata["help"].as_str().unwrap();
+        assert!(help.contains("连接后即可编辑"));
+        assert!(help.contains("网盘授权"));
+        assert!(help.contains("请等待上传完成再卸载"));
+        assert!(!help.contains("写入锁"));
+        assert!(!help.contains("解锁"));
+    }
+    #[test]
     fn unmount_owner_is_bound_to_revision_without_requiring_a_live_backend() {
         let profile: Profile = serde_json::from_value(
             json!({"id":"owner","revision":"r1","kind":"dav","name":"Owner"}),

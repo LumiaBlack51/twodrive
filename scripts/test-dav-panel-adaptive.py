@@ -3,6 +3,9 @@
 
 Never activates the user's desktop, moves its pointer, or uses cloud credentials.
 Requires GNOME 45+, the Zorin taskbar GSettings schema, AppIndicators, and Xvfb.
+HiDPI host-anchor regression: add --host-anchor --gdk-scale 2 --screen 2880x1800.
+The Shell stays at scale 1; only the GTK client is scaled, exercising the protocol
+boundary rather than scaling the whole test desktop and hiding a double scale.
 The synthetic dock reserves no workarea; all settings/input stay on this private desktop.
 """
 import argparse
@@ -50,7 +53,7 @@ def inside(args):
         subprocess.run(['gsettings','set','org.gnome.shell.extensions.zorin-taskbar',key,value],check=True)
     shell = display = app = None
     try:
-        shell_env = dict(os.environ)
+        shell_env = dict(os.environ, GDK_SCALE='1', GDK_DPI_SCALE='1')
         with (root/'display.log').open('w') as log:
             display = subprocess.Popen([args.xvfb, '-displayfd', '1', '-screen', '0',
                 args.screen+'x24', '-nolisten', 'tcp'], stdout=subprocess.PIPE, stderr=log,
@@ -73,7 +76,7 @@ def inside(args):
                 time.sleep(.2)
         call('app.twodrive.TrayAnchor1.LeaveOverview')
         time.sleep(.8)
-        env = dict(shell_env, GDK_BACKEND='x11', GDK_SCALE='1', TWODRIVE_TRAY_BACKEND='sni', GTK_USE_PORTAL='0', NO_AT_BRIDGE='1')
+        env = dict(shell_env, GDK_BACKEND='x11', GDK_SCALE=str(args.gdk_scale), TWODRIVE_TRAY_BACKEND='sni', GTK_USE_PORTAL='0', NO_AT_BRIDGE='1')
         with (root/'client.log').open('w') as log:
             app = subprocess.Popen([str(args.bundle/'twodrive_dav'), '--background', '--state',
                 str(root/'state'), '--engine', str(args.engine), '--peer-bin', str(args.peer)],
@@ -105,6 +108,23 @@ def inside(args):
             panel_bounds.append(rect[1:])
             args.output.write_text(json.dumps({'observed_panel':rect,'dock_top':dock_top})+'\n')
             assert rect[0] and rect[2]+rect[4] <= dock_top-8, ('Panel overlaps autohide dock',rect,dock_top)
+            assert rect[1] >= 0 and rect[2] >= 0 and rect[1]+rect[3] <= sw, (
+                'Panel escaped the screen', rect, args.screen)
+            if args.host_anchor:
+                host_rect = call('app.twodrive.TrayAnchor1.GetAnchor', app.pid)
+                assert host_rect[0], 'host anchor disappeared'
+                scale = args.gdk_scale
+                ix, iy, iw, ih, ax, ay, aw, ah = (v//scale for v in host_rect[1:])
+                # Independent expected client rectangle in GDK units. The private
+                # Shell and GetPanel still report X11 root pixels.
+                ah = min(ay+ah, dock_top//scale)-ay
+                width, height = min(390, aw-16), min(570, ah-16)
+                cx, cy = ix+iw//2, iy+ih//2
+                left = max(ax+8, min(cx-width//2, ax+aw-width-8))
+                top = ay+8 if cy < ay+ah//2 else ay+ah-height-8
+                expected = tuple(v*scale for v in (left, top, width, height))
+                assert tuple(rect[1:]) == expected, ('Host/GDK scale mismatch', rect, expected)
+
             if args.screenshot:
                 from PIL import ImageGrab
                 ImageGrab.grab(xdisplay=env['DISPLAY']).save(args.screenshot)
@@ -124,8 +144,8 @@ def inside(args):
             def click(cx,cy):
                 t.XTestFakeMotionEvent(d,0,cx,cy,0)
                 t.XTestFakeButtonEvent(d,1,1,0); t.XTestFakeButtonEvent(d,1,0,0); x.XFlush(d)
-            click(px+pw-32,py+40); time.sleep(.5)
-            click(px+pw-95,py+52); time.sleep(.8)
+            click(px+pw-32*args.gdk_scale,py+40*args.gdk_scale); time.sleep(.5)
+            click(px+pw-95*args.gdk_scale,py+52*args.gdk_scale); time.sleep(.8)
             main_state=call('app.twodrive.TrayAnchor1.GetPanelState',app.pid)
             assert main_state[0] and not main_state[1] and not main_state[2], ('Dashboard did not open', main_state)
             observations.append(main_state)
@@ -140,7 +160,7 @@ def inside(args):
                  dest=f'org.kde.StatusNotifierItem-{app.pid}-1', path='/StatusNotifierItem')
             time.sleep(.4)
             assert not call('app.twodrive.TrayAnchor1.GetPanel', app.pid)[0]
-        report = dict(used_host_anchor=args.host_anchor, panel_bounds=panel_bounds, dock_top=dock_top, panel_window_states=observations,
+        report = dict(gdk_scale=args.gdk_scale, used_host_anchor=args.host_anchor, panel_bounds=panel_bounds, dock_top=dock_top, panel_window_states=observations,
                       all_panels_skip_taskbar=all(s[2] for i,s in enumerate(observations) if i%3 != 1),
                       repeat_open_close=3, background_start_hidden=True)
         shell_version = subprocess.check_output(['gnome-shell', '--version'], text=True).strip()
@@ -170,8 +190,11 @@ if __name__ == '__main__':
     parser.add_argument('--dock-margin',type=int,default=4)
     parser.add_argument('--screenshot',type=Path)
     parser.add_argument('--host-anchor',action='store_true')
+    parser.add_argument('--gdk-scale',type=int,choices=[1,2],default=1)
     parser.add_argument('--root', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.gdk_scale != 1 and not args.host_anchor:
+        parser.error('--gdk-scale 2 requires --host-anchor')
     for name in ['bundle', 'engine', 'peer', 'output']:
         setattr(args, name, getattr(args, name).resolve())
     if args.root:
@@ -202,7 +225,7 @@ if __name__ == '__main__':
                 env.pop(key, None)
             command = ['dbus-run-session', '--config-file='+str(root/'test-bus.conf'), '--', sys.executable, str(Path(__file__).resolve()),
                 '--backend', args.backend, '--bundle', str(args.bundle), '--engine', str(args.engine),
-                '--peer', str(args.peer), '--output', str(args.output), '--xvfb', args.xvfb, '--root', str(root), '--screen',args.screen,'--dock-size',str(args.dock_size),'--dock-margin',str(args.dock_margin)]
+                '--peer', str(args.peer), '--output', str(args.output), '--xvfb', args.xvfb, '--root', str(root), '--screen',args.screen,'--dock-size',str(args.dock_size),'--dock-margin',str(args.dock_margin),'--gdk-scale',str(args.gdk_scale)]
             if args.screenshot: command += ['--screenshot',str(args.screenshot.resolve())]
             if args.host_anchor: command += ['--host-anchor']
             subprocess.run(command, env=env, check=True, timeout=100)

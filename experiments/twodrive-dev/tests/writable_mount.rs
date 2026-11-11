@@ -143,6 +143,73 @@ fn editor_snapshot_survives_restart_and_conflicts_preserve_exact_local_bytes() {
     assert_eq!(std::fs::read(contents.path()).unwrap(), b"my unsaved edit");
 }
 #[test]
+fn browse_snapshot_is_invalidated_by_mutations_and_cannot_mask_external_write_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = OpaqueProvider::default().with_parent_browsing();
+    let old = p.upload("/file.txt", b"before".to_vec()).unwrap();
+    let bridge = Bridge::start_writable(
+        Backend::new(p.clone()),
+        dir.path(),
+        &dir.path().join("recovery"),
+    )
+    .unwrap();
+    let c = Client::builder().no_proxy().build().unwrap();
+    assert_eq!(
+        call(&c, &bridge, Method::HEAD, "/file.txt", "").status(),
+        200
+    );
+    p.upload_with_etag("/file.txt", b"external".to_vec(), Some(&old.etag))
+        .unwrap();
+    assert_eq!(
+        call(&c, &bridge, Method::PUT, "/file.txt", "unsaved edit").status(),
+        409
+    );
+    let now = p.get_metadata_by_path("/file.txt").unwrap().unwrap();
+    assert_eq!(p.download(&now.remote_id).unwrap(), b"external");
+    let stat = |path: &str| {
+        c.request(
+            Method::from_bytes(b"PROPFIND").unwrap(),
+            format!("http://{}{path}", bridge.address),
+        )
+        .bearer_auth(&bridge.token)
+        .header("Depth", "0")
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert_eq!(stat("/folder"), 404);
+    assert_eq!(
+        call(
+            &c,
+            &bridge,
+            Method::from_bytes(b"MKCOL").unwrap(),
+            "/folder",
+            ""
+        )
+        .status(),
+        204
+    );
+    assert_eq!(stat("/folder"), 207);
+    let moved = c
+        .request(
+            Method::from_bytes(b"MOVE").unwrap(),
+            format!("http://{}/folder", bridge.address),
+        )
+        .bearer_auth(&bridge.token)
+        .header("Destination", format!("http://{}/renamed", bridge.address))
+        .header("Overwrite", "F")
+        .send()
+        .unwrap();
+    assert_eq!(moved.status(), 204);
+    assert_eq!(stat("/folder"), 404);
+    assert_eq!(stat("/renamed"), 207);
+    assert_eq!(
+        call(&c, &bridge, Method::DELETE, "/renamed", "").status(),
+        204
+    );
+    assert_eq!(stat("/renamed"), 404);
+}
+#[test]
 fn readonly_and_auth_guards_cannot_be_bypassed_by_write_verbs() {
     let dir = tempfile::tempdir().unwrap();
     let p = OpaqueProvider::default();

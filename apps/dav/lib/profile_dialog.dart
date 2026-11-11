@@ -42,6 +42,17 @@ class _ProfileDialogState extends State<ProfileDialog> {
       .cast<Json>()
       .where((f) => f['internal'] != true)
       .toList();
+  bool get providerAllowsWrites {
+    final capabilities = provider?['capabilities'];
+    return capabilities is! Map ||
+        [
+          'upload',
+          'mkdir',
+          'rename',
+          'delete',
+        ].any((key) => capabilities[key] == true);
+  }
+
   List<String> credentialFields(Json action) =>
       ((action['credential_fields'] as List?) ?? [])
           .cast<String>()
@@ -113,15 +124,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
       'id': widget.original?['id'] ?? '',
       'kind': kind,
       'network_route': route,
-      'writable':
-          [
-            'upload',
-            'mkdir',
-            'rename',
-            'delete',
-          ].every((key) => provider?['capabilities']?[key] == false)
-          ? false
-          : writable,
+      'writable': writable && providerAllowsWrites,
       'name': fields['name']!.text.trim(),
       'mount_path': fields['mount_path']!.text.trim(),
       for (final f in providerFields.where(

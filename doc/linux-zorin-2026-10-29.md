@@ -47,7 +47,7 @@ Tests use disposable synthetic accounts. Native mount tests require accessible `
 | Synthetic local QUIC sharing | 7 groups passed |
 | Private GNOME/Xvfb window transitions | Earlier verified; native runner unchanged in this update |
 
-These results do not establish hosted CI success, a Windows rebuild, real-cloud editing acceptance, or full Nautilus preview performance. iCloud/Baidu manual edits retain the documented check-to-publication race and do not gain atomic conditional-upload/backup capability. See incidents TD-20261029-33/34/35/36/37/38/39/40/41.
+These results do not establish hosted CI success, a Windows rebuild, real-cloud editing acceptance, or full Nautilus preview performance. iCloud/Baidu manual edits retain the documented check-to-publication race and do not gain atomic conditional-upload/backup capability. See incidents TD-20261029-42/43/35/36/37/38/39/40/41 (the Linux entries formerly numbered 33/34 were disambiguated on 2026-11-04; the Windows records retain 33/34).
 
 ## Delivery
 
@@ -58,3 +58,4 @@ The user previously reported slow iCloud navigation despite caching. This update
 ## 隐私范围
 
 公开分支只包含程序源码、通用文档、合成测试和可分发字体及其许可证。真实账号、邮箱、授权凭据、OAuth客户端JSON、网盘列表/容量、缓存/数据库、主机路径、截图和本机部署报告均留在本地。云盘默认可编辑，已取消本机只读模式及编辑密码；设备共享仍由共享方授权。
+

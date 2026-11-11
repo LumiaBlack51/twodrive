@@ -213,6 +213,21 @@ mod tests {
         .unwrap()
     }
     #[test]
+    fn default_editing_keeps_the_prepared_smb_connection_read_only() {
+        use crate::desktop::providers;
+        let tmp = tempfile::tempdir().unwrap();
+        let state = State::new(tmp.path().join("state")).unwrap();
+        let mut p = profile();
+        providers::prepare(&mut p, &state).unwrap();
+        let effective = super::super::effective_access(&p);
+        providers::validate(&effective).unwrap();
+        assert!(!effective.writable);
+        let public = providers::public_profile(&effective);
+        assert_eq!(public["writable"], false);
+        assert_eq!(public["capabilities"]["mount"], false);
+        assert_eq!(public["capabilities"]["upload"], false);
+    }
+    #[test]
     fn credentials_are_private_scoped_redacted_and_revision_bound() {
         let tmp = tempfile::tempdir().unwrap();
         let state = State::new(tmp.path().join("state")).unwrap();

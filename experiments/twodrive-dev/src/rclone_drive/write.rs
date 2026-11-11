@@ -85,9 +85,12 @@ impl RcloneDrive {
             "mkdir",
             &format!("twodrive:{}", path.trim_start_matches('/')),
         ]);
+        let created = crate::state::now() as i64;
         self.mutate(cmd, &mut || Ok(()))?;
-        self.get_metadata_by_path(path)?
-            .context("iCloud 未返回新目录")
+        let entry = self
+            .get_metadata_by_path(path)?
+            .context("iCloud 未返回新目录")?;
+        self.remember_created(entry, created)
     }
     pub(super) fn rename_manual(&self, id: &str, to: &str) -> anyhow::Result<MetadataEntry> {
         let (_root, _lock) = self.mutation_lock()?;

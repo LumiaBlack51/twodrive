@@ -40,7 +40,7 @@ pub fn catalog() -> Value {
         onedrive::descriptor(),
         baidu::descriptor(),
         icloud::descriptor(),
-        smb::descriptor()
+        smb::descriptor(),
     ])
 }
 pub(super) fn descriptor(kind: &str) -> anyhow::Result<Value> {
@@ -176,6 +176,9 @@ pub fn public_profile(p: &Profile) -> Value {
         });
         value["account"] = json!(if account.is_empty() { &p.name } else { account });
         for field in d["fields"].as_array().unwrap() {
+            if field["internal"] == true {
+                continue;
+            }
             let key = field["key"].as_str().unwrap();
             if field["secret"] == true {
                 value[format!("{key}_saved")] = json!(!p.option(key).is_empty());
@@ -215,8 +218,7 @@ pub fn connect(
     Ok(connection)
 }
 /// Cloud accounts edit by default, including legacy profiles saved as read-only.
-/// Paired devices retain the owner's exported grant. Remote authorization and
-/// each adapter's actual capabilities still decide which writes can succeed.
+/// Paired devices retain the owner's grant and SMB only supports reads.
 pub fn editable(p: &Profile) -> bool {
     match p.kind.as_str() {
         "smb" => false,
@@ -283,6 +285,7 @@ pub fn resume(
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
 ) -> anyhow::Result<Connection> {
+    ensure!(p.kind != "smb", "SMB requires an explicit connection");
     ensure!(
         session["kind"].as_str() == Some(&p.kind)
             && session["revision"].as_str() == Some(&p.revision),

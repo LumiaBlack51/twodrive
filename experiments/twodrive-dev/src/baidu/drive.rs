@@ -223,6 +223,7 @@ impl BaiduDrive {
             is_dir: snapshot.directory,
             size: snapshot.size,
             modified_unix: modified,
+            created_unix: None,
             etag: format!("{:x}", Sha256::digest(&bytes)),
         })
     }

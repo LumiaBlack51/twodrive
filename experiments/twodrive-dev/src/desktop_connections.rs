@@ -405,6 +405,12 @@ impl App {
         ensure!(self.jobs.len() < 8, "同时执行的操作过多，请稍后重试");
         let context = self.file_context(&req.args)?;
         let profile = context.profile.id.clone();
+        if context.profile.kind == "smb" {
+            ensure!(
+                !self.jobs.values().any(|job| job.profile == profile),
+                "SMB 正在执行另一项操作，请稍后重试"
+            );
+        }
         let id = req.id;
         let kind = req.op.clone();
         let job_cancel = cancel.clone();
@@ -479,7 +485,10 @@ impl FileContext {
         out: &Output,
     ) -> anyhow::Result<Value> {
         ensure!(!cancel.load(Ordering::Relaxed), "操作已取消");
-        self.backend.set_operation_cancel(cancel.clone());
+        // SMB's component shares a cancellation slot per connection.
+        if self.profile.kind == "smb" && matches!(req.op.as_str(), "list" | "download") {
+            self.backend.set_operation_cancel(cancel.clone());
+        }
         let a = &req.args;
         if req.op == "quota" {
             let quota = self.backend.storage_usage(&mut || {
@@ -687,7 +696,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut app = fixture(root.path());
         let cancel = Arc::new(AtomicBool::new(false));
-        assert_eq!(app.connect("a", cancel.clone()).unwrap()["retained"], true);
+        assert_eq!(app.connect("a", &cancel).unwrap()["retained"], true);
         assert!(app.online("a") && app.online("b"));
         for (id, revision, bytes) in [
             ("a", "rev-a", b"account-one"),
@@ -701,7 +710,7 @@ mod tests {
             assert_eq!(data, bytes);
         }
         assert!(app.file_context(&args("a", "rev-b")).is_err());
-        assert!(app.connect("missing", cancel.clone()).is_err());
+        assert!(app.connect("missing", &cancel).is_err());
         assert_eq!(app.connected.as_ref().unwrap().id, "a");
         app.disconnect_profile("b").unwrap();
         assert!(app.online("a"));

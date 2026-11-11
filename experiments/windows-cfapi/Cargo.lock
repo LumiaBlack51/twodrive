@@ -1391,6 +1391,7 @@ name = "twodrive-cfapi-probe"
 version = "0.1.7-alpha.2"
 dependencies = [
  "anyhow",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

@@ -1,0 +1,114 @@
+{
+  "scope": "iCloud directory metadata logic plus disposable local native mounts; no user cloud probes or writes",
+  "deployed": true,
+  "real_icloud_rename_accepted": false,
+  "windows_rust": {
+    "passed": 145,
+    "ignored": 7
+  },
+  "linux_rust": {
+    "passed": 137,
+    "ignored": 4
+  },
+  "winfsp": {
+    "scope": "disposable accounts and real WinFsp only",
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "checks": {
+      "legacy_readonly_profiles_edit_without_password": true,
+      "native_empty_and_populated_directory_rename_preserves_children": true,
+      "native_seek_edit_create_rename_delete_and_gui_upload": true,
+      "other_account_mount_and_content_preserved": true,
+      "both_accounts_restart_editable_without_password": true,
+      "conflict_blocks_teardown_and_crash_restart_retains_local_edit_without_overwriting": true,
+      "changed_account_binding_uses_new_cache_and_never_replays_old_edit": true,
+      "clean_quit_unmounts_both_accounts": true
+    }
+  },
+  "packaged-startup": {
+    "scope": "new engine process restores two saved loopback accounts; disposable state only",
+    "checks": {
+      "saved_accounts_eligible_without_new_login": true,
+      "missing_session_revision_and_changed_binding_refused": true,
+      "restart_restores_both_accounts_and_preferred_view": true,
+      "profile_revisions_and_options_preserved": true,
+      "both_native_mounts_recreated_with_correct_account_bytes": true,
+      "quit_cleans_both_restored_mounts": true
+    },
+    "cloud_requests": 0,
+    "native_mount_verified": true,
+    "passed": true
+  },
+  "official_component_stat": {
+    "scope": "official bundled Rclone on disposable local empty directory; no user state or cloud",
+    "is_directory": true,
+    "synthetic_root_name": true,
+    "synthetic_root_path": true,
+    "stable_id_missing": true
+  },
+  "old_regression": "Compiled unchanged implementation fails directory lookup with missing stable ID; corrected implementation passes with genuine parent entry ID/version.",
+  "strict_windows_clippy": true,
+  "rustfmt": true,
+  "windows_release_binaries": 3,
+  "gui": "unchanged and hash-reused from 2a3245a; prior 78 Flutter tests not rerun",
+  "excluded": [
+    "real iCloud rename/create/delete acceptance",
+    "live Linux write performance",
+    "Linux release build",
+    "hosted CI approval/execution"
+  ],
+  "deployment": {
+    "scope": "local configuration, private VFS status and owned process metadata only; no cloud/file probes or mouse",
+    "verified_at": "2026-10-29T10:57:49.346903+00:00",
+    "bundle": "TwoDrive-0.1.7-icloud-directory-20261029",
+    "source_commit": "5c8d919560c8db125faaa6aa6b14a85593954d70",
+    "one_gui_and_main_engine": true,
+    "original_state_used": true,
+    "original_profiles_revisions_bindings_selection_and_D_paths_preserved": true,
+    "all_four_writable_mount_workers_restored": true,
+    "accounts": [
+      {
+        "provider": "onedrive",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\OneDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "icloud",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\iCloudDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "baidu",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\Baidu",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      },
+      {
+        "provider": "google",
+        "original_config_and_session_identity_preserved": true,
+        "mount_path": "D:\\TwoDrive\\GoogleDrive",
+        "owned_mount_worker_running": true,
+        "owned_native_component_running": true,
+        "fresh_writable_vfs_status_observed": true,
+        "pending": 0,
+        "cache_error": false
+      }
+    ],
+    "real_cloud_write_delete_acceptance": "pending user test",
+    "passed": true
+  }
+}

@@ -430,6 +430,7 @@ mod tests {
             is_dir: false,
             size: 4,
             modified_unix: 0,
+            created_unix: None,
             etag: "completed".into(),
         };
         assert!(

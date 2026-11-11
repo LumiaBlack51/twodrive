@@ -1,5 +1,13 @@
 # TwoDrive 故障记录
 
+## TD-20261111-18：最新 Windows 集成与 PR #50 的相邻接口发生合并冲突
+
+- 日期：2026-11-11；状态：冲突已按行为整合，本机相关回归通过；当前 head 托管检查待执行。
+- 触发与证据：#50 的 978a447 已整合 #47 的完整历史，但不是 #63 的祖先；实际三方合并在 11 个源码/文档文件冲突，不能使用整文件 ours/theirs 丢弃任一侧机制。
+- 处理：保留 #63 的 CFAPI、备份源摘要/版本基线、排除文件、百度分次读取预算与原生恢复；纳入 #50 的 SMB 显式重连/内部字段过滤、通用写能力表单、iCloud 已知创建时间与浅层父目录读取、Linux 托盘工作区改进。共享可选创建时间字段的新增测试构造补齐 None，取消 Arc 接口采用引用并修正两处原有调用；两份 Provider 扩展方法均保留，同项写权限检查去重。
+- 实际验证：整合树库 164、引擎 34、助手 1 共 199 项默认测试通过，56 项默认忽略；Flutter 122 项通过、1 项平台专用跳过；严格全 target Clippy 通过。生成云端/loopback 测试覆盖时间与 HEAD 共享查询、写能力、SMB 只读和版本恢复。未将旧 Linux/Windows CI 转移为当前 head 成功，也未操作真实云端内容。
+- 防复发与交付：保留两个旧 PR 的完整提交历史；#47 已由其他更新关闭，最新 Windows 交付继续使用 #63。#45 独有修复见 TD-20261111-17，不能因旧 PR 关闭而删掉其 Context 与线程约束。正式制品与本机验收待补。
+
 ## TD-20261111-17：旧 PR #45 的独有 Shell 所有权修复未进入最新 Windows 分支
 
 - 日期：2026-11-11；状态：已完整整合 PR #45 的两个提交，保留最新原生同步实现；待当前 head 托管检查。
@@ -192,6 +200,24 @@ Windows 烟测保留后台隐藏、重复开关、位置稳定、失焦和 Escap
 - 最终验收（2026-11-11）：共享核心/后端/完整性 140 项、桌面 182 项、原生契约 137 项、Flutter 114 项通过；平台忽略项未冒充通过。实际四挂载目录读取通过。真实 CFAPI 的普通对象元数据/登记/连续检查/启停/应用重开已通过；未制造真实云端写入或读取未缓存的用户文件内容。
 - 本地恢复：部署前检查活动写入并保全配置/队列/未同步内容；保留一套已验证回退程序。原生根的最小封存配置/回执/SQLite 备份已通过 quick_check，未复制内容缓存。无既有用户文件删除或其他提供者同步根注销。
 
+## TD-20261111-10：多网盘默认编辑与最新 dev 的 SMB 只读合同冲突
+
+- 日期：2026-11-11
+- 状态：已整合，Linux 隔离验证通过。
+- 影响环境：上游 PR #47、#50 与 `dev fe84028` 的整合候选。
+- 关联：[上游整合审查](https://github.com/LumiaBlack51/twodrive/pull/50#issuecomment-6740645463)及 [SMB 只读合同](smb-readonly-dev.md)。
+
+### 症状、触发条件与证据
+
+#47、#50 各有独立提交且与新 dev 有源文件冲突。若直接保留非 peer 一律可写的归一化，新加入的 SMB 连接会以可写配置进入要求只读的验证器。该风险由冲突两侧源码确认。
+
+### 解决办法与防复发
+
+保留两条分支历史、#47 的 iCloud 真实父目录元数据与创建时间、#50 的 Linux 挂载与同目录改名，以及 dev 的版本绑定命名空间和未开始传输语义。SMB 经过实际配置组合后保持只读、禁止挂载、要求显式连接。同一 SMB 连接一次执行一个文件任务，避免并发请求互相覆盖取消标志。回归覆盖 SMB 保存、有效权限、校验及公开能力。
+
+### 验证与交付
+
+Linux 通过 143 项 Rust 库测试、30 项桌面引擎测试、3 项 OneDrive HTTP 夹具测试、98 项 Flutter 测试、静态分析和严格 Clippy。重建 Linux release 客户端与两个引擎，隔离 GNOME Shell 46/X11 托盘回归在宿主定位 1×、2× 和回退三种情况下均通过。真实网盘与 Windows 实机未在本轮复测。统一交付目标为 [PR #50](https://github.com/LumiaBlack51/twodrive/pull/50)。
 
 ## TD-20261109-02：旧回执与逻辑 ID 复用的新 preparing 发布互相阻挡
 
@@ -1843,6 +1869,78 @@ Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项�
 已核实的提交、Release 和详细调查链接；尚未提交或发布时明确注明。
 ```
 
+## TD-20261104-05：GNOME 宿主锚点与 GTK 缩放坐标混用
+
+- 日期：2026-11-04；状态：坐标归一化候选和纯几何回归已通过；原生 GTK/GNOME 桌面及完整构建待 CI/隔离桌面验证。
+- 影响：PR #50 的 3febefdf569508a2e90d4fad678b0d26ff3bb299，GNOME 宿主 GetAnchor 路径与 GTK X11 缩放不为1时；关联近期自隐藏 Dock 安全边界修复及 TD-20261013-06/-12 的坐标调查，属于新增最终 GDK 覆盖暴露的单位不一致。
+- 证据：[自动审查](https://github.com/LumiaBlack51/twodrive/pull/50#issuecomment-6621760644)。不是用户实体多屏新故障复现。
+
+### 症状、触发与根因
+
+GetAnchor 的宿主图标和工作区原样进入 GTK 的 monitor_at_point、Dock 边界及 TrayAnchor；最终 gdk_window_move_resize 又将其乘 GTK 的屏幕缩放。GDK_SCALE=2 时可能选错显示器、水平偏移或越界。GTK3 X11 的所有显示器原点、宽高和工作区都按同一个屏幕 window_scale 相除，不是各显示器独立重定位。原 Mutter connector 匹配也用未转换宿主原点与 GDK 原点比较。
+
+另外 GetCurrentState 的 legacy-ui-scaling-factor 实际是有符号 int32，而既有代码以 unsigned 读取，静默保留1。Mutter47 将该属性移至 org.gnome.Mutter.X11.UiScalingFactor；逻辑布局下它是 XWayland 的有效坐标倍率，物理布局下只是 UI 尺寸倍率，不能直接把所有 XWayland 当物理 X11 或当原生 Wayland。
+
+### 解决办法
+
+先按客户端后端和 Mutter 布局将 icon/area 归一化，再选 GDK 显示器和计算 Dock 安全边界：原生 GDK Wayland 保持坐标不变；GDK X11 物理布局为宿主坐标/GDK 屏幕倍率；逻辑布局为宿主坐标×XWayland 有效倍率/GDK 屏幕倍率。GetCurrentState 快照与 UI 倍率复用于连接器定位和 Dock 计算；先读旧版 signed 属性，再只读查询新版 X11 Properties.Get，均禁止自动启动服务并限制超时。保留原先尺寸、边距、倍率、JSON 长度校验、重复预留保护及最终 X11 Dock 安全覆盖；不修改宿主扩展协议或部署状态。
+
+布局属性不可用时，不把 UI 倍率误当成坐标倍率；UI 属性也不可用时默认1。两者均按已知 GDK 倍率转换；这是物理 X11/旧式 XWayland 的可解释兜底，不宣称覆盖缺失 API 的新式 native-scaled XWayland。原生 Wayland 的坐标保持身份变换；Dock 尺寸仍使用原公式，signed 类型修正使公式消费实际值，未新增另一套 Dock 策略。
+
+### 验证结果与边界
+
+1. 原有 C++ 几何断言全部保留；增加 scale1/2、正/负非零显示器原点、实际输出边界/居中、重复 Dock 预留、奇数负坐标按 GDK 截断、极小区域、逻辑布局 XWayland2/2及2/1、原生 Wayland身份变换。g++ -std=c++17 -Wall -Wextra -Werror -pedantic 通过；ASan/UBSan 通过（环境 ptrace 不支持 LeakSanitizer，关闭 leak 检查）。
+2. 同一独立宿主几何夹具对未改动原版 tray_geometry.h 运行，实际物理屏幕边界断言失败（exit134）；新归一化路径通过。此为纯几何重现，不是原生窗口实测。
+3. 实际 libglib 运行库构造 signed int32=2，原 unsigned lookup 失败并保留1，signed lookup 成功返回2。此为属性类型回归，不是真实 Mutter D-Bus 调用。
+4. 原有 geometry_test.js 在 Node ES module 环境运行通过（仅 print 适配）；不是 GJS/Shell 实测。Python 原生脚本 py_compile、--help 通过，新增 --host-anchor --gdk-scale 2 --screen 2880x1800 场景、物理窗口边界和精确归一化矩形断言、缩放后的 UI 点击偏移，原有开关/管理中心/任务栏断言均保留。
+5. 此环境无 GTK/GLib/GIO 开发头文件、GNOME Shell、Xvfb、Flutter、Cargo/Rust；未编译完整 status_tray/tray_workarea，未运行原生 harness、真实多屏/混合 DPI、Wayland/XWayland桌面、Flutter/Rust 全量测试。未重启/部署客户端，无真实云端或用户文件操作。
+
+### 来源与防复发
+
+- [GTK3 X11 monitor geometry and common scale](https://github.com/GNOME/gtk/blob/gtk-3-24/gdk/x11/gdkscreen-x11.c#L621-L643)
+- [GTK X11 move/resize scales position and extent](https://github.com/GNOME/gtk/blob/gtk-3-24/gdk/x11/gdkwindow-x11.c#L1771-L1774)
+- [Mutter46 signed legacy property](https://github.com/GNOME/mutter/blob/46.0/src/backends/meta-monitor-manager.c#L2079-L2082)
+- [Mutter47 effective XWayland scale and logical/physical distinction](https://github.com/GNOME/mutter/blob/47.0/src/wayland/meta-xwayland.c#L1232-L1270)
+- [Mutter47 X11 property contract](https://github.com/GNOME/mutter/blob/47.0/data/dbus-interfaces/org.gnome.Mutter.X11.xml)
+- [Mutter47 property implementation](https://github.com/GNOME/mutter/blob/47.0/src/x11/meta-x11-display.c)
+
+保留严格构建和已有几何回归；后续原生验收同时执行 scale1/2 宿主定位与缺失组件兜底，不以纯几何/Node 通过替代桌面验收。提交和最终 CI 链接待生成后补充。
+
+## TD-20261104-04：Linux 适配分支的 Windows helper 和 CFAPI 测试依赖导致 CI 失败
+
+- 日期：2026-11-04；状态：两项编译机制已修正，静态契约核对通过，最终提交的托管原生检查待执行。
+- 影响版本与环境：PR #50 的 `3351792d8e6345b82262beb86d481d9bfb375b89` 及其 Linux 桌面修复后继 `4a58f81b9fae9e5ba8858d1ef3b8551ef273f51f`；Windows 引擎严格 Clippy、Linux CFAPI `desktop_contract`。
+- 关联历史故障：TD-20261029-30 的独立 CFAPI 测试依赖闭包问题；本次是新增 Linux FIFO 测试需要直接 libc 依赖，并非之前的 provider 模块缺失。
+
+### 症状、触发与根因
+
+[Windows desktop job 123906674035](https://github.com/LumiaBlack51/twodrive/actions/runs/40861841938/job/123906674035) 的实际日志确认 `mount_supported` 和 `uses_readonly_bridge` 因 dead_code 在 `-D warnings` 下失败。两函数定义编入 Windows，但实际调用位于非 Windows 或 Linux/mount 分支。Dev WebDAV Windows job 报同类错误。
+
+[Linux CFAPI job 123906677833](https://github.com/LumiaBlack51/twodrive/actions/runs/40861841955/job/123906677833) 的实际日志确认 E0433，位置是被 `desktop_contract.rs` 引入的真实 `desktop_local_linux.rs` 中 `libc::mkfifo`。消费源码的独立 CFAPI crate 没有 libc 直接测试依赖；另一个 crate 的依赖不会传递提供名称。
+
+### 解决办法与恢复操作
+
+给两个 helper 增加与宽度最广调用点一致的 `#[cfg(not(windows))]`，不将 `cfg!(...)` 误当成编译时删除，也不降低 Clippy 等级。CFAPI manifest 仅新增 Linux 目标的 `libc = "0.2"` dev-dependency；锁文件只增加该 crate 对已锁定 libc 0.2.190 的依赖边，不更新包版本或校验和。保留 FIFO 创建和拒绝行为测试原文。
+
+这两项修改只修编译范围及测试依赖，不改变正常登录、挂载、界面、权限、写入恢复或已有账号/缓存处理。未部署、重启客户端或操作真实云端。
+
+### 验证结果与边界
+
+本次用 Python TOML 解析、manifest/锁文件依赖匹配、目标 cfg 与调用范围静态核对确认补丁结构；原始快照缺少 guard/直接依赖，修订快照满足这些静态契约。没有把静态检查当作 Rust 编译或行为回归。当前执行环境没有 Cargo/Rust/Flutter，Rustfmt、Clippy、CFAPI 与桌面 Rust 测试未在此执行，最终提交需取得对应 hosted CI。
+
+原 head 的七条 PR workflow 为四成功、三失败：Linux desktop 已通过，Windows desktop/Dev WebDAV 失败，Linux CFAPI 失败及 Windows CFAPI cancelled。历史通过不替代新 SHA 检查，cancelled 不能算通过。
+
+### 防复发措施与后续
+
+保留现有跨平台 `--all-targets --locked -- -D warnings` 和 CFAPI `desktop_contract` 的真实源码/FIFO 测试。#47 后续 iCloud 元数据/创建时间/浏览缓存尚未整合，不将本次小补丁或 mergeable=true 视作跨分支整合完成。历史 TD-20261029-33/-34 曾重号；2026-11-04 将本分支 Linux 两条记录分别改为 TD-20261029-42/-43，保留 Windows 原编号与全部历史内容，更新 Linux 关联引用。#47 后续 -35/-36 与本分支同号的记录仍须在实际整合时逐项消歧，不能删除历史结论。
+
+### 交付记录
+
+用户要求将后续 Linux 桌面修复纳入现有 PR #50。已核对 `3351792` 是 `4a58f81` 的直接祖先，三个新增提交无分叉；仅快进该 PR 的源分支，保留提交历史、不创建重复 PR。本次两项构建修复与此记录同次追加提交；最终提交哈希及 CI 结果待生成后复核。未合并上游 dev/main、发布或部署，也未删除其他工作分支。
+
+
+
+
 
 2026-11-04 分支交付：用户在本机测试后授权上传 GitHub 分支。下列条目中的“未提交、推送或上传”保留各阶段验收时的事实；本批最终保留范围、验证结果和边界见 [Linux 桌面修复交付记录](linux-desktop-fixes-2026-11-04.md)。云端回收站功能已撤回，不包含在最终源码改动中。
 
@@ -2044,6 +2142,28 @@ GitHub 该提交的两个 Windows CI 另有时序断言失败（编辑器锁耗�
 ### 防复发与交付
 
 保留 `initial_root_*` 三项回归及首次读取专用调用范围。脱敏本机验证记录见工作目录 `twodrive-icloud-startup-{probe,validation,deployment,live-validation}.json`；私人登录、路径清单、维护脚本和运行产物不上传。源码、测试和本记录继续交付到既有 `codex/linux-desktop-fixes-20261104` 分支，具体提交以 Git 历史为准；没有发布安装包或合并目标分支。
+## TD-20261107-01：以 Linux PR #50 为基线整合 iCloud 目录修复
+
+- 日期：2026-11-07
+- 状态：独立候选通过本机 Linux 验证。Windows 原生与候选托管 CI 待执行。
+- 基线：#50 `dfedcb6`。来源：#47 `b8c066f`。
+- 关联：[上游整合意见](https://github.com/LumiaBlack51/twodrive/pull/50#issuecomment-6704090256)，PR #47 原 TD-20261029-35/36。
+
+### 症状、原因与整合
+
+#50 的单路径 iCloud 属性查询仍使用 rooted lsjson --stat。实际目录的 synthetic root 缺少稳定对象 ID，导致后续目录身份确认无法使用真实父目录条目。候选改用 #47 的浅层父目录列表，并把按账号绑定和对象身份保存的已知创建时间发布到 DAV creationdate。显示时间与远端版本校验分离，已有有效的修改时间继续采用云端值。
+
+冲突处理沿用 #50 的目录快照、LRU、后台刷新和失效代次。iCloud 的 HEAD 与 PROPFIND 共享同一父目录读取，GET 与修改继续走实时校验。保留 #50 的 Linux FUSE、只读元数据会话、同目录单会话改名、托盘和图标。#47 的 Unix 认证工作目录修复已存在于 #50，Windows IPC 帮助与现有默认可编辑实现对齐。
+
+### 验证
+
+核心 41 项、引擎库 126 项、桌面引擎 28 项、HTTP 可写桥 9 项和 Flutter 97 项通过。默认忽略的九项中，另显式执行四项本地官方 Rclone 测试及一项合成真实 Linux FUSE 测试，均通过。覆盖真实父条目、时间戳展示、目录浏览共享请求、写入冲突保护与单会话改名。首轮合并缺少一个测试夹具的创建时间字段，补齐后通过编译。Rust 格式、严格 Clippy、Flutter 分析和 Linux release 构建通过。
+
+独立 GNOME/Xvfb 与私有 D-Bus 下，原生托盘 host-anchor 1 倍、2 倍及 fallback 均通过。GTK 与 GNOME 定位单元测试通过。实验使用空状态或合成数据。本机验证边界为 Linux，Windows 原生及最终候选的托管检查由上游批准后执行。
+
+### 交付
+
+保留两个来源分支的历史，候选在独立本地检出。当前范围为 #47 与 #50 的整合，后续目录索引和按需刷新工作仍由各自 PR 跟踪。
 
 ## TD-20261104-02：维护重启只恢复两个挂载，遗漏已登录的 OneDrive/iCloud
 
@@ -2154,7 +2274,7 @@ worker 改用不遍历目录的 vfs/queue，按真实上传尝试/排队状态�
 
 - 日期：2026-11-03；状态：已修复、本机部署，真实百度目标目录与上游4项完全匹配；后续统计误报独立见 TD-20261103-05。
 - 环境：本机 TwoDrive DAV / Linux fuse.rclone / Nautilus。
-- 关联：TD-20261029-33/35 的 PROPFIND 与目录缓存，TD-20261103-03 只更新 Flutter 导航，后端摘要保持不变。
+- 关联：TD-20261029-42/35 的 PROPFIND 与目录缓存，TD-20261103-03 只更新 Flutter 导航，后端摘要保持不变。
 
 ### 症状与证据
 
@@ -2459,7 +2579,7 @@ iCloud 后端的路径/目录查询与内容下载持有同一个账号操作锁
 
 - 日期：2026-10-29；状态：确认缓存淘汰及短导航缓存机制，旧代码回归失败、修正后的隔离和实际FUSE检查通过，已在本机更新。
 - 影响版本：Linux分支 `c85f444` 部署后的用户反馈，以iCloud最明显，并要求检查其他网盘。
-- 关联：TD-20261029-33 的目录显示快照及 TD-20261029-34 的内容读取等待。本次没有将所有无响应归为同一根因。
+- 关联：TD-20261029-42 的目录显示快照及 TD-20261029-43 的内容读取等待。本次没有将所有无响应归为同一根因。
 
 ### 症状与触发
 
@@ -2485,11 +2605,13 @@ iCloud、百度及Google使用共用桥，OneDrive目录枚举走本地索引/�
 
 已通过命令检查当前配置和所属挂载。安装前确认无用户文件写入后正常退出文件管理器，再按句柄与待写队列保护进行更新；更新成功，四个账号和挂载均恢复，前端、图标、偏好和会话身份保留；通过所属组件统计核实iCloud/百度/Google三个只读桥均使用30秒目录缓存。已恢复iCloud文件管理器窗口供用户确认，实际反复导航与无响应改善待反馈。源码仍提交独立[PR #50](https://github.com/LumiaBlack51/twodrive/pull/50)，不上传账号、凭据、真实列表、主机路径、截图或本机报告。
 
-## TD-20261029-34：百度客户端下载成功但 Linux 挂载复制长时间停在0
+## TD-20261029-43：百度客户端下载成功但 Linux 挂载复制长时间停在0
+
+编号更正（2026-11-04）：本条原为 TD-20261029-34，与 Windows 挂载复制调查重号；历史内容和验证边界保留，现以 -43 区分。
 
 - 日期：2026-10-29；状态：确认两处桥接等待机制，针对性回归、完整后端与实际合成FUSE复制验证通过，已在Linux本机更新。
 - 影响环境：Linux/Zorin，PR47百度摘要格式修复已本机更新。
-- 关联：TD-20261029-32 的摘要兼容修复及 TD-20261029-33 的Linux挂载适配。
+- 关联：TD-20261029-32 的摘要兼容修复及 TD-20261029-42 的Linux挂载适配。
 
 ### 症状与触发
 
@@ -2509,7 +2631,9 @@ iCloud、百度及Google使用共用桥，OneDrive目录枚举走本地索引/�
 
 初次读取仍可能在准备缓存期间显示0，优化不承诺消除云端延迟；未经用户复测不能声称真实挂载速度已经验收。现场检查仅用本机组件统计，不额外下载真实文件、不覆盖已有目标。
 
-## TD-20261029-33：PR47 的 Linux FUSE、窗口与在线切换适配
+## TD-20261029-42：PR47 的 Linux FUSE、窗口与在线切换适配
+
+编号更正（2026-11-04）：本条原为 TD-20261029-33，与 Windows 交付检查记录重号；历史内容和验证边界保留，现以 -42 区分。
 
 - 日期：2026-10-29；状态：Linux 源码适配、隔离回归和 release 构建通过。基础为 PR47 的 f4e07fe，随后合入960cf77的百度Content-MD5格式兼容修复。公开记录仅包含合成测试，不包含用户账号、真实列表、容量、令牌或机器路径。
 
@@ -2532,10 +2656,143 @@ iCloud、百度及Google使用共用桥，OneDrive目录枚举走本地索引/�
 
 - 新增Linux原生读写、退出及恢复回归，保留默认拒绝未知身份、错误不冒充空目录、在线选择不认证、待写数据不丢弃的约束。
 - 此分支只提交源码、合成测试、字体/许可证与通用说明。私有账号、OAuth JSON、缓存、数据库、日志、截图、部署报告和构建产物不纳入提交。使用说明和验证矩阵见[Linux适配记录](linux-zorin-2026-10-29.md)。
-- PR47后续百度Content-MD5十六进制/Base64兼容修复已合入；针对Linux用户相同校验失败截图，先确认本机仍为旧摘要实现，未将截图本身当作真实响应头证据。合成百度18项回归包含有效大小写十六进制、Base64、错误摘要拒绝与认证挂载桥范围读取；用户确认原文件客户端下载快速成功，但挂载复制无响应；后者另见TD-20261029-34。
-- Linux适配提交 `c73bdcf` 已上传独立分支 `codex/linux-zorin-pr47-20261029`；随后合入PR47最新百度摘要修复。已创建Ready for review的[PR #50](https://github.com/LumiaBlack51/twodrive/pull/50)（提交 `01d9aa3`），没有合并或正式Release。Linux本机后端已更新并恢复既有挂载，账号与前端/图标保留；未独立读取真实原文件；用户确认客户端下载成功，挂载复制仍待修正，见TD-20261029-34。
+- PR47后续百度Content-MD5十六进制/Base64兼容修复已合入；针对Linux用户相同校验失败截图，先确认本机仍为旧摘要实现，未将截图本身当作真实响应头证据。合成百度18项回归包含有效大小写十六进制、Base64、错误摘要拒绝与认证挂载桥范围读取；用户确认原文件客户端下载快速成功，但挂载复制无响应；后者另见TD-20261029-43。
+- Linux适配提交 `c73bdcf` 已上传独立分支 `codex/linux-zorin-pr47-20261029`；随后合入PR47最新百度摘要修复。已创建Ready for review的[PR #50](https://github.com/LumiaBlack51/twodrive/pull/50)（提交 `01d9aa3`），没有合并或正式Release。Linux本机后端已更新并恢复既有挂载，账号与前端/图标保留；未独立读取真实原文件；用户确认客户端下载成功，挂载复制仍待修正，见TD-20261029-43。
 
 
+## TD-20261104-06：PR47 挂载 IPC 帮助仍描述已移除的本机写入锁
+
+- 日期：2026-11-04；状态：已修正元数据文案并补回归，Rust 原生验证待执行。
+- 影响版本与环境：PR #47 `198f21be945e3eab64041caa8ef1149b80efe8fe` 的 Windows `mount_support.help` IPC 元数据。
+- 关联历史故障：默认可编辑设计见 [2026-10-29 记录](default-editable-2026-10-29.md)；本次为旧帮助遗漏，不恢复本机密码或权限切换。
+
+### 症状与触发
+
+读取 Windows status 的 `mount_support.help` 会得到“写入锁；解锁后可编辑”，与同一元数据的 `editable=true`、`readonly=false` 及默认可编辑策略不一致。已检查当前 Flutter 源码，没有发现界面读取此 help 字段；当前安装帮助已使用正确文案，未声称实际界面显示错误。
+
+### 根因与证据
+
+`desktop_windows_mount::support` 保留了旧写入锁文案。PR #50 的 `desktop_readonly_mount::support` 已使用正确描述，本次沿用相同文案，并保留先缓存、等待上传完成的提示。
+
+### 解决办法与恢复操作
+
+帮助改为“连接后即可编辑，具体操作取决于网盘授权”。仅修正 IPC 帮助信息，不改变挂载准入、远端授权、写入/恢复行为或 Flutter 操作流程；不修改已有配置或凭据，不部署、重启客户端或操作真实网盘。
+
+### 验证结果与边界
+
+静态检查确认旧文案出现一次并被替换；以相同文案约束检查旧帮助失败、新帮助通过。新增 Rust 回归 `support_help_describes_default_editable_mounts_without_local_unlock` 检查可编辑标志、远端授权与等待上传提示，并拒绝本机写入锁/解锁描述。当前环境无 Cargo/Rust/Windows，未执行或宣称通过 Rust 回归、Rustfmt、Clippy、Windows 原生挂载或 Flutter 测试；最终提交仍需托管检查。
+
+### 防复发措施与后续
+
+保持 IPC 帮助与默认可编辑设计一致，保留远端授权及待上传提示。#47/#50 的整合与最终 SHA Linux/Windows 验证仍未完成，不能用文案修正替代。
+
+### 交付记录
+
+本地候选已准备，提交哈希和后续 CI 结果待发布后核实。不合并、不发布版本、不改变用户运行环境。
+
+## TD-20261104-03：PR47 的 iCloud 认证工作目录缺少 Unix 创建权限
+
+- 日期：2026-11-04；状态：已回移修复及回归，当前环境仅静态核对通过，最终提交的托管原生检查待执行。
+- 影响版本与环境：PR #47 的 `babf36a1d96a84fe472a8b84a81410ab5a87d123`，Linux/Unix 认证流程。
+- 关联历史故障：TD-20261029-30 是其他测试/状态目录的权限错误；本次定位到生产 `gui::action` 的认证临时目录。PR #50 已有同一生产路径的修复，此次仅回移该 helper 及其回归。
+
+### 症状与触发
+
+[Linux desktop job 123906538245](https://github.com/LumiaBlack51/twodrive/actions/runs/40873124420/job/123906538245) 在显式官方组件测试 `official_gui_questions_cancel_and_preserve_previous_login` 因 `state directory must have mode 0700` 失败，之后的 IPC/FUSE/Flutter/build 阶段未执行。历史 head `babf36a1d96a84fe472a8b84a81410ab5a87d123` 的七条 PR workflow 为六成功、一失败；该失败不属于修复后的 head。2026-11-04 复核修复提交 `198f21be945e3eab64041caa8ef1149b80efe8fe` 时，七条新 PR workflow 均为 `action_required`，[desktop run 41767184796](https://github.com/LumiaBlack51/twodrive/actions/runs/41767184796) 尚无已执行 job。历史 Windows 成功不替代最终候选的 Linux/Windows 验证。
+
+### 根因与证据
+
+认证工作目录使用 `tempfile::Builder::tempdir_in` 的默认创建权限，取决于 umask，随后 `State::new` 正确拒绝非 0700 目录。已重新读取原 head 源码及上述实际失败日志；没有独立重跑旧 Rust 用例。
+
+### 解决办法与恢复操作
+
+回移 PR #50 `3351792d8e6345b82262beb86d481d9bfb375b89` 的 `new_auth_work_state`：Unix 在创建目录时即指定 0700，在 State 检查成功后才保留临时目录。保留 State 的私密目录校验，不事后放宽权限，也不更改已有凭据或登录会话。用户可见变化仅为原先失败的 Unix 登录准备步骤能够继续；Windows 既有创建行为、登录问题/取消处理不变。未部署、重启客户端或访问真实网盘。
+
+### 验证结果与边界
+
+本次静态核对确认最终 `gui.rs` 与 #50 上述 SHA 的该文件逐字节一致，回归 `gui_auth_work_directory_is_private_and_can_be_reopened` 检查父目录、精确 0700 及重新打开。原 #50 的 hosted Linux job 已通过，但其历史结果不能计作本次 #47 最终提交通过。当前执行环境无 Cargo/Rust/Flutter；Rustfmt、Clippy、Rust 回归、官方组件与原生挂载未在此执行，需检查新提交的 hosted CI。
+
+### 防复发措施与后续
+
+保留新目录权限回归、官方认证取消/旧登录保留回归，以及严格 State 校验。#47/#50 仍是分叉候选，本补丁不完成跨分支整合，iCloud 真实目录/创建时间/浏览缓存与 Linux 挂载/单会话改名仍需在未来统一候选验证。
+
+### 交付记录
+
+修复与此记录同次提交到现有 PR #47 源分支；提交哈希与最终 CI 结果待生成后复核。不合并、不发布、不改变用户运行环境。
+
+
+
+
+
+
+
+
+## PR #47 原 TD-20261029-36：iCloud 新建目录显示 2000 年且挂载操作卡顿
+
+- 日期：2026-10-29；状态：已修正时间显示与重复查询放大机制，完整回归通过；最终包及实际原生挂载检查通过，已部署；真实 iCloud 时间/性能待用户验收。
+- 影响版本：已部署的 `TwoDrive-0.1.7-icloud-directory-20261029`，引擎源码 5c8d919。用户确认现在可以重命名，但新建后的时间显示为 2000 年，创建/使用非常慢且卡顿。没有确认数据丢失或云端时间被改写。
+- 关联：PR #47 原 TD-20261029-35 已修正目录身份查询；其真实改名结果此次获用户确认，仅验收“可以改名”，不能扩大为时间或性能正常。TD-20261029-34 的 HEAD 下载及缓存全局锁修正仍保留，不能因卡顿表象相同断言同因。
+- 调查约束：读取源码与本机脱敏元数据，使用一次性慢服务/目录复现；保持现有客户端运行，不操作鼠标、不额外读写用户真实云盘、不放弃写入版本检查来提高速度。
+
+### 根因与证据
+
+固定版本 Rclone 的 iCloud 列表用 `item.DateModified` 构建目录；该值未知时，[Dir.ModTime](https://github.com/rclone/rclone/blob/v1.75.2/fs/dir.go) 使用配置默认时间，[默认值为 2000-01-01 UTC](https://github.com/rclone/rclone/blob/v1.75.2/fs/config.go)。本机适配器原样传出该占位值，桥接元数据也未实现已知创建时间属性。新增桥层时间回归对修改前实现完成编译，以 `NotImplemented` 失败，日志 outputs/icloud-time-old-regression.log。未获取此次 Apple 原始响应，故不声称已独立读取用户目录的真实创建时间。
+
+每次 iCloud 目录/条目查询会新启 Rclone 并取得账号 operation.lock。桥层不复用短期浏览结果，单次 HEAD 自身可触发两次同一条目查询；创建/改名后的资源管理器属性与目录刷新会继续增加串行请求。实际旧实现隔离回归中 8 次连续 HEAD 触发 16 次后端元数据查询；修正后同一组请求只触发 1 次，不下载内容，日志 outputs/icloud-metadata-old-regression.log。这个机制确认了可消除的请求放大，但未采集此次用户操作的完整云端/进程/锁时序，不能把全部卡顿时长归因于它，也不能把本机计数当作真实 Apple 加速倍数。
+
+### 解决办法与恢复操作
+
+为本机成功新建的 iCloud 目录保存已知创建时间，并通过通用可选元数据和 DAV creationdate 发布；Apple/Rclone 缺失或给出默认目录时间时，以该已知时间作显示回退。记录按登录 binding 与真实对象 ID 的稳定部分隔离，重命名、etag 更新和进程重启后仍适用，替换对象或另一账号不继承。私有记录限 2 MiB/20,000 项，跨进程合并写入并按文件变动重载，锁使用非阻塞方式；记录不可用不使已成功的云端创建冒充失败、不覆盖损坏历史。原始对象 ID、远端版本摘要完全不受显示时间影响。没有把未知的历史目录日期全部改成当前时间，也无法补回旧版创建时未记录的真实历史日期。
+
+通用挂载桥新增按 provider 选择的浏览缓存，默认关闭、目前仅 iCloud 启用，最多 2 秒、8 份目录/20,000 条目录项及 20,000 份条目快照。相同键并发查询合并，不持有全局锁跨网络请求；目录列表可回答子项属性查询。失败不缓存，暂停/停止检查仍执行，账号/桥实例互相隔离。PUT/MKCOL/MOVE/DELETE 前后均使快照失效，generation 拒绝发布修改前已在途的旧结果。GET 内容、下载后的版本验证及全部写入检查仍用新鲜后端结果，保留原恢复副本、冲突保护与待上传内容。没有通过缓存跳过写入前检查，也未改成未经确认的后台云端修改。
+
+运行中的用户客户端、四账号配置和挂载目录均未切换，未进行独立真实云盘读写。新包要等用户正常退出后部署，无需重装 WinFsp。
+
+### 验证结果与边界
+
+Windows Rust 154 次测试执行通过（7 项默认忽略），Linux 146 次通过（4 项忽略）；另 40 项 core 测试通过。严格 Windows all-target Clippy、相关 Rustfmt、三个 Windows release 程序构建通过。显式运行随包官方 Rclone 对一次性 Provider-DAV 桥的列表/元数据/配额/字节读取测试，通过；没有访问真实云盘。此前 GUI 未修改，不重复计入历史 Flutter 测试。
+
+回归覆盖目录创建时间持久化、跨实例合并、改名/换 etag、替换 ID/绑定隔离、正常远端修改时间优先、损坏/争用记录不影响读取；DAV XML creationdate；短期快照过期、错误不缓存、同目录并发合并/其他目录继续、在途失效及暂停；实际请求层缓存不能掩盖外部版本冲突，新建/移动/删除后不存在旧快照。新建测试的第一轮因共享 fixture 私有字段导致编译失败，修正测试构造；目录 HEAD 预期为 200 的断言曾失败（DAV 目录 HEAD 正常为 405），改为测试实际目录协议 PROPFIND，并未为满足断言改变生产行为。最终上述检查均通过。
+
+50 文件候选包通过 9 组实际双账号 WinFsp 编辑/重启/冲突与缓存隔离检查，其中本机新建目录暴露近期修改时间；另通过 6 组实际双账号原生启动恢复检查。该原生服务是一次性本机 WebDAV，不是用户 iCloud，不能将近期修改时间检查等同于真实 Apple 创建时间已验收。首次候选检查后，代码检查发现父列表缺失条目不能用于否定大小写别名；改为只复用精确匹配的正条目、缺失或别名仍由 provider 查询，并补充回归，重新测试/构建/打包后再次核验。详见 [脱敏验证摘要](icloud-responsive-validation-2026-10-29.json)。仍未验证真实 iCloud 新版时间显示和卡顿改善、真实 Linux 写入性能；同步创建、改名、写入和首次查询仍可能受 Apple 网络与每次原生组件启动延迟影响。
+
+### 交付记录
+
+候选 `TwoDrive-0.1.7-icloud-responsive-20261029`，50 个运行/说明文件，完整校验及上述原生检查通过；修正与本记录同轮提交，候选清单记录实际源码哈希。更新现有 PR #47，保持 Ready for review，不合并、不创建正式 Release。用户确认“已退出”后，确认 GUI/引擎/原生组件均无活动线程，重新按清单校验 50 个分发文件。完整原私有状态及外部凭据已备份并施加当前用户/System 私有 ACL，原状态逐一核对哈希。新版仅执行 profiles IPC 离线预检，四条原配置逐字节保持，profile/revision/路径不变，均为默认可编辑且可恢复会话；预检无云端请求。
+
+默认启动器已切换此包，继续使用原 alpha3-gui/state。只读本机配置、会话与进程/VFS 元数据确认一个新包 GUI/main engine，四条完整配置、选中账号及保存会话 kind/revision/binding 保持；四个原 D 盘路径对应的挂载 worker/原生组件均自动恢复，当前绑定下可写 VFS 状态已更新，均 pending=0、error=false。报告 outputs/icloud-responsive-delivery.json。验证没有打开挂载内的用户文件、额外探测或修改真实云盘，也没有操作鼠标；客户端自身按原设置正常恢复连接和挂载。此结果不替代真实 iCloud 新建时间显示与延迟验收。
+
+用户另明确授权以后更新时由助手正常退出客户端后直接切换，不再要求手动退出确认；已记录本机更新偏好，保留正常写入/卸载保护、四账号缓存与路径，不引入强制结束进程流程。
+
+## PR #47 原 TD-20261029-35：默认可编辑版 Windows 挂载重命名文件夹返回 I/O 错误
+
+- 日期：2026-10-29；状态：已确认并修正 iCloud 目录元数据身份缺失机制，已部署；用户确认真实 iCloud 可以改名，另报告时间及严重卡顿，见 PR #47 原 TD-20261029-36。
+- 影响版本：本机 `TwoDrive-0.1.7-default-editable-20261029`（程序与 GUI 来源 `2a3245aa93fd2b6ed4cafffebc29507a2b22af7f`）。
+- 用户报告：Linux 可以修改但较慢，正在另行处理；请求检查本机。Windows 截图显示重命名文件夹时返回 `0x8007045D`；用户随后确认位于 `D:\TwoDrive\iCloudDrive`。是否已发生云端部分修改未独立确认，不记录私人文件夹名。
+- 历史关联：TD-20261029-32 是百度下载摘要格式拒绝，TD-20261029-34 是元数据触发下载及全局缓存锁等待；本次操作是目录重命名，不能因相同 I/O 错误码就套用原根因。
+- 调查范围：先读取本机私有状态摘要、日志与源码，使用一次性合成数据复现。保持当前客户端运行，不操作鼠标、不重试修改真实云端文件、不删除缓存或强制结束进程。
+
+### 根因与证据
+
+iCloud `get_metadata_by_path` 原先运行 `lsjson twodrive:<完整路径> --stat`。对于现存目录，Rclone NewFs 把该目录设为文件系统根；固定 1.75.2 的 `StatJSON(remote="")` 返回合成根目录，不含真实 ID。适配器随后在 `entry` 中拒绝空 ID（“网盘未返回稳定文件标识，拒绝不确定的文件”），导致挂载 MOVE 的源版本读取失败。创建目录后的确认、目录删除及后续父目录刷新也受此路径影响，失败响应不一定代表此前云端动作未发生。
+
+未改变生产逻辑、仅抽出查询函数后新增的目录回归，旧实现完成编译并以该空 ID 错误失败（`outputs/icloud-directory-old-regression.log`）。实际随包官方 Rclone 对一次性本机空目录执行相同 stat，确认 `IsDir=true`、Path/Name 为空且无 ID（`outputs/icloud-directory-official-stat.json`），不涉及 Apple 账号。固定版本的 [StatJSON 实现](https://github.com/rclone/rclone/blob/v1.75.2/fs/operations/lsjson.go) 与 [iCloud List 实现](https://github.com/rclone/rclone/blob/v1.75.2/backend/iclouddrive/iclouddrive.go) 支持上述链路：父列表包含真实目录 ID 及版本。当前运行包未保存原 MOVE 的内部错误，因此此证据确认代码机制与触发条件，不宣称已重放用户的全部实际操作。
+
+### 修正与验证边界
+
+改为一次浅层父目录列表查找真实条目，文件和目录均沿用同一 ID/版本来源；根目录仍本地合成但不可修改。目录读取不再为 stat 枚举其子目录内容。保留稳定 ID 校验、账号绑定、版本快照、整份列表验证、数量预算、路径边界和失败不冒充完整结果；ASCII 大小写歧义拒绝，普通 ASCII 别名使用同一真实条目。没有通过伪造目录 ID、使用路径替代 ID、删除缓存或放宽版本检查来绕过错误。
+
+新目录回归通过，并增加嵌套中文目录、普通文件及大小写别名、对象替换、目标缺失、畸形/歧义列表、传输失败及根目录零请求测试。实际 WinFsp 脚本扩充空目录重命名、带子文件目录整体重命名并核对内容。最终源码 Windows 145 次 Rust 测试执行通过（7 项默认忽略），Linux 137 次通过（4 项忽略）。严格 Windows all-target Clippy、Rustfmt、三个 Windows release 程序构建通过。49 文件候选包通过 8 组实际双账号 WinFsp 编辑/重启/冲突与缓存隔离检查，包含空目录改名、非空目录整体改名并逐字节核对子文件；另通过 6 组实际双账号原生启动恢复检查。原生服务为一次性本机 WebDAV，不能将其称为真实 iCloud 目录操作验收。GUI 未修改，复用并按清单核验既有 GUI；未重复计入此前 78 项 Flutter 测试。详见 [脱敏验证摘要](icloud-directory-validation-2026-10-29.json)。
+
+构建期间曾提前调用候选打包，完成标记检查按预期拒绝，随后因包不存在而未执行两项原生测试；等待 release 完成后重新打包，两项实际原生测试才运行并通过。没有以先前未执行的调用计入通过。
+
+真实 iCloud 修改及 Linux 慢写性能尚未独立验收。调查阶段未修改运行中的四云盘配置、进程、缓存和真实文件；后续获用户正常退出确认后执行下述部署。
+
+### 交付记录
+
+修复候选 `TwoDrive-0.1.7-icloud-directory-20261029`，49 个运行/说明文件，默认可编辑策略与原四账号/D 盘路径沿用。程序源码已提交并推送 5c8d919 至现有 PR #47，保持 Ready for review，不合并、不创建正式 Release。用户回复“已退出，可以更新”后，确认 GUI/引擎/原生组件均无活动线程，按清单校验 49 个分发文件。完整原私有状态及外部凭据已备份，备份应用当前用户/System 私有 ACL，状态文件逐一核对哈希。新包只执行 profiles IPC 预检，确认四条原配置逐字节保持，profile/revision/路径不变且均为默认可编辑、可恢复会话；无额外云端请求。
+
+默认启动器现指向此包，继续使用原 alpha3-gui/state。只读本机元数据确认一个新包 GUI/main engine，四条完整配置、选中账号与保存会话 kind/revision/binding 均保持；原四个 D 盘路径对应的挂载 worker/原生组件对均自动恢复，当前绑定下的可写 VFS 状态已更新，均 pending=0、error=false。报告 outputs/icloud-directory-delivery.json。无需重装 WinFsp，没有操作鼠标、独立探测或修改用户云盘文件；所属进程与 VFS 状态不代替实际 iCloud 目录改名验收。已请用户使用专门的测试文件夹复测。
 
 
 ## TD-20261029-34：客户端下载成功但挂载复制使资源管理器等待

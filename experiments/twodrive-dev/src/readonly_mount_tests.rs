@@ -28,6 +28,8 @@ struct Fixture {
     quota_scale: u64,
     include_slow_file: bool,
     probe_metadata_delay: Duration,
+    parent_browsing: bool,
+    created_unix: Option<i64>,
 }
 impl Fixture {
     fn new(bytes: &[u8]) -> Self {
@@ -53,17 +55,21 @@ impl Fixture {
             quota_scale: 1,
             include_slow_file: false,
             probe_metadata_delay: Duration::ZERO,
+            parent_browsing: false,
+            created_unix: None,
         }
     }
     fn meta(&self) -> MetadataEntry {
         let data = self.data.lock().unwrap();
-        MetadataEntry::new_file(
+        let mut entry = MetadataEntry::new_file(
             "opaque-id-never-a-path",
             format!("/{NAME}"),
             data.0.len() as u64,
             1,
             data.1.to_string(),
-        )
+        );
+        entry.created_unix = self.created_unix;
+        entry
     }
     fn change(&self, bytes: &[u8]) {
         let mut data = self.data.lock().unwrap();
@@ -401,6 +407,9 @@ impl Provider for Fixture {
                 },
             )
         })
+    }
+    fn browse_parent_metadata(&self) -> bool {
+        self.parent_browsing
     }
     fn storage_usage(
         &self,
@@ -1846,4 +1855,55 @@ fn linux_office_owner_and_regex_exclusions_are_durable_local_files_without_cloud
         fixture.data.lock().unwrap().0,
         b"cloud content stays unchanged"
     );
+}
+
+#[test]
+fn known_creation_time_is_published_in_dav_metadata() {
+    let mut entry = MetadataEntry::new_dir("known-id", "/new-dir", 1760000000, "v");
+    entry.created_unix = Some(1750000000);
+    assert_eq!(
+        Meta(entry).created().unwrap(),
+        UNIX_EPOCH + Duration::from_secs(1750000000)
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = Fixture {
+        created_unix: Some(1750000000),
+        ..Fixture::new(b"test")
+    };
+    let bridge = Bridge::start(Backend::new(fixture), temp.path()).unwrap();
+    let xml = client()
+        .request(
+            reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+            file_url(&bridge),
+        )
+        .bearer_auth(&bridge.token)
+        .header("Depth", "0")
+        .body("<d:propfind xmlns:d=\"DAV:\"><d:prop><d:creationdate/></d:prop></d:propfind>")
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    assert!(xml.contains("2025-06-15T15:06:40"), "{xml}");
+}
+#[test]
+fn repeated_head_metadata_queries_share_parent_listing_without_downloading() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(b"payload");
+    fixture.parent_browsing = true;
+    let bridge = Bridge::start(Backend::new(fixture.clone()), temp.path()).unwrap();
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap();
+    for _ in 0..8 {
+        let response = client
+            .head(file_url(&bridge))
+            .bearer_auth(&bridge.token)
+            .send()
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+    assert_eq!(fixture.listings.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.metadata_reads.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
 }

@@ -22,6 +22,7 @@ pub struct OpaqueProvider {
     pub directory_lookups: Arc<Mutex<Vec<String>>>,
     pub upload_delay: std::time::Duration,
     pub delete_delay: std::time::Duration,
+    pub parent_browsing: bool,
 }
 impl Default for OpaqueProvider {
     fn default() -> Self {
@@ -32,6 +33,7 @@ impl Default for OpaqueProvider {
             directory_lookups: Arc::default(),
             upload_delay: std::time::Duration::ZERO,
             delete_delay: std::time::Duration::ZERO,
+            parent_browsing: false,
             caps: Capabilities {
                 upload: true,
                 mkdir: true,
@@ -43,6 +45,11 @@ impl Default for OpaqueProvider {
     }
 }
 impl OpaqueProvider {
+    #[allow(dead_code)] // This shared fixture also serves cache-independent test binaries.
+    pub fn with_parent_browsing(mut self) -> Self {
+        self.parent_browsing = true;
+        self
+    }
     pub fn with_caps(mut self, caps: Capabilities) -> Self {
         self.caps = caps;
         self
@@ -200,6 +207,9 @@ impl CloudBackend for OpaqueProvider {
     }
 }
 impl Provider for OpaqueProvider {
+    fn browse_parent_metadata(&self) -> bool {
+        self.parent_browsing
+    }
     fn capabilities(&self) -> Capabilities {
         self.caps
     }

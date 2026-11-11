@@ -119,10 +119,16 @@ void capture_anchor(Tray* tray, gint x, gint y) {
     g_variant_get(host, "(biiiiiiii)", &found, &ix, &iy, &iw, &ih, &ax, &ay, &aw, &ah);
     if (found && iw > 0 && ih > 0 && aw > 0 && ah > 0) {
       auto* display = gtk_widget_get_display(GTK_WIDGET(tray->window));
-      auto* monitor = gdk_display_get_monitor_at_point(display, ix + iw / 2, iy + ih / 2);
-      const auto usable = twodrive::configured_dock_workarea(tray->bus, monitor,
-          {ax, ay, aw, ah});
-      tray->anchor.capture_icon({ix, iy, iw, ih}, usable);
+      g_autoptr(GVariant) state = twodrive::current_display_state(tray->bus);
+      const int ui_scale = twodrive::legacy_ui_scale(tray->bus, state);
+      const auto scale = twodrive::host_coordinate_scale(display, state, ui_scale);
+      const auto icon = twodrive::host_rectangle_to_gdk({ix, iy, iw, ih}, scale);
+      const auto area = twodrive::host_rectangle_to_gdk({ax, ay, aw, ah}, scale);
+      auto* monitor = gdk_display_get_monitor_at_point(display,
+          icon.x + icon.width / 2, icon.y + icon.height / 2);
+      const auto usable = twodrive::configured_dock_workarea(
+          tray->bus, monitor, area, state, ui_scale);
+      tray->anchor.capture_icon(icon, usable);
       tray->host_anchor = true;
       return;
     }
