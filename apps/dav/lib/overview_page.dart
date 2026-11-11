@@ -278,7 +278,7 @@ class _OverviewPageState extends State<OverviewPage> {
         ),
         LayoutBuilder(
           builder: (context, constraints) {
-            final columns = constraints.maxWidth >= 1040
+            final columns = constraints.maxWidth >= 960
                 ? 4
                 : constraints.maxWidth >= 540
                 ? 2

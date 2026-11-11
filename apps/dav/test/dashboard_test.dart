@@ -63,7 +63,11 @@ void main() {
     variant: TargetPlatformVariant({TargetPlatform.windows}),
   );
 
-  for (final size in [const Size(1440, 1000), const Size(840, 580)]) {
+  for (final size in [
+    const Size(1440, 1000),
+    const Size(1268, 714),
+    const Size(840, 580),
+  ]) {
     testWidgets(
       'dashboard visual layout ${size.width.toInt()}',
       (tester) async {
@@ -122,6 +126,12 @@ void main() {
         );
         await tester.pump();
         expect(tester.takeException(), isNull);
+        if (size.width >= 1268) {
+          expect(
+            tester.getTopLeft(find.text('OneDrive').first).dy,
+            tester.getTopLeft(find.text('Google Drive')).dy,
+          );
+        }
         await appearanceSnapshot(tester, 'dashboard-${size.width.toInt()}');
         await tester.pumpWidget(const SizedBox());
         c.dispose();
