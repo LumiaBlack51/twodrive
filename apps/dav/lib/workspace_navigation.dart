@@ -9,7 +9,7 @@ enum WorkspacePage {
   sharing('共享', Icons.share_outlined),
   settings('设置', Icons.tune),
   cfapi('原生同步', Icons.cloud_sync_outlined),
-  overview('同步总览', Icons.dashboard_outlined);
+  overview('仪表盘', Icons.dashboard_outlined);
 
   const WorkspacePage(this.label, this.icon);
   final String label;

@@ -108,7 +108,10 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     c.setView(
       visible: true,
       files: !panel && page == WorkspacePage.files.index,
-      quota: panel || page == WorkspacePage.connections.index,
+      quota:
+          panel ||
+          page == WorkspacePage.connections.index ||
+          page == WorkspacePage.overview.index,
     );
     unawaited(c.refreshView(forceDirectory: forceDirectory));
   }
@@ -439,8 +442,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       body: Row(
         children: [
           Container(
-            width: 210,
-            color: Colors.white,
+            width: 184,
+            color: const Color(0xffe1e5f1),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -453,7 +456,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                         child: Row(
                           children: [
                             Icon(
-                              Icons.cloud_outlined,
+                              Icons.cloud,
                               size: 28,
                               color: Color(0xff326bd6),
                             ),
@@ -485,20 +488,36 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                         ),
                       ),
                       for (final destination in WorkspacePage.sidebar)
-                        Padding(
+                        Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
+                            horizontal: 6,
                             vertical: 2,
+                          ),
+                          margin: const EdgeInsets.symmetric(horizontal: 8),
+                          decoration: BoxDecoration(
+                            color: page == destination.index
+                                ? const Color(0xffd2dbef)
+                                : null,
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: ListTile(
                             dense: true,
                             selected: page == destination.index,
-                            selectedTileColor: const Color(0xffedf3ff),
+                            selectedTileColor: const Color(0xffd2dbef),
+                            selectedColor: const Color(0xff2472df),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
                             leading: Icon(destination.icon),
-                            title: Text(destination.label),
+                            title: Text(
+                              destination.label,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: page == destination.index
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                            ),
                             onTap: () => navigateTo(destination.index),
                           ),
                         ),
@@ -569,7 +588,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                     padding: const EdgeInsets.only(top: 6, bottom: 20),
                     child: Text(
                       page == WorkspacePage.overview.index
-                          ? 'Windows · 账户、文件与同步状态'
+                          ? '${c.profile?['name'] ?? 'TwoDrive'} · 账户与同步状态'
                           : page == WorkspacePage.cfapi.index
                           ? 'OneDrive · Windows CFAPI'
                           : c.connected

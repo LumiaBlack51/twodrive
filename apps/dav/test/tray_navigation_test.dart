@@ -26,7 +26,7 @@ void main() {
       final labels = navigation
           .map((item) => (item.title! as Text).data!)
           .toList();
-      expect(labels, ['同步总览', '文件', '传输', '连接', '备份', '共享', '原生同步', '设置']);
+      expect(labels, ['仪表盘', '文件', '传输', '连接', '备份', '共享', '原生同步', '设置']);
       int? destination;
       await tester.pumpWidget(
         MaterialApp(

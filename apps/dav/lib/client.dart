@@ -83,6 +83,8 @@ class StorageClient extends ChangeNotifier {
   bool _showQuota = false;
   bool _viewVisible = false;
   bool get viewVisible => _viewVisible;
+  int _visibilityEpoch = 0;
+  int get visibilityEpoch => _visibilityEpoch;
   int _statusVersion = 0;
 
   void setView({
@@ -90,6 +92,7 @@ class StorageClient extends ChangeNotifier {
     bool files = false,
     bool quota = false,
   }) {
+    if (_viewVisible != visible) _visibilityEpoch++;
     _viewVisible = visible;
     _showFiles = visible && files;
     _showQuota = visible && quota;

@@ -24,8 +24,11 @@ ThemeData appTheme({TargetPlatform? platform}) {
             'Noto Sans',
             'sans-serif',
           ],
-    colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff326bd6)),
-    scaffoldBackgroundColor: const Color(0xfff5f7fb),
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xff2472df),
+      primary: const Color(0xff2472df),
+    ),
+    scaffoldBackgroundColor: const Color(0xffedf0fa),
     inputDecorationTheme: const InputDecorationTheme(
       border: OutlineInputBorder(),
       isDense: true,

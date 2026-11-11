@@ -89,13 +89,13 @@ void main() {
       c.status['cfapi']['progress']['stage'] = 'remote';
       await tester.pumpWidget(DavApp(client: c));
       expect(find.text('正在更新云端目录'), findsOneWidget);
-      expect(find.text('处理中'), findsOneWidget);
+      expect(find.textContaining('处理中'), findsOneWidget);
       expect(find.text('本轮尚未完成，统计来自最近一次检查。'), findsOneWidget);
-      expect(find.text('原生待处理'), findsNothing);
+      expect(find.textContaining('原生待处理'), findsNothing);
       c.status['cfapi']['progress']['phase'] = 'sync';
       c.notifyListeners();
       await tester.pump();
-      expect(find.text('原生待处理'), findsOneWidget);
+      expect(find.textContaining('原生待处理'), findsOneWidget);
       expect(find.text('正在更新云端目录'), findsNothing);
       expect(c.calls, isEmpty);
       await tester.pumpWidget(const SizedBox());
@@ -116,8 +116,7 @@ void main() {
       final c = OverviewClient()..setView(visible: true);
       await tester.pumpWidget(DavApp(client: c));
       expect(find.byKey(const ValueKey('sync-overview')), findsOneWidget);
-      expect(find.text('2 / 2'), findsOneWidget);
-      expect(find.text('1.0 MB'), findsOneWidget);
+      expect(find.text('2 个网盘已连接 · 0 项活动传输'), findsOneWidget);
       expect(find.text(r'D:\Old'), findsNothing);
       await tester.pump(const Duration(seconds: 10));
       await tester.pump();
