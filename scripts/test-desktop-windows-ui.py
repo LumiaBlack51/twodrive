@@ -59,8 +59,11 @@ def wait_visible(window, visible, stage):
 with tempfile.TemporaryDirectory(prefix='td-ui-') as directory:
     root = Path(directory)
     exe = Path(sys.argv[1]).resolve()
+    title = f'TwoDrive tray smoke {root.name}'
+    state_lock = root/'state/run.lock'
     with (root/'stderr.log').open('w', encoding='utf-8') as log:
-        proc = subprocess.Popen([str(exe), '--background', '--state', str(root/'state')],
+        proc = subprocess.Popen(
+            [str(exe), '--background', '--state', str(root/'state'), '--window-title', title],
             cwd=exe.parent, stdout=log, stderr=log,
             env={**os.environ, 'TWODRIVE_TRAY_TRACE_FILE': str(root/'native.log')})
         helper = None
@@ -70,13 +73,20 @@ with tempfile.TemporaryDirectory(prefix='td-ui-') as directory:
             assert helper, 'cannot create isolated focus fixture'
             deadline = time.monotonic()+30
             while True:
-                hwnd = u.FindWindowW(None, 'TwoDrive Development')
+                hwnd = u.FindWindowW(None, title)
                 owner = w.DWORD()
                 if hwnd:
                     u.GetWindowThreadProcessId(hwnd, c.byref(owner))
-                if owner.value == proc.pid and (root/'state/run.lock').exists() and u.GetPropW(hwnd, 'TwoDrive.TrayReady'): break
+                found_window = owner.value == proc.pid
+                engine_ready = state_lock.exists()
+                tray_ready = found_window and bool(u.GetPropW(hwnd, 'TwoDrive.TrayReady'))
+                if engine_ready and tray_ready:
+                    break
                 assert proc.poll() is None, 'desktop process exited during startup'
-                assert time.monotonic() < deadline, 'desktop did not initialize'
+                assert time.monotonic() < deadline, (
+                    f'desktop did not initialize: window={found_window}, '
+                    f'engine={engine_ready}, tray={tray_ready}'
+                )
                 time.sleep(.1)
             time.sleep(1)
             assert not u.IsWindowVisible(hwnd), 'background startup showed a window'

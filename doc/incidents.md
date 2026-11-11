@@ -1,8 +1,15 @@
 # TwoDrive 故障记录
 
+## TD-20261111-19：PR #50 平台断言通过后暴露旧托盘与 Debian 比较规则
+
+- 日期：2026-11-11；状态：根因已确认，共享修正已回移，当前 head 托管检查待完成。
+- 症状与证据：8584592 的 Linux desktop、CFAPI、peer、WebDAV、Windows preview 和 Debian policy 成功；Windows desktop 的 Flutter 步骤已成功，随后 job 130358218862 再次等待旧窗口标题 30 秒失败。Debian job 130358219231 成功验证新包依赖、payload 与两份上传清单，随后以历史 Nautilus 扩展字节拒绝预期修改。日志中的旧包缺少 libc6 是预期反例，并非新包失败。
+- 关联与处理：复用 #63 的 a41cd0b 修正，托盘使用唯一 --window-title 并保留 PID/引擎锁/托盘三项就绪判断；Debian 仅对预期更新的 Nautilus 扩展比较检出源码，保留权限、shebang 归一化与其余历史运行文件检查。历史包使用固定资产 API 与 SHA-256，保留有限下载预算。另回移 TD-20261111-16 的 MSIX 编译/退出阶段诊断与独立预算，保留错误线程反例，不改变产品行为。
+- 实际验证与边界：相同托盘实现已在本 Windows 已安装客户端以私有空状态通过五项断言；MSIX 窗口目标的正例/错误线程反例通过。Python 语法与参数检查通过；本机没有 dpkg-deb，未将合成或其他 head 的 Debian 结果冒充本 head 制品验证。等待重新执行 Windows desktop 与 Debian package，保留原失败记录。
+
 ## TD-20261111-13：PR #50 自动挂载回归把 Linux 行为套用到 Windows
 
-- 日期：2026-11-11；状态：调查中，待修复后复验。起点 978a447。
+- 日期：2026-11-11；状态：Windows 平台断言修正通过，后续托管失败单列 TD-20261111-19。起点 978a447。
 - 症状：Windows job 130344317517 中 auto_mount_connection_test.dart 两条断言失败，实际 mount 次数为 0、错误为空；生产 connect 中存在 Platform.isLinux 条件。
 - 关联：fork 9ea337b 的平台测试修正；本次不改变 Windows 连接策略。先复现该 Windows 断言失败，再复用参考测试修正并跑完整 Flutter 套件。
 - 修复：复用 9ea337b 中已校验的平台测试修正：默认成功连接只在 Linux 期望自动挂载；失败自动挂载用例明确只在 Linux 运行。没有修改生产 connect 行为。
