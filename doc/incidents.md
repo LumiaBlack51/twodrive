@@ -1,5 +1,14 @@
 # TwoDrive 故障记录
 
+## TD-20261111-20：后台开始上传使同一代缓存的首次写入偶发失败
+
+- 日期：2026-11-11；状态：确定性回归已证明旧代码失败、修复后通过；Linux FUSE 原用例及完整 Debian 制品待当前修复的托管 CI 复验。
+- 症状与证据：PR #63 的 `94350d2` 在 [Debian job 130376013665](https://github.com/LumiaBlack51/twodrive/actions/runs/42976273594/job/130376013665) 的打包测试阶段失败；FUSE 默认测试 93 通过、1 失败、13 忽略。`excluded_backup_does_not_block_new_original_save_across_retries_and_restart` 在将排除备份改回普通名称后，于 `begin_handle_write` 报 `write target changed while claiming its baseline`。不同于 TD-20261111-11/19 的历史 Nautilus 比较，此次尚未执行包兼容性检查。
+- 根因与复现：普通名称恢复后记录为 Dirty，后台可以立即领取同一代上传。首写线程读到 Dirty 后，worker 将其改为 Uploading；`begin_cached_write` 原先要求状态逐字相同，虽然云 ID、ETag、缓存路径、大小及修改时间均未变化，仍拒绝首次写入。新增跨平台数据库回归按此确定顺序执行，不依赖线程调度或真实云端；旧实现稳定失败。原日志未采集完整线程快照，无法证明该次托管失败的每个调度点；测试另覆盖了这条确定成立的同机制竞态。
+- 修复：首次写入 CAS 仅额外接受 Dirty → Uploading 的同代推进，继续核对云 ID、ETag、缓存、大小与修改时间；其他状态改变仍按旧约束拒绝。新写入标记为 Writing 后，较早上传回执仍不能将其变为已缓存，保留继续上传的身份与版本基线；不重试网络、不跳过失败用例或放宽版本保护。
+- 实际验证：Windows 原生 `twodrive-core --lib` 72 项通过，包含同代竞态、旧回执后仍为 Writing、随后新代完成，以及云 ID、ETag、缓存、大小、mtime、Conflict 六项变化均拒绝写入的负例。旧源码运行新增两个测试为 1 失败、1 通过。Rust 格式和 core 全 target 严格 Clippy 通过。当前本机未运行 Linux FUSE 或 `dpkg-buildpackage`，不将跨平台机制测试冒充完整 Debian 制品成功；未重启现用客户端、访问真实文件正文或制造云端写入。
+- 防复发与交付：保留不依赖调度的 core 正反例及原 FUSE 保存/重启回归；须以修复提交对应的 Debian package 完整构建、Linux/Windows 检查和最新 Dot 复核作为后续交付依据。原失败后 `pending_deletes` 表不存在的日志发生于测试栈展开后的后台清理，不据此认定真实数据库损坏。
+
 ## TD-20261111-18：最新 Windows 集成与 PR #50 的相邻接口发生合并冲突
 
 - 日期：2026-11-11；状态：冲突已按行为整合，本机相关回归通过；当前 head 托管检查待执行。

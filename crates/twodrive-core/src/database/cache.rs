@@ -10,11 +10,14 @@ impl Database {
     /// Claim the inspected cache/remote baseline before a delayed first write.
     /// A concurrent delta or upload completion must not supply a newer ETag
     /// for bytes that were opened from an older cached version.
+    /// A worker merely starting this same dirty generation does not change
+    /// that baseline; its later acknowledgement must leave Writing intact.
     pub fn begin_cached_write(&self, record: &FileRecord) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
             "UPDATE files SET state = ?8
              WHERE remote_id = ?1 AND cache_path IS ?2 AND cloud_remote_id IS ?3
-               AND etag = ?4 AND state = ?5 AND size = ?6 AND modified_unix = ?7",
+               AND etag = ?4 AND (state = ?5 OR (?5 = 'dirty' AND state = 'uploading'))
+               AND size = ?6 AND modified_unix = ?7",
             params![
                 record.metadata.remote_id,
                 record
@@ -670,6 +673,94 @@ fn is_mount_trash_path(path: &str) -> bool {
         return false;
     };
     !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod write_claim_tests {
+    use super::*;
+    use crate::NameExclusions;
+
+    #[test]
+    fn promoted_backup_first_write_survives_an_upload_claim() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database::new(root.path().join("db"))
+            .with_name_exclusions(NameExclusions::new(vec![r"\.bak$".into()]).unwrap());
+        db.init().unwrap();
+        let cache = root.path().join("cache");
+        fs::write(&cache, b"old backup").unwrap();
+        db.create_local_file("backup", "/report.bak", &cache)
+            .unwrap();
+        db.mark_dirty_with_size("backup", 10).unwrap();
+        db.move_subtree_and_queue("backup", "/promoted.txt")
+            .unwrap();
+        let inspected = db.get_by_remote_id("backup").unwrap().unwrap();
+        assert_eq!(inspected.state, FileState::Dirty);
+        // The worker wins after the FUSE thread inspected the first-write
+        // baseline, but has not changed either the bytes or remote version.
+        assert!(db.begin_upload(&inspected).unwrap());
+        assert!(db.begin_cached_write(&inspected).unwrap());
+        fs::write(&cache, b"new backup").unwrap();
+        let old_ack = crate::MetadataEntry::new_file("cloud-backup", "/promoted.txt", 10, 1, "v1");
+        let current = db
+            .commit_uploaded("backup", "/promoted.txt", &old_ack, &cache)
+            .unwrap();
+        assert_eq!(current.state, FileState::Writing);
+        assert_eq!(fs::read(&cache).unwrap(), b"new backup");
+        db.mark_dirty_with_size("backup", 10).unwrap();
+        let next = db.get_by_remote_id("backup").unwrap().unwrap();
+        assert_eq!(next.cloud_remote_id.as_deref(), Some("cloud-backup"));
+        assert_eq!(next.metadata.etag, "v1");
+        assert!(db.begin_upload(&next).unwrap());
+        let new_ack = crate::MetadataEntry::new_file("cloud-backup", "/promoted.txt", 10, 2, "v2");
+        let saved = db
+            .commit_uploaded("backup", "/promoted.txt", &new_ack, &cache)
+            .unwrap();
+        assert_eq!(saved.state, FileState::Cached);
+        assert_eq!(saved.metadata.etag, "v2");
+    }
+
+    #[test]
+    fn upload_claim_does_not_allow_a_changed_first_write_baseline() {
+        for change in [
+            "etag = 'external-v2'",
+            "cloud_remote_id = 'replacement'",
+            "cache_path = 'replacement-cache'",
+            "size = size + 1",
+            "modified_unix = modified_unix + 1",
+            "state = 'conflict'",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let db = Database::new(root.path().join("db"));
+            db.init().unwrap();
+            let cache = root.path().join("cache");
+            fs::write(&cache, b"original").unwrap();
+            db.upsert_metadata(&crate::MetadataEntry::new_file(
+                "file",
+                "/report.txt",
+                8,
+                1,
+                "v1",
+            ))
+            .unwrap();
+            db.mark_cached("file", &cache).unwrap();
+            db.mark_dirty_with_size("file", 8).unwrap();
+            let inspected = db.get_by_remote_id("file").unwrap().unwrap();
+            assert!(db.begin_upload(&inspected).unwrap());
+            db.connect()
+                .unwrap()
+                .execute(
+                    &format!("UPDATE files SET {change} WHERE remote_id = 'file'"),
+                    [],
+                )
+                .unwrap();
+            assert!(!db.begin_cached_write(&inspected).unwrap(), "{change}");
+            assert_ne!(
+                db.get_by_remote_id("file").unwrap().unwrap().state,
+                FileState::Writing
+            );
+            assert_eq!(fs::read(&cache).unwrap(), b"original");
+        }
+    }
 }
 
 #[cfg(test)]
