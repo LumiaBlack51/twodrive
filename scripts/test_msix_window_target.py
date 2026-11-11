@@ -4,6 +4,7 @@ from ctypes import wintypes as w
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import subprocess
 import sys
@@ -11,6 +12,69 @@ import tempfile
 import threading
 import time
 import unittest
+
+
+def close_fixture(code, pid, directory):
+    # PS7 -> Python preserves PSModulePath when launching Windows PowerShell.
+    # Let that host resolve its own compatible modules, as the packaging tests do.
+    environment = {k: v for k, v in os.environ.items() if k.upper() != 'PSMODULEPATH'}
+    script = ("$ErrorActionPreference='Stop'\nAdd-Type -TypeDefinition @'\n" + code +
+              "\n'@\n[Console]::WriteLine('TwoDrive fixture compiled')\n" +
+              "[Console]::Out.Flush()\n" +
+              "if ([Console]::ReadLine() -ne 'close') { throw 'Missing fixture command' }\n" +
+              f"[TwoDriveMsixSmoke.Native]::Close({pid})\n")
+    (directory/'close.ps1').write_text(script, encoding='utf-8')
+    # Command text keeps this generated test independent of script-file policy;
+    # no execution policy, installed package or machine setting is changed.
+    process = subprocess.Popen(
+        ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, env=environment)
+    lines = queue.Queue()
+    captured = []
+    def read_output():
+        for line in process.stdout:
+            lines.put(line)
+        lines.put(None)
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    phase = 'C# compilation'
+    try:
+        deadline = time.monotonic()+60
+        while True:
+            try:
+                line = lines.get(timeout=max(.01, deadline-time.monotonic()))
+            except queue.Empty:
+                raise AssertionError(f'{phase} timed out: '+''.join(captured)) from None
+            if line is None:
+                raise AssertionError(f'{phase} exited before ready: '+''.join(captured))
+            captured.append(line)
+            if line.strip() == 'TwoDrive fixture compiled':
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f'{phase} timed out: '+''.join(captured))
+        phase = 'runner close'
+        process.stdin.write('close\n')
+        process.stdin.flush()
+        process.stdin.close()
+        try:
+            result = process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            raise AssertionError(f'{phase} timed out after compilation') from None
+        reader.join(timeout=2)
+        while not lines.empty():
+            line = lines.get_nowait()
+            if line is not None: captured.append(line)
+        if result != 0:
+            raise AssertionError(f'{phase} failed ({result}): '+''.join(captured))
+        return ''.join(captured)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        if not process.stdin.closed: process.stdin.close()
+        reader.join(timeout=2)
+        process.stdout.close()
 
 
 def fixture(directory):
@@ -73,13 +137,10 @@ class WindowTargetTests(unittest.TestCase):
                     self.assertIsNone(child.poll(), 'window fixture exited')
                     self.assertLess(time.monotonic(),deadline)
                     time.sleep(.02)
-                helper=directory/'close.ps1'
-                helper.write_text("$ErrorActionPreference='Stop'\nAdd-Type -TypeDefinition @'\n"+code+"\n'@\n[TwoDriveMsixSmoke.Native]::Close("+str(child.pid)+")\n",encoding='utf-8')
-                result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-File',str(helper)],capture_output=True,text=True,timeout=15)
-                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                output=close_fixture(code,child.pid,directory)
                 deadline=time.monotonic()+3
                 while not (directory/'runner-stopped').exists() and time.monotonic()<deadline:time.sleep(.02)
-                self.assertTrue((directory/'runner-stopped').exists(),'quit reached another thread instead of the runner: '+result.stdout)
+                self.assertTrue((directory/'runner-stopped').exists(),'quit reached another thread instead of the runner: '+output)
                 child.wait(timeout=5)
             finally:
                 if child.poll() is None:child.kill();child.wait(timeout=5)

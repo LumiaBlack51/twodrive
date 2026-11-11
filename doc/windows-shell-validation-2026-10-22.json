@@ -1,0 +1,128 @@
+{
+  "date": "2026-10-22",
+  "integrated_dev_sha": "0fc9e1203433144fcd8a69ce0580123880b50d1d",
+  "scope": "generated fixtures only; no live provider native binding",
+  "changes": [
+    "Preserve upstream PR #41 implementation and retention gates",
+    "Verify expected context for both Shell ID and folder bindings",
+    "Keep WinRT apartment ownership on its creating thread"
+  ],
+  "integrated_validation": {
+    "context_regression_before_fix": "exit 101: changed context must veto ownership",
+    "context_regression_after_fix": "passed on a different new root; original binding accepted; root cleaned before assertions",
+    "rust_fmt": "passed",
+    "strict_all_features_clippy": "passed",
+    "all_features_rust_test_executions_passed": 76,
+    "all_features_ignored_executions_not_counted": 5,
+    "flutter_analyze": "passed",
+    "flutter_existing_widget_model_tests": 43,
+    "first_integrated_harness_attempt": "failed because old harness used flat names/generated-object IDs against the new visual_v1 nested dataset; cleanup succeeded; attempt retained separately",
+    "actual_engine": {
+      "source_sha": "dev 0fc9e1203433144fcd8a69ce0580123880b50d1d plus context ownership guard",
+      "engine_sha256": "df25d33bb167daacb3f2db280b4a711eee734589f3e582913fa5c82865588696",
+      "passed": true,
+      "checks": {
+        "metadata_without_hydration": true,
+        "actual_png_crc_pixels_and_length": true,
+        "os_read_chinese_long_and_standard_files": true,
+        "native_dehydration_retains_private_cache": true,
+        "released_file_can_be_read_again": true,
+        "dirty_file_dehydration_rejected_and_bytes_preserved": true,
+        "independent_unregister_query": true,
+        "generated_files_retained_after_cleanup": true
+      },
+      "cleanup": {
+        "files_retained": true,
+        "unregistered": true
+      }
+    },
+    "explorer_fetch_callbacks_before": 3,
+    "explorer_fetch_callbacks_after": 3,
+    "explorer_visual": {
+      "accepted": false,
+      "source": "dev 0fc9e1203433144fcd8a69ce0580123880b50d1d plus context ownership guard",
+      "method": "read-only capture of the exact newly created Explorer window",
+      "mouse_or_keyboard_input": false,
+      "visible": "generated root showed its directory and Chinese-named file, but no usable status glyph evidence",
+      "accessibility": "requested, returned null",
+      "reason": "capture did not establish cloud/check appearance; cause not confirmed",
+      "screenshot": "Explorer-integrated-unaccepted.png",
+      "initial_independent_visual_pass": "recorded separately at source 00ff180; not inherited by the integrated build"
+    }
+  },
+  "initial_independent_validation": {
+    "date": "2026-10-22",
+    "base_dev_sha": "4fad4d1c8b4faaf43075cf75f5c152e399a036f9",
+    "branch": "codex/windows-explorer-status-20261022",
+    "environment": {
+      "os": "Windows 11 10.0.26340.9750 x64",
+      "rustc": "1.99.1",
+      "flutter": "3.41.8",
+      "dart": "3.11.5"
+    },
+    "scope": "new generated fixture roots only; no live cloud native binding",
+    "checks": {
+      "rust_fmt": "passed",
+      "shell_feature_strict_clippy": "passed",
+      "shell_feature_nonignored_tests": 41,
+      "default_feature_tests": 36,
+      "bare_fixture_feature_tests": 39,
+      "explicit_native_shell_test": "passed",
+      "bare_cfapi_control_has_no_shell_registration": true,
+      "registered_shell_query_by_id_and_folder": true,
+      "metadata_fetch_callbacks": 0,
+      "online_shell_status": 8,
+      "local_shell_status": 14,
+      "pinned_shell_status": 15,
+      "pinned_release_rejected": true,
+      "clean_dehydration_restores_online_status": true,
+      "cfapi_and_shell_unregistered": true,
+      "native_test_generated_files_retained": true,
+      "actual_desktop_engine_release_build": "passed",
+      "desktop_native_ipc_and_dirty_protection": "passed",
+      "engine_fixture_files_retained": 3,
+      "flutter_analyze": "passed",
+      "flutter_existing_widget_model_tests": 41,
+      "isolated_probe_release_package_privacy_check": "passed"
+    },
+    "explorer_observation": {
+      "method": "read-only screenshot and accessibility inspection",
+      "mouse_or_keyboard_input": false,
+      "online_only": {
+        "files": 1,
+        "icon": "blue cloud",
+        "status": "联机时可用"
+      },
+      "locally_available": {
+        "files": 2,
+        "icon": "outlined green check",
+        "status": "在此设备上可用"
+      },
+      "fetch_callbacks_before": 3,
+      "fetch_callbacks_after": 3,
+      "full_screenshot": "retained locally; personal Explorer sidebar is not published"
+    },
+    "unverified_or_disabled": [
+      "pinned icon visual appearance",
+      "syncing/error/conflict icon visual appearance",
+      "thumbnail and indexer behavior",
+      "native root restart",
+      "complete manual GUI acceptance matrix",
+      "Linux GUI",
+      "production writable native synchronization",
+      "live provider native binding"
+    ],
+    "failed_attempts": [
+      "WinRT rejected verbatim path with 0x800700A1; converted local path to DOS spelling preserving UTF-16",
+      "Shell parsing rejected verbatim path with 0x80070057; used the same conversion",
+      "cleanup fixture wrongly expected unhydrated placeholders to survive unregister; hydrated generated bytes before final cleanup"
+    ],
+    "implementation_commit": "00ff1807b21c4c547b7f153d2399da72f14d2ab0",
+    "scope_note": "Historical independent implementation before merging upstream PR #41; its implementation was superseded during integration."
+  },
+  "delivery": {
+    "pull_request": "https://github.com/LumiaBlack51/twodrive/pull/45",
+    "base": "dev",
+    "draft": true
+  }
+}
