@@ -1,0 +1,139 @@
+{
+  "source_commit": "ddd06225113df5c9552c4c81c584e837ee86fe2a",
+  "upstream_members_match_git": 315,
+  "manifest_member_checks": 13,
+  "vendor_files_verified": 16294,
+  "offline_metadata": true,
+  "package_version": "0.2.25-1",
+  "binaries_version": "0.2.25",
+  "validation_scope": "CI isolated tests, offline source and manifest validation; no live OneDrive file end-to-end test",
+  "date": "2026-11-12",
+  "timezone": "Asia/Shanghai",
+  "tag": "v0.2.25-1",
+  "pr": "https://github.com/LumiaBlack51/twodrive/pull/64",
+  "merge_commit": "79a1de56b4cd31f01b67ae5c24eeb8ef9951fcc1",
+  "artifact": {
+    "id": 13932671892,
+    "node_id": "MDg6QXJ0aWZhY3QxMzkzMjY3MTg5Mg==",
+    "name": "twodrive-debian",
+    "size_in_bytes": 89031591,
+    "url": "https://api.github.com/repos/LumiaBlack51/twodrive/actions/artifacts/13932671892",
+    "archive_download_url": "https://api.github.com/repos/LumiaBlack51/twodrive/actions/artifacts/13932671892/zip",
+    "expired": false,
+    "digest": "sha256:d6af6d5506fd2e45ec011015029fff24781895937df6297f590e5662fd84c152",
+    "created_at": "2026-11-12T09:52:15Z",
+    "updated_at": "2026-11-12T09:52:15Z",
+    "expires_at": "2027-02-10T09:38:23Z",
+    "workflow_run": {
+      "id": 43193226299,
+      "repository_id": 1332691457,
+      "head_repository_id": 1332691457,
+      "head_branch": "codex/unpin-inherited-policy",
+      "head_sha": "ddd06225113df5c9552c4c81c584e837ee86fe2a"
+    }
+  },
+  "ci_checks": [
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226398/job/131097539034",
+      "name": "Native checks (Windows)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226399/job/131097538274",
+      "name": "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226398/job/131097539459",
+      "name": "Native checks (Linux)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226299/job/131097539671",
+      "name": "Debian package",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226289/job/131097537907",
+      "name": "Debian packaging policy",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226399/job/131097538807",
+      "name": "test (ubuntu-latest, --features mount, target/release/twodrive-dev)",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226129/job/131097537306",
+      "name": "windows",
+      "state": "SUCCESS"
+    },
+    {
+      "link": "https://github.com/LumiaBlack51/twodrive/actions/runs/43193226129/job/131097537602",
+      "name": "linux",
+      "state": "SUCCESS"
+    }
+  ],
+  "dot_review": "https://github.com/LumiaBlack51/twodrive/pull/64#issuecomment-6820143583",
+  "local_workspace_tests": {
+    "passed": 252,
+    "ignored": 14
+  },
+  "regression_old_code": "two core regressions and CLI regression fail",
+  "regression_fixed_code": "pass",
+  "production_db_copy": {
+    "selected": 6,
+    "affected": 44,
+    "unrelated_changes": 0,
+    "cache_references_unchanged": true,
+    "installed_nautilus_helper_states": {
+      "cached": 6
+    }
+  },
+  "debian_manifest_categories": [
+    "dsc",
+    "buildinfo",
+    "changes"
+  ],
+  "debian_ci_steps": "All steps succeeded, including old-package regression, compatibility, Lintian, lifecycle and offline-source checks",
+  "lintian_log": "W: twodrive source: newer-standards-version 4.7.4 (current is 4.6.2)\n",
+  "limitations": [
+    "Dot review was read-only and did not execute tests",
+    "No real OneDrive file end-to-end test",
+    "Nautilus state helper verified six cached states; displayed pixels were not independently inspected"
+  ],
+  "local_deployment": {
+    "version": "0.2.25",
+    "selected": 6,
+    "affected": 44,
+    "cache_references_unchanged": true,
+    "queue_identities_unchanged": true,
+    "config_bytes_unchanged": true,
+    "integrity": "ok",
+    "mount_restored": true,
+    "runtime_matches_package": true,
+    "binary_sha256": {
+      "twodrive": "043b31c6997fa2b0ec964ddb28330bbfe20ac204f798d86aca19cdffc6dc5c38",
+      "twodrive-daemon": "26ee447cfa090bdf9459c201bedebc207dfad7f585ef258b8f372236b9aa124f"
+    },
+    "nautilus_helper": {
+      "cached": 6,
+      "direct_gui_observation": false
+    },
+    "post_background_check": "all six selected items remain effectively unpinned; no active transfers"
+  },
+  "release_publication": {
+    "published_at": "2026-11-12T09:56:45Z",
+    "draft": false,
+    "prerelease": false,
+    "verified_assets": 11,
+    "before_and_after_guards": "passed",
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.25-1"
+  },
+  "cleanup": {
+    "removed_top_level_task_paths": 14,
+    "audited_allocated_bytes": 4636483584,
+    "scope": "this repair worktree build cache, release staging, disposable production-database copy and one-off scripts/logs/bytecode",
+    "retained": "installed 0.2.25, private minimal state and verified 0.2.24 rollback runtime; unrelated working directories and recovery data preserved"
+  }
+}

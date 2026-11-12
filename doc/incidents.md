@@ -48,7 +48,7 @@
 ## TD-20261112-01：取消始终保留后仍继承父目录固定，菜单成功但图钉不变
 
 - 日期：2026-11-12（Asia/Shanghai）
-- 状态：已修复并通过本地回归；PR/CI、正式制品及本机更新待执行。
+- 状态：已修复、发布并更新本机；核心/CLI 回归、正式制品与实际本地策略已验证，真实 OneDrive 文件端到端及界面像素未验证。
 - 影响版本与环境：本机稳定版 0.2.24、Nautilus 4 集成；main 00d797a 的相同处理路径。
 - 关联历史故障：[2026-07-24 固定继承设计](reliability-fix-2026-07-24.md)；此次为旧取消语义遗漏继承来源，不是已确认的图标刷新回归。
 
@@ -66,26 +66,31 @@ unpin_path 调用 set_explicit_pin(false) 只清除自身 pin_explicit，保持�
 
 ### 解决办法与恢复操作
 
-取消项目自身固定并屏蔽其继承来源；取消目录时使目录成为继承边界，保留子目录中独立设置的显式固定。缓存和未同步状态保持。本机恢复操作尚未执行。
+取消项目自身固定并屏蔽其继承来源；取消目录时使目录成为继承边界，保留子目录中独立设置的显式固定。缓存和受保护的本地/写入/未同步/冲突/错误状态保持。重新固定目录会恢复其子项继承。同步更新 CLI 帮助、手册和中英文使用指南，无新增数据库列。
+
+本机恢复单独执行：先在生产数据库的隔离副本重放原来的 6 项选择，确认 44 条变化全部位于所选范围、无外部项目变化且缓存引用不变。现有 Nautilus 状态读取器在副本返回 6 项 cached。
+
+正式 Release 校验通过后，再次确认无挂载/缓存常规文件句柄、活动传输、受保护待同步文件或 known-folder 待上传任务。保全配置、SQLite/队列、上传会话及一套已核对正式 0.2.24 摘要的回退程序；没有递归复制可下载缓存、历史 backups 或 recovery。沿用 per-user 安装方式原子替换 CLI/daemon，不覆盖自定义 unit，不重启 Nautilus。
+
+通过新版 CLI 重做原 6 项 unpin 后恢复服务与原挂载。运行 daemon 和安装 CLI 的 SHA-256 均与正式 0.2.25 包一致；版本均为 0.2.25。真实数据库的 6 项均不再有效固定，44 条策略变化局限于选择范围，全部缓存引用、配置/unit 字节、原有 3 项元数据与 1 项删除待办身份保持，数据库完整性通过。后台运行后复查仍保持取消；真实 Nautilus 状态读取器返回 6 项 cached。私有备份清单、路径映射及凭据只在本机 0700 维护目录。
 
 ### 验证结果与边界
 
-旧代码运行新增核心回归时 2 项失败、既有独立子项固定回归通过；新增 CLI 真实子进程回归也失败（effective_pinned=true）。修复后完整 workspace 252 项通过、14 项默认忽略；25 项 Nautilus、4 项 Settings、6 项发布保护、2 项锁文件回归、严格 Clippy/fmt 与双锁版本校验均通过。覆盖缓存、写入/未同步/冲突/错误状态保护、目录继承边界、独立子项固定、后续新增与再次固定；额外保护状态扩展回归通过。CI、正式制品及本机恢复尚待执行。未读取未缓存挂载内容，未执行真实 OneDrive 文件写入或重启现用服务。
+旧代码运行新增核心回归时 2 项失败、既有独立子项固定回归通过；新增 CLI 子进程回归也失败（effective_pinned=true）。修复后完整 workspace 252 项通过、14 项环境依赖测试默认忽略；25 项 Nautilus、4 项 Settings、6 项发布保护、2 项锁文件回归、严格 Clippy/fmt 与双锁版本校验均通过。扩展回归额外覆盖 local_only、writing、dirty、uploading、conflict 和 error 的缓存/状态保留。
+
+当前修复头 8 项 CI 全通过，包括 Linux/Windows 原生检查、Debian policy/package 及预览/集成。Debian 真正执行离线构建、旧包失败回归、兼容检查、Lintian、安装/升级/卸载生命周期和源码提取验证。下载 ZIP 的大小与服务器 SHA-256 一致；三类清单的 13 个成员引用通过尺寸/摘要核验，315 个上游成员与发布提交 Git archive 一致，16,294 个依赖文件通过 Cargo 摘要且空 Cargo home 的离线 metadata 通过。Lintian 无错误，仅有检查器 Standards-Version 过旧警告。发布前后 11 项附件及注解标签目标均通过统一门控。
+
+Dot 是只读源码审查，未执行测试；其无阻断意见不代替上述实际运行。没有主动读取未缓存的挂载内容或制造云端写入测试；本地策略/缓存验证不等于真实 OneDrive 文件端到端。已调用现有窗口的 reload 动作，但没有直接观察用户界面像素，因此仅确认状态读取器应映射为绿色勾选图标。
 
 ### 防复发措施与后续
 
-补充文件/目录继承取消、独立子项固定、缓存及未同步数据保留、重算/新增子项/重新固定和 CLI 状态回归；测试需证明旧代码失败、修复后通过。
+保留 unpinning_inherited_file_keeps_cache_and_protected_states、unpinning_inherited_directory_blocks_ancestors_but_preserves_nested_pins 和 CLI unpin_command_cancels_inherited_policy_without_releasing_cache。覆盖独立子项固定、后续新增、相邻/大小写边界、重算及再次固定；不以删除缓存模拟“取消固定”。
+
+已清理本轮独立 worktree 的 Cargo target、发布下载/解包/暂存、生产数据库实验副本、一次性脚本/日志/字节码，按 inode 去重审计的分配占用为 4,636,483,584 字节，不冒称整盘净空间变化。保留现用程序、最小私有状态/恢复证据和已验证 0.2.24 回退程序；不清理其他任务目录或独有恢复材料。修复分支已整合，远程自动删除及本地分支删除已核对。
 
 ### 交付记录
 
-修复提交、PR、Release 待产生并核实。
-
-
-
-
-
-
-
+修复 [PR #64](https://github.com/LumiaBlack51/twodrive/pull/64) 已以 79a1de56b4cd31f01b67ae5c24eeb8ef9951fcc1 合入 main；合并前重读 [Dot 当前头回复](https://github.com/LumiaBlack51/twodrive/pull/64#issuecomment-6820143583)，无阻断意见、无未解决讨论且全部 8 项 CI 成功。发布源 ddd06225113df5c9552c4c81c584e837ee86fe2a 已在 main 内，树与合并提交一致；注解标签 v0.2.25-1 指向该源。[0.2.25-1 Release](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.25-1) 于 2026-11-12 17:56:45 +08:00 公开为稳定 Latest。完整证据见[脱敏验证汇总](unpin-policy-validation-2026-11-12.json)；本机更新及原选择恢复已完成。
 
 ## TD-20261108-11：收尾 CI 再次因历史包下载 HTTP 504 中断
 
