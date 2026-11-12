@@ -29,7 +29,7 @@ impl Database {
             r#"
             UPDATE files
             SET pin_explicit = ?1,
-                pin_inheritance_blocked = CASE WHEN ?1 = 1 THEN 0 ELSE pin_inheritance_blocked END
+                pin_inheritance_blocked = CASE WHEN ?1 = 1 THEN 0 ELSE 1 END
             WHERE remote_id = ?2
             "#,
             params![pinned as i64, remote_id],
@@ -74,10 +74,14 @@ impl Database {
             .context("pin inheritance: reading records")?;
         drop(stmt);
 
-        let explicit_roots = records
+        // A cancelled directory is an inheritance boundary. A nearer explicit
+        // pin still wins, so independently pinned descendants remain pinned.
+        let policies = records
             .iter()
-            .filter(|(_, _, explicit, _)| *explicit)
-            .map(|(remote_id, path, _, _)| (path.clone(), remote_id.clone()))
+            .filter(|(_, _, explicit, blocked)| *explicit || *blocked)
+            .map(|(remote_id, path, explicit, _)| {
+                (path.clone(), explicit.then(|| remote_id.clone()))
+            })
             .collect::<HashMap<_, _>>();
 
         for (remote_id, path, explicit, inheritance_blocked) in records {
@@ -87,8 +91,8 @@ impl Database {
                 let mut ancestor = parent_cloud_path(&path);
                 let mut origin = None;
                 loop {
-                    if let Some(remote_id) = explicit_roots.get(&ancestor) {
-                        origin = Some(remote_id.clone());
+                    if let Some(policy) = policies.get(&ancestor) {
+                        origin = policy.clone();
                         break;
                     }
                     if ancestor == "/" {

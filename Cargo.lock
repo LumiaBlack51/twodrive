@@ -1878,7 +1878,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "twodrive-backend"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "base64",
@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "twodrive-cli"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -1908,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "twodrive-core"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "regex",
@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "twodrive-daemon"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "notify",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "twodrive-fs"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "anyhow",
  "fuser",
