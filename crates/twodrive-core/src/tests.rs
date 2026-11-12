@@ -685,6 +685,127 @@ fn moving_a_subtree_recomputes_inherited_pin_policy() {
 }
 
 #[test]
+fn unpinning_inherited_file_keeps_cache_and_protected_states() {
+    for state in [
+        FileState::Pinned,
+        FileState::LocalOnly,
+        FileState::Writing,
+        FileState::Dirty,
+        FileState::Uploading,
+        FileState::Conflict,
+        FileState::Error,
+    ] {
+        let test = TestDatabase::new("unpin-inherited-file");
+        add_dir(&test.db, "parent", "/Parent");
+        add_file(&test.db, "file", "/Parent/file");
+        add_file(&test.db, "sibling", "/Parent/sibling");
+        let cache = test.root.join("content");
+        fs::write(&cache, b"safe").unwrap();
+        test.db.mark_cached("file", &cache).unwrap();
+        test.db.mark_pinned("parent").unwrap();
+        test.db.mark_state("file", state).unwrap();
+        assert!(
+            test.db
+                .get_by_remote_id("file")
+                .unwrap()
+                .unwrap()
+                .effective_pinned()
+        );
+
+        test.db.mark_unpinned("file").unwrap();
+        test.db.recompute_pin_inheritance().unwrap();
+        let file = test.db.get_by_remote_id("file").unwrap().unwrap();
+        assert!(!file.effective_pinned());
+        assert!(file.pin_inheritance_blocked);
+        assert_eq!(file.cache_path.as_ref(), Some(&cache));
+        assert_eq!(
+            file.state,
+            if state == FileState::Pinned {
+                FileState::Cached
+            } else {
+                state
+            }
+        );
+        assert_eq!(fs::read(&cache).unwrap(), b"safe");
+        assert!(
+            test.db
+                .get_by_remote_id("sibling")
+                .unwrap()
+                .unwrap()
+                .effective_pinned()
+        );
+        test.db.mark_pinned("file").unwrap();
+        assert!(
+            test.db
+                .get_by_remote_id("file")
+                .unwrap()
+                .unwrap()
+                .effective_pinned()
+        );
+    }
+}
+
+#[test]
+fn unpinning_inherited_directory_blocks_ancestors_but_preserves_nested_pins() {
+    let test = TestDatabase::new("unpin-inherited-directory");
+    add_dir(&test.db, "parent", "/Parent");
+    add_dir(&test.db, "selected", "/Parent/Selected");
+    add_dir(&test.db, "nested", "/Parent/Selected/Nested");
+    add_file(&test.db, "file", "/Parent/Selected/file");
+    add_file(&test.db, "independent", "/Parent/Selected/Nested/file");
+    add_file(&test.db, "sibling", "/Parent/Selected-other");
+    add_dir(&test.db, "case", "/Parent/selected");
+    test.db.mark_pinned("parent").unwrap();
+    test.db.mark_pinned("nested").unwrap();
+    test.db.mark_unpinned("selected").unwrap();
+
+    // Future unblocked entries must not reach through the cancelled directory.
+    add_file(&test.db, "new", "/Parent/Selected/new");
+    test.db.recompute_pin_inheritance().unwrap();
+    for id in ["selected", "file", "new"] {
+        assert!(
+            !test
+                .db
+                .get_by_remote_id(id)
+                .unwrap()
+                .unwrap()
+                .effective_pinned(),
+            "{id}"
+        );
+    }
+    for id in ["parent", "nested", "independent", "sibling", "case"] {
+        assert!(
+            test.db
+                .get_by_remote_id(id)
+                .unwrap()
+                .unwrap()
+                .effective_pinned(),
+            "{id}"
+        );
+    }
+    test.db.mark_unpinned("nested").unwrap();
+    assert!(
+        !test
+            .db
+            .get_by_remote_id("independent")
+            .unwrap()
+            .unwrap()
+            .effective_pinned()
+    );
+    test.db.mark_pinned("parent").unwrap();
+    for id in ["selected", "file", "new", "nested", "independent"] {
+        assert!(
+            test.db
+                .get_by_remote_id(id)
+                .unwrap()
+                .unwrap()
+                .effective_pinned(),
+            "{id}"
+        );
+    }
+}
+
+#[test]
 fn unpinning_parent_preserves_nested_explicit_pin() {
     let test = TestDatabase::new("nested-explicit");
     add_dir(&test.db, "parent", "/Parent");

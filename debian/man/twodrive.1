@@ -21,7 +21,8 @@ Inspect status, refresh remote metadata, or run the filesystem mount.
 Keep a file or directory available locally.
 .TP
 .BI "unpin " path
-Remove the inherited keep-local preference.
+Cancel explicit and inherited keep-local preferences without deleting cache.
+For directories, block ancestor policy while preserving independently pinned descendants.
 .TP
 .BI "release " path
 Release synchronized cached data without removing remote files.

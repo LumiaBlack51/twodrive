@@ -77,6 +77,39 @@ impl Drop for Sandbox {
 }
 
 #[test]
+fn unpin_command_cancels_inherited_policy_without_releasing_cache() {
+    let sandbox = Sandbox::new();
+    assert!(sandbox.run(&["init-mock"]).status.success());
+    let db = twodrive_core::Database::new(sandbox.0.join("data/twodrive/twodrive.sqlite3"));
+    db.upsert_metadata(&twodrive_core::MetadataEntry::new_dir(
+        "parent", "/Folder", 1, "etag",
+    ))
+    .unwrap();
+    db.upsert_metadata(&twodrive_core::MetadataEntry::new_file(
+        "child",
+        "/Folder/file",
+        4,
+        1,
+        "etag",
+    ))
+    .unwrap();
+    let cache = sandbox.0.join("content");
+    fs::write(&cache, b"safe").unwrap();
+    db.mark_cached("child", &cache).unwrap();
+    db.mark_pinned("parent").unwrap();
+    for path in ["/Folder/file", "/Folder"] {
+        assert!(sandbox.run(&["unpin", path]).status.success());
+        let output = sandbox.run(&["status-path", "/Folder/file"]);
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("effective_pinned=false\n"), "{text}");
+        assert!(text.contains("state=cached\n"), "{text}");
+        assert_eq!(fs::read(&cache).unwrap(), b"safe");
+        db.mark_pinned("parent").unwrap();
+    }
+}
+
+#[test]
 fn mock_commands_preserve_desktop_protocol_and_persistent_pin_state() {
     let sandbox = Sandbox::new();
     assert!(sandbox.run(&["init-mock"]).status.success());

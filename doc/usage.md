@@ -25,7 +25,7 @@ bounded, allowlisted fields; never share tokens, private databases or raw unrela
 | Nautilus action | Behavior |
 | --- | --- |
 | **Always keep on this device** | Sets an explicit pin policy and downloads existing eligible files, recursively for folders. Pinned content is protected from automatic cache cleanup. |
-| **Cancel always keep on this device** | Removes this item's explicit policy but leaves cache in place. An inherited parent policy can still apply. |
+| **Cancel always keep on this device** | Cancels this item's explicit and inherited pin policy while keeping its cache. For folders, ancestor policy stops at that folder; independently pinned descendants remain pinned. |
 | **Release space** | Cancels explicit and inherited pins for the selection (including folder descendants), then safely removes local cache. The OneDrive item and placeholder stay visible. |
 | **Sync now** | Refreshes metadata, retries pending local operations/uploads, and hydrates pending pins. Not a strictly metadata-only command. |
 | **View status** | Shows the selected item's local state. |
@@ -40,7 +40,7 @@ twodrive unpin /Documents/report.pdf
 twodrive release /Documents/report.pdf
 ```
 
-Pinning a folder applies to existing descendants. Locally created descendants can inherit that policy; **newly discovered cloud files remain online-only**, even beneath an already pinned folder. Folder emblems summarize descendants, not guaranteed offline availability of every child. Confirm downloads before going offline; `twodrive status-path /Documents/report.pdf` reports effective pin state.
+Pinning a folder applies to existing descendants. Descendants can inherit that policy unless an intervening folder blocks inheritance; **newly discovered cloud files remain online-only**, even beneath an already pinned folder. Folder emblems summarize descendants, not guaranteed offline availability of every child. Confirm downloads before going offline; `twodrive status-path /Documents/report.pdf` reports effective pin state.
 
 **During download:** releasing a file cancels the download and removes partial data. A folder release includes descendants. Old handles cannot restart the transfer; an explicit new open can download again. A blocked network request must return or time out before cancellation finishes.
 
