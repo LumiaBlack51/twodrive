@@ -157,7 +157,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
         let Some(since) = db.first_open_write(&record.metadata.remote_id)? else {
             return Ok(false);
         };
-        let size = cache_guard.metadata()?.len();
+        let size = crate::cache_io::logical_size(&cache_path)?;
         let policy = twodrive_core::PeriodicUpload::load(db)?;
         if !checkpoint_due(&policy, size, since, twodrive_core::now_unix()) {
             return Ok(false);
@@ -170,7 +170,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
             .get_by_remote_id(&record.metadata.remote_id)?
             .ok_or_else(|| anyhow::anyhow!("checkpoint target disappeared"))?;
     }
-    let Some(mut snapshot) = gate.capture(&cache_path)? else {
+    let Some(mut snapshot) = gate.capture_named(&cache_path, &record.metadata.name)? else {
         return Ok(false);
     };
     let claimed = db.begin_upload(&record);
@@ -195,6 +195,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
             on_progress(done, total)
         },
     );
+    drop(snapshot);
     drop(activity);
     match uploaded_result {
         Ok(uploaded) => {
@@ -385,13 +386,8 @@ pub(crate) fn recover_pending_delete_id<B: CloudBackend>(
             let source = delete.upload_cache_path.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("interrupted deleted upload has no retained cache")
             })?;
-            let uploaded = backend.upload_file_with_version(
-                upload_path,
-                source,
-                None,
-                None,
-                &mut |_, _| Ok(()),
-            )?;
+            let uploaded =
+                crate::snapshot::upload_cached(backend, upload_path, source, &mut |_, _| Ok(()))?;
             let local_id = delete.local_id.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("interrupted deleted upload has no local identity")
             })?;
@@ -512,17 +508,17 @@ pub(crate) fn recover_interrupted_writes(db: &Database) -> anyhow::Result<()> {
         if excluded {
             // Also migrate legacy owner files that used to retry as normal uploads.
             if let Some(path) = &record.cache_path
-                && let Ok(metadata) = fs::metadata(path)
+                && let Ok(size) = crate::cache_io::logical_size(path)
             {
                 db.mark_state(&record.metadata.remote_id, FileState::LocalOnly)?;
-                db.mark_dirty_with_size(&record.metadata.remote_id, metadata.len())?;
+                db.mark_dirty_with_size(&record.metadata.remote_id, size)?;
             }
         } else if (record.state == FileState::Writing || record.state == FileState::LocalOnly)
             && let Some(path) = &record.cache_path
-            && let Ok(metadata) = fs::metadata(path)
+            && let Ok(size) = crate::cache_io::logical_size(path)
         {
             db.mark_state(&record.metadata.remote_id, FileState::Dirty)?;
-            db.mark_dirty_with_size(&record.metadata.remote_id, metadata.len())?;
+            db.mark_dirty_with_size(&record.metadata.remote_id, size)?;
             // Only promotion of an excluded, cloud-bound name needs a new move.
             // A writer already persisted any actual rename in the namespace queue.
             if record.state == FileState::LocalOnly && record.cloud_remote_id.is_some() {
@@ -588,8 +584,8 @@ pub(crate) fn enqueue_due_checkpoints(db: &Database, sender: &UploadQueue) -> an
     }
     let now = twodrive_core::now_unix();
     for (id, cache, since) in db.pending_open_writes()? {
-        if let Ok(metadata) = fs::metadata(cache)
-            && checkpoint_due(&policy, metadata.len(), since, now)
+        if let Ok(size) = crate::cache_io::logical_size(&cache)
+            && checkpoint_due(&policy, size, since, now)
         {
             sender.send(UploadCommand::Upload(id))?;
         }

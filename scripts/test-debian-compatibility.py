@@ -2,6 +2,7 @@
 """Compare stable package runtime integration and application crate versions."""
 import argparse
 import io
+from pathlib import Path
 import subprocess
 import tarfile
 
@@ -35,6 +36,10 @@ def main():
                 if data.startswith(b'#! /usr/bin/python3\n'):
                     data = b'#!/usr/bin/python3\n' + data.split(b'\n', 1)[1]
                 return mode, data
+            if name == 'usr/bin/twodrive-settings':
+                # The released settings controls intentionally changed. Check the
+                # exact repository script while still requiring the old executable mode.
+                expected = (expected[0], Path(__file__).with_name('twodrive-settings').read_bytes())
             expected, actual = normalized(expected), normalized(actual)
         assert actual == expected, f'changed runtime integration: {name}'
         compared += 1

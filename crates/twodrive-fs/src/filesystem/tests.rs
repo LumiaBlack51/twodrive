@@ -2967,3 +2967,121 @@ fn restart_after_checkpoint_and_another_write_preserves_bytes_without_inventing_
         b"second saved version"
     );
 }
+
+#[test]
+fn reopened_local_temp_accepts_first_create_ack_but_not_external_etag() {
+    let mut test = TestFs::new("temp-first-ack");
+    let (_, initial, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("work.tmp"), libc::O_CREAT)
+        .unwrap();
+    let handle = &test.fs.write_handles[&initial];
+    let id = handle.record_remote_id.clone();
+    let cache = handle.cache_path.clone();
+    let record = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+    let (_, second, _) = test
+        .fs
+        .create_overwrite_upload(record.clone(), false)
+        .unwrap();
+    let (_, stale, _) = test.fs.create_overwrite_upload(record, false).unwrap();
+    test.fs.db.mark_dirty_with_size(&id, 0).unwrap();
+    let dirty = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+    assert!(
+        recover_dirty_record(
+            &test.fs.db,
+            test.fs.backend.as_ref(),
+            dirty,
+            &mut |_, _| Ok(())
+        )
+        .unwrap()
+    );
+    test.fs
+        .change_handle_bytes(second, 0, Some(b"newer"))
+        .unwrap();
+    assert_eq!(fs::read(&cache).unwrap(), b"newer");
+    let mut external = test.fs.db.get_by_remote_id(&id).unwrap().unwrap().metadata;
+    external.remote_id = test
+        .fs
+        .db
+        .get_by_remote_id(&id)
+        .unwrap()
+        .unwrap()
+        .cloud_remote_id
+        .unwrap();
+    external.etag = "external-change".into();
+    test.fs.db.mark_state(&id, FileState::Cached).unwrap();
+    test.fs.db.upsert_metadata(&external).unwrap();
+    assert!(test.fs.begin_handle_write(stale).is_err());
+}
+
+#[test]
+fn office_temp_replacement_uses_same_directory_upload_and_survives_restart() {
+    let archive = crate::office::tests::Fixture::new();
+    let bytes = fs::read(&archive.original).unwrap();
+    let root = test_root("office-temp-replace");
+    fs::create_dir_all(&root).unwrap();
+    let db = Database::new(root.join("db"));
+    db.init().unwrap();
+    let (backend, release) = ConcurrentBackend::with_blocked_first_upload();
+    let mut fuse = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    let (_, old, _) = fuse
+        .create_upload(ROOT_INO, OsStr::new("real.pptx"), libc::O_CREAT)
+        .unwrap();
+    fuse.change_handle_bytes(old, 0, Some(&bytes)).unwrap();
+    fuse.queue_upload_handle(old).unwrap();
+    fuse.write_handles.remove(&old);
+    fuse.backend.wait_for_upload();
+    let (ino, fh, _) = fuse
+        .create_upload(ROOT_INO, OsStr::new("~$replacement.tmp"), libc::O_CREAT)
+        .unwrap();
+    let mut edited = bytes.clone();
+    edited[30 + 20 + 128_001] ^= 0x80;
+    for (i, chunk) in edited.chunks(65536).enumerate() {
+        fuse.change_handle_bytes(fh, (i * 65536) as u64, Some(chunk))
+            .unwrap();
+    }
+    assert!(fuse.write_handles[&fh].office.is_some());
+    let carrier = fuse.write_handles[&fh].cache_path.clone();
+    assert_eq!(fs::metadata(&carrier).unwrap().len(), 0);
+    fuse.inodes.set_size(ino, edited.len() as u64);
+    fuse.queue_upload_handle(fh).unwrap();
+    fuse.write_handles.remove(&fh);
+    fuse.rename_record(
+        ROOT_INO,
+        OsStr::new("~$replacement.tmp"),
+        ROOT_INO,
+        OsStr::new("real.pptx"),
+    )
+    .unwrap();
+    let read = fuse.open_read_handle(ino, carrier.clone()).unwrap();
+    assert_eq!(
+        fuse.read_open_handle(read, 0, edited.len() as u32).unwrap(),
+        edited
+    );
+    fuse.release_read_handle(read).unwrap();
+    release.send(()).unwrap();
+    deletion_tests::wait_for(|| {
+        db.get_by_path("/real.pptx")
+            .unwrap()
+            .is_some_and(|r| r.state == FileState::Cached)
+    });
+    let remote = db
+        .get_by_path("/real.pptx")
+        .unwrap()
+        .unwrap()
+        .cloud_remote_id
+        .unwrap();
+    assert_eq!(fuse.backend.download(&remote).unwrap(), edited);
+    drop(fuse);
+    let reopened = Database::new(root.join("db"));
+    recover_interrupted_writes(&reopened).unwrap();
+    let restored = TwoDriveFs::new(reopened, root.join("cache"), MockBackend::new()).unwrap();
+    let r = restored.db.get_by_path("/real.pptx").unwrap().unwrap();
+    let cached = restored.ensure_cached(&r).unwrap();
+    assert_eq!(
+        crate::cache_io::read_slice(&cached, 0, edited.len() as u32).unwrap(),
+        edited
+    );
+    drop(restored);
+    fs::remove_dir_all(root).unwrap();
+}

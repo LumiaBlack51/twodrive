@@ -1943,6 +1943,8 @@ dependencies = [
  "anyhow",
  "fuser",
  "libc",
+ "memchr",
+ "rusqlite",
  "serde_json",
  "twodrive-backend",
  "twodrive-core",

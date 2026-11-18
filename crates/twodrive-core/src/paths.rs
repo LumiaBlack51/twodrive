@@ -56,6 +56,31 @@ impl AppPaths {
     }
 }
 
+/// The durable range map for this particular local cache generation.
+pub fn office_cache_directory(cache: &Path) -> Option<PathBuf> {
+    Some(
+        cache
+            .parent()?
+            .join(".twodrive-office")
+            .join(cache.file_name()?),
+    )
+}
+
+pub fn cache_content_size(cache: &Path) -> anyhow::Result<u64> {
+    let raw = cache.metadata()?;
+    let Some(d) = office_cache_directory(cache) else {
+        return Ok(raw.len());
+    };
+    if !d.try_exists()? {
+        return Ok(raw.len());
+    }
+    let c = rusqlite::Connection::open_with_flags(
+        d.join("map"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    Ok(c.query_row("SELECT size FROM views WHERE id=0", [], |r| r.get(0))?)
+}
+
 pub fn normalize_cloud_path(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed == "/" {

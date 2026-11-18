@@ -2,6 +2,7 @@ twodrive (0.2.26-1) unstable; urgency=medium
 
   * Upload open mounted files at configurable size-dependent intervals.
   * Preserve overwritten snapshot blocks and verify Graph fragment identities.
+  * Reuse verified Office ZIP payloads across live saves and offline recovery.
   * Expose live periodic upload settings in the stable GTK application.
 
  -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Wed, 18 Nov 2026 22:00:00 +0800

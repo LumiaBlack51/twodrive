@@ -194,7 +194,10 @@ impl Database {
                 )
                 .optional()?;
             if let Some((path, size)) = obsolete
-                && std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() == size)
+                && std::fs::symlink_metadata(&path).is_ok_and(|m| {
+                    m.is_file()
+                        && crate::cache_content_size(Path::new(&path)).is_ok_and(|n| n == size)
+                })
             {
                 tx.execute(
                     "INSERT OR IGNORE INTO retired_cache(cache_path) VALUES (?1)",
@@ -377,6 +380,7 @@ impl Database {
                     WHEN ?3 = 1 OR cloud_remote_id IS NULL THEN ?1
                     ELSE cloud_remote_id
                 END,
+                first_local_ack = CASE WHEN ?3=1 AND cloud_remote_id IS NULL THEN ?2 ELSE first_local_ack END,
                 etag = CASE WHEN ?9 = 1 THEN ?2 ELSE etag END,
                 modified_unix = CASE WHEN ?3 = 1 THEN ?4 ELSE modified_unix END,
                 size = CASE WHEN ?3 = 1 THEN ?5 ELSE size END,

@@ -336,13 +336,17 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
                             &record,
                             generation,
                         )?;
-                        let file = fs::File::open(path)?;
+                        let file = fs::File::open(&path)?;
                         file.lock_shared()?;
-                        *guard = Some(file);
+                        *guard = Some(ReadCache {
+                            file,
+                            path,
+                            office: None,
+                        });
                     }
-                    use std::os::unix::fs::FileExt;
+
                     let mut bytes = vec![0; size as usize];
-                    let count = guard.as_ref().unwrap().read_at(&mut bytes, offset as u64)?;
+                    let count = guard.as_mut().unwrap().read_at(&mut bytes, offset as u64)?;
                     bytes.truncate(count);
                     Ok(bytes)
                 })();

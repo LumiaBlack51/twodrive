@@ -198,6 +198,12 @@ impl Database {
             "periodic_open",
             "ALTER TABLE files ADD COLUMN periodic_open INTEGER NOT NULL DEFAULT 0",
         )?;
+        ensure_column(
+            &conn,
+            "files",
+            "first_local_ack",
+            "ALTER TABLE files ADD COLUMN first_local_ack TEXT",
+        )?;
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_open_write_timer ON files(first_unpublished_write)
             WHERE first_unpublished_write IS NOT NULL AND state='writing'",

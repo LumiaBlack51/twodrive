@@ -82,10 +82,17 @@ def periodic_command(action, policy=None):
 
 def cache_size(path):
     total = 0
+    shared = set()
     for root, _, files in os.walk(os.path.expanduser(path)):
         for name in files:
             try:
-                total += os.path.getsize(os.path.join(root, name))
+                info = os.stat(os.path.join(root, name), follow_symlinks=False)
+                if info.st_nlink > 1:
+                    key = (info.st_dev, info.st_ino)
+                    if key in shared:
+                        continue
+                    shared.add(key)
+                total += info.st_blocks * 512
             except OSError:
                 pass
     return total

@@ -12,6 +12,7 @@ mod delete_retry;
 mod metadata;
 mod mutations;
 mod periodic;
+pub use periodic::OpenWriteClock;
 mod pins;
 mod queries;
 mod schema;

@@ -292,7 +292,7 @@ impl Database {
                 size = ?4,
                 modified_unix = ?5,
                 state = CASE WHEN ?11 THEN 'local_only' WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
-                periodic_open = 0,
+                periodic_open = 0, first_local_ack=NULL,
                 first_unpublished_write = CASE WHEN ?6 = 'writing' AND NOT ?11 THEN ?8 ELSE NULL END,
                 cache_path = ?7,
                 cache_accessed_unix = ?8,

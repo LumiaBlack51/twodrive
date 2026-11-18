@@ -4,22 +4,16 @@ use rusqlite::{OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
 impl Database {
-    /// Existing changed handles can outlive an acknowledgement. Re-arm the
-    /// first-write clock once, keeping continuous saves from moving the deadline.
+    pub fn open_write_clock(&self) -> anyhow::Result<OpenWriteClock> {
+        Ok(OpenWriteClock(self.connect()?))
+    }
     pub fn note_open_write(
         &self,
         id: &str,
         cache: &Path,
         first_write_time: i64,
     ) -> anyhow::Result<()> {
-        self.connect()?.execute(
-            "UPDATE files SET first_unpublished_write=COALESCE(first_unpublished_write,?3),
-                state='writing' WHERE remote_id=?1 AND cache_path=?2
-                AND state IN ('writing','dirty','uploading','cached','pinned')
-                AND (first_unpublished_write IS NULL OR state<>'writing')",
-            params![id, cache.to_string_lossy(), first_write_time],
-        )?;
-        Ok(())
+        self.open_write_clock()?.note(id, cache, first_write_time)
     }
 
     pub fn pending_open_writes(&self) -> anyhow::Result<Vec<(String, PathBuf, i64)>> {
@@ -31,6 +25,19 @@ impl Database {
                 Ok((r.get(0)?, PathBuf::from(r.get::<_, String>(1)?), r.get(2)?))
             })?
             .collect::<Result<_, _>>()?)
+    }
+
+    /// Only consider an unambiguous active upload in the saving directory.
+    pub fn office_save_basis(&self, path: &str) -> anyhow::Result<Option<PathBuf>> {
+        let c = self.connect()?;
+        let mut q=c.prepare("SELECT cache_path FROM files WHERE parent_path=?1 AND upload_cache_path=cache_path
+            AND lower(substr(upload_path,-5)) IN ('.pptx','.xlsx','.docx','.pptm','.xlsm','.docm') LIMIT 2")?;
+        let paths = q
+            .query_map([crate::paths::parent_cloud_path(path)], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((paths.len() == 1).then(|| PathBuf::from(&paths[0])))
     }
 
     pub fn first_open_write(&self, id: &str) -> anyhow::Result<Option<i64>> {
@@ -88,5 +95,20 @@ impl Database {
             "UPDATE files SET state='writing',first_unpublished_write=COALESCE(first_unpublished_write,?3)
              WHERE remote_id=?1 AND cache_path IS ?2 AND periodic_open=1 AND state IN ('uploading','writing')",
             params![r.metadata.remote_id,r.cache_path.as_ref().map(|p| p.to_string_lossy()),now_unix()])?==1)
+    }
+}
+/// Reuse the conditional statement across successive FUSE writes.
+pub struct OpenWriteClock(rusqlite::Connection);
+impl OpenWriteClock {
+    pub fn note(&self, id: &str, cache: &Path, first_write_time: i64) -> anyhow::Result<()> {
+        self.0
+            .prepare_cached(
+                "UPDATE files SET first_unpublished_write=COALESCE(first_unpublished_write,?3),
+                state='writing' WHERE remote_id=?1 AND cache_path=?2
+                AND state IN ('writing','dirty','uploading','cached','pinned')
+                AND (first_unpublished_write IS NULL OR state<>'writing')",
+            )?
+            .execute(params![id, cache.to_string_lossy(), first_write_time])?;
+        Ok(())
     }
 }

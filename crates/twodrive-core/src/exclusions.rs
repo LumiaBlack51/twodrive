@@ -23,7 +23,9 @@ impl NameExclusions {
 
     pub fn matches(&self, name: &str) -> bool {
         // OneDrive rejects Office owner filenames. This rule cannot be disabled.
-        name.starts_with("~$") || self.matcher.is_match(name)
+        name.starts_with("~$")
+            || (name.starts_with(".~lock.") && name.ends_with('#'))
+            || self.matcher.is_match(name)
     }
 }
 
@@ -64,10 +66,16 @@ exclude_name_regexes = ['(?i)\.bak$', '^scratch-[0-9]+\.txt$']
             "~$report.docx",
             "~$report.xlsx",
             "~$report.pptx",
+            ".~lock.slides.pptx#",
         ] {
             assert!(rules.matches(name), "{name}");
         }
-        for name in ["notes.bak.docx", "scratch-x.txt", "report.pptx"] {
+        for name in [
+            "notes.bak.docx",
+            "scratch-x.txt",
+            "report.pptx",
+            ".~lock.notes",
+        ] {
             assert!(!rules.matches(name));
         }
         let text = toml::to_string(&config).unwrap();

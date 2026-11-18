@@ -36,6 +36,7 @@ pub struct TwoDriveFs<B: CloudBackend> {
     inodes: InodeTable,
     read_handles: HashMap<u64, ReadHandle>,
     write_handles: HashMap<u64, WriteHandle>,
+    write_clock: twodrive_core::OpenWriteClock,
     next_fh: u64,
     directory_handles: HashMap<u64, Vec<(u64, FileType, String)>>,
 }
@@ -62,6 +63,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             upload_concurrency,
         );
         Ok(Self {
+            write_clock: db.open_write_clock()?,
             db,
             cache_dir,
             backend,
@@ -119,9 +121,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 // Never block this dispatcher on a deferred network download.
                 if let Ok(guard) = handle._cache_guard.try_lock()
                     && let Some(file) = guard.as_ref()
-                    && let Ok(metadata) = file.metadata()
+                    && let Ok(size) = crate::office::logical_size(&file.path)
                 {
-                    attr.size = metadata.len();
+                    attr.size = size;
                     attr.blocks = attr.size.div_ceil(512);
                 }
                 return Some(attr);
@@ -173,19 +175,28 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         result
     }
 }
-#[derive(Debug)]
+struct ReadCache {
+    file: fs::File,
+    path: PathBuf,
+    office: Option<crate::office::Office>,
+}
+impl ReadCache {
+    fn read_at(&mut self, buf: &mut [u8], offset: u64) -> anyhow::Result<usize> {
+        crate::office::read_handle(&self.path, &self.file, &mut self.office, buf, offset)
+    }
+}
 struct ReadHandle {
     open_attr: FileAttr,
     ino: u64,
     cache_path: PathBuf,
-    _cache_guard: Arc<Mutex<Option<fs::File>>>,
+    _cache_guard: Arc<Mutex<Option<ReadCache>>>,
     unlinked: bool,
     deferred_record: Option<FileRecord>,
     download_generation: i64,
 }
 
-#[derive(Debug)]
 struct WriteHandle {
+    office: Option<crate::office::Office>,
     ino: u64,
     path: String,
     record_remote_id: String,

@@ -8,30 +8,62 @@ use std::path::{Path, PathBuf};
 const BLOCK: u64 = 1024 * 1024;
 const DIRECTORY: &str = ".twodrive-upload-snapshots";
 
+pub(crate) fn upload_cached<B: twodrive_backend::CloudBackend>(
+    backend: &B,
+    path: &str,
+    cache: &Path,
+    progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
+) -> anyhow::Result<twodrive_core::MetadataEntry> {
+    let gate = CacheGate::acquire(cache)?;
+    let mut snapshot = gate
+        .capture_named(cache, path)?
+        .ok_or_else(|| io::Error::other("another transfer owns this snapshot"))?;
+    drop(gate);
+    backend.upload_snapshot_with_version(path, &mut snapshot, None, None, progress)
+}
 pub(crate) struct CacheGate {
     root: PathBuf,
     _lock: File,
 }
 
 impl CacheGate {
-    pub(crate) fn acquire(cache: &Path) -> io::Result<Self> {
-        let root = cache
+    fn lock_path(cache: &Path) -> io::Result<PathBuf> {
+        let parent = cache
             .parent()
-            .ok_or_else(|| io::Error::other("cache has no parent"))?
-            .join(DIRECTORY);
-        fs::create_dir_all(root.join("entries"))?;
-        // Fixed stripes bound the number of lock files and avoid serializing a
-        // large truncate with every unrelated document's writes.
+            .ok_or_else(|| io::Error::other("cache has no parent"))?;
         let name = cache
             .file_name()
             .ok_or_else(|| io::Error::other("missing cache name"))?;
         let stripe = crate::conflicts::stable_path_fingerprint(&name.to_string_lossy()) % 64;
-        let lock = private_options()
-            .create(true)
-            .truncate(false)
-            .open(root.join(format!("lock-{stripe}")))?;
+        Ok(parent.join(DIRECTORY).join(format!("lock-{stripe}")))
+    }
+    pub(crate) fn acquire(cache: &Path) -> io::Result<Self> {
+        let path = Self::lock_path(cache)?;
+        let root = path.parent().unwrap().to_owned();
+        let lock = match private_options().open(&path) {
+            Ok(lock) => lock,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                fs::create_dir_all(root.join("entries"))?;
+                private_options().create(true).truncate(false).open(path)?
+            }
+            Err(e) => return Err(e),
+        };
         lock.lock()?;
         Ok(Self { root, _lock: lock })
+    }
+    #[cfg(unix)]
+    pub(crate) fn pair(first: &Path, second: &Path) -> io::Result<(Self, Option<Self>)> {
+        let first_key = Self::lock_path(first)?;
+        let second_key = Self::lock_path(second)?;
+        if first_key == second_key {
+            return Ok((Self::acquire(first)?, None));
+        }
+        let (a, b) = if first_key < second_key {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        Ok((Self::acquire(a)?, Some(Self::acquire(b)?)))
     }
 
     fn entry(&self, path: &Path) -> io::Result<PathBuf> {
@@ -83,7 +115,15 @@ impl CacheGate {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn capture(&self, path: &Path) -> io::Result<Option<CacheSnapshot>> {
+        self.capture_named(path, "")
+    }
+    pub(crate) fn capture_named(
+        &self,
+        path: &Path,
+        _name: &str,
+    ) -> io::Result<Option<CacheSnapshot>> {
         let entry = self.entry(path)?;
         fs::create_dir_all(&entry)?;
         let owner = private_options()
@@ -105,7 +145,32 @@ impl CacheGate {
         }
         let mut base = File::open(path)?;
         let size = base.metadata()?.len();
-        let memory = if size <= 10 * 1024 * 1024 {
+        #[cfg(unix)]
+        let office = {
+            use crate::office::{Office, extension};
+            let mut active = if extension(_name) {
+                Office::enroll(path, path, true)
+            } else {
+                Office::open(path)
+            }
+            .map_err(io::Error::other)?;
+            if let Some(o) = &mut active {
+                o.freeze().map_err(io::Error::other)?;
+            }
+            active
+        };
+        #[cfg(unix)]
+        let use_office = office.is_some();
+        #[cfg(not(unix))]
+        let use_office = false;
+        #[cfg(unix)]
+        let size = match &office {
+            Some(o) => o.size(1).map_err(io::Error::other)?,
+            None => size,
+        };
+        let memory = if use_office {
+            None
+        } else if size <= 10 * 1024 * 1024 {
             let mut bytes = vec![0; size as usize];
             base.read_exact(&mut bytes)?;
             Some(bytes)
@@ -121,6 +186,8 @@ impl CacheGate {
             path: path.into(),
             entry,
             base,
+            #[cfg(unix)]
+            office,
             memory,
             owner: Some(owner),
             size,
@@ -168,6 +235,9 @@ pub(crate) fn prune_abandoned(cache_dir: &Path) -> io::Result<()> {
                 return Err(io::Error::other("unrecognized snapshot recovery material"));
             }
         }
+        if let Some(mut o) = crate::office::Office::open(&path).map_err(io::Error::other)? {
+            o.thaw().map_err(io::Error::other)?;
+        }
         drop(owner);
         fs::remove_dir_all(entry)?;
     }
@@ -189,6 +259,8 @@ pub(crate) struct CacheSnapshot {
     path: PathBuf,
     entry: PathBuf,
     base: File,
+    #[cfg(unix)]
+    office: Option<crate::office::Office>,
     memory: Option<Vec<u8>>,
     owner: Option<File>,
     size: u64,
@@ -208,6 +280,12 @@ impl Read for CacheSnapshot {
             return Ok(n);
         }
         let _gate = CacheGate::acquire(&self.path)?;
+        #[cfg(unix)]
+        if let Some(office) = &self.office {
+            let n = office.read(1, self.pos, buf).map_err(io::Error::other)?;
+            self.pos += n as u64;
+            return Ok(n);
+        }
         let index = self.pos / BLOCK;
         let within = self.pos % BLOCK;
         let n = (self.size - self.pos)
@@ -244,6 +322,12 @@ impl Seek for CacheSnapshot {
 impl Drop for CacheSnapshot {
     fn drop(&mut self) {
         if let Ok(_gate) = CacheGate::acquire(&self.path) {
+            #[cfg(unix)]
+            if let Some(office) = &mut self.office
+                && let Err(err) = office.thaw()
+            {
+                eprintln!("twodrive: frozen Office cleanup deferred: {err}");
+            }
             drop(self.owner.take());
             if let Err(err) = fs::remove_dir_all(&self.entry) {
                 eprintln!("twodrive: snapshot cleanup deferred: {err}");

@@ -86,6 +86,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         self.write_handles.insert(
             fh,
             WriteHandle {
+                office: None,
                 _cache_guard: cache_guard,
                 ino,
                 path,
@@ -140,7 +141,11 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             if !self.db.begin_truncated_write(&record, &cache_path)? {
                 anyhow::bail!("truncate target changed since open; reopen before writing");
             }
-            cache_guard.set_len(0)?;
+            if let Some(mut o) = crate::office::Office::open(&cache_path)? {
+                o.truncate(0)?;
+            } else {
+                cache_guard.set_len(0)?;
+            }
         }
         let updated = self
             .db
@@ -154,6 +159,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         self.write_handles.insert(
             fh,
             WriteHandle {
+                office: None,
                 _cache_guard: cache_guard,
                 ino,
                 path: record.metadata.path,
@@ -178,20 +184,12 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         if handle.changed || handle.unlinked {
             return Ok(());
         }
-        let record = self
-            .db
-            .get_by_remote_id(&handle.record_remote_id)?
-            .ok_or_else(|| anyhow::anyhow!("write target disappeared"))?;
-        if record.cache_path.as_ref() != Some(&handle.cache_path)
-            || (record.state != FileState::LocalOnly
-                && record_upload_etag(&record) != handle.base_etag)
-        {
+        if !self.db.claim_open_write(
+            &handle.record_remote_id,
+            &handle.cache_path,
+            handle.base_etag.as_deref(),
+        )? {
             anyhow::bail!("write target changed since open; reopen before writing");
-        }
-        if !self.db.begin_cached_write(&record)? {
-            anyhow::bail!(
-                "write target changed while claiming its baseline; reopen before writing"
-            );
         }
         handle.changed = true;
         Ok(())
@@ -207,6 +205,22 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .write_handles
             .get(&fh)
             .ok_or_else(|| anyhow::anyhow!("unknown write handle"))?;
+        // Save-as-replace writers can use arbitrary temporary names. Probe only
+        // on the first signature write, before taking the destination stripe.
+        if offset == 0
+            && data.is_some_and(|b| b.starts_with(b"PK\x03\x04"))
+            && handle.office.is_none()
+            && handle._cache_guard.metadata()?.len() == 0
+            && let Some(source) = self.db.office_save_basis(&handle.path)?
+            && source != handle.cache_path
+        {
+            let _gates = crate::snapshot::CacheGate::pair(&source, &handle.cache_path)?;
+            if let Some(basis) = crate::office::Office::open(&source)?
+                && basis.is_frozen()?
+            {
+                crate::office::Office::enroll(&handle.cache_path, &source, false)?;
+            }
+        }
         let gate = crate::snapshot::CacheGate::acquire(&handle.cache_path)?;
         let end = match data {
             Some(bytes) => offset
@@ -219,13 +233,22 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         }
         gate.preserve(&handle.cache_path, offset, end)?;
         self.begin_handle_write(fh)?;
-        let handle = &self.write_handles[&fh];
+        let handle = self.write_handles.get_mut(&fh).unwrap();
+        if handle.office.is_none() {
+            handle.office = crate::office::Office::open(&handle.cache_path)?;
+        }
         if !handle.unlinked {
-            self.db.note_open_write(
+            self.write_clock.note(
                 &handle.record_remote_id,
                 &handle.cache_path,
                 twodrive_core::now_unix(),
             )?;
+        }
+        if let Some(o) = &mut handle.office {
+            return match data {
+                Some(bytes) => o.write(offset, bytes),
+                None => o.truncate(offset),
+            };
         }
         match data {
             Some(bytes) => write_slice(&handle.cache_path, offset, bytes),
@@ -372,6 +395,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                     && !other.unlinked
             })
         {
+            crate::office::sync(&current.cache_path)?;
             current._cache_guard.sync_all()?;
             self.write_handles.get_mut(&fh).unwrap().uploaded = true;
             return Ok(());
@@ -391,6 +415,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             return Ok(());
         }
         let _gate = crate::snapshot::CacheGate::acquire(&handle.cache_path)?;
+        if let Some(o) = crate::office::Office::open(&handle.cache_path)? {
+            o.sync()?;
+        }
         handle._cache_guard.sync_all()?;
         if self
             .db
@@ -400,7 +427,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             handle.activity.take();
             return Ok(());
         }
-        let size = fs::metadata(&handle.cache_path)?.len();
+        let size = crate::office::logical_size(&handle.cache_path)?;
         self.db
             .mark_dirty_with_size(&handle.record_remote_id, size)?;
         // Publish the completed local generation before an editor can reopen
@@ -424,6 +451,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .write_handles
             .get(&fh)
             .ok_or_else(|| anyhow::anyhow!("write handle does not exist"))?;
+        crate::office::sync(&handle.cache_path)?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -444,6 +472,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         let cache_path = record
             .cache_path
             .ok_or_else(|| anyhow::anyhow!("file has no local cache to sync"))?;
+        crate::office::sync(&cache_path)?;
         let file = fs::File::open(cache_path)?;
         if datasync {
             file.sync_data()?;
@@ -478,7 +507,11 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .open(&cache_path)?;
         let gate = crate::snapshot::CacheGate::acquire(&cache_path)?;
         gate.preserve(&cache_path, size, u64::MAX)?;
-        file.set_len(size)?;
+        if let Some(mut o) = crate::office::Office::open(&cache_path)? {
+            o.truncate(size)?;
+        } else {
+            file.set_len(size)?;
+        }
         file.sync_all()?;
         self.db
             .mark_cached(&record.metadata.remote_id, &cache_path)?;

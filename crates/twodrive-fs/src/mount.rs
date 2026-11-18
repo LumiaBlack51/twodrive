@@ -142,6 +142,7 @@ fn maintain_cache(db: &Database, cache: &Path, retain_seconds: i64) -> anyhow::R
     db.prune_cache(retain_seconds)?;
     db.prune_retired_cache(cache)?;
     crate::snapshot::prune_abandoned(cache)?;
+    crate::office::maintain(cache, db)?;
     Ok(())
 }
 
