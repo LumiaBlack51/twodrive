@@ -523,7 +523,9 @@ pub(crate) fn recover_interrupted_writes(db: &Database) -> anyhow::Result<()> {
         {
             db.mark_state(&record.metadata.remote_id, FileState::Dirty)?;
             db.mark_dirty_with_size(&record.metadata.remote_id, metadata.len())?;
-            if record.cloud_remote_id.is_some() {
+            // Only promotion of an excluded, cloud-bound name needs a new move.
+            // A writer already persisted any actual rename in the namespace queue.
+            if record.state == FileState::LocalOnly && record.cloud_remote_id.is_some() {
                 db.move_subtree_and_queue(&record.metadata.remote_id, &record.metadata.path)?;
             }
         }

@@ -2915,3 +2915,55 @@ fn periodic_upload_keeps_open_writer_and_only_the_current_snapshot() {
     drop(fuse);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn restart_after_checkpoint_and_another_write_preserves_bytes_without_inventing_a_move() {
+    let mut test = TestFs::new("checkpoint-crash");
+    let (_, fh, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("draft.pptx"), libc::O_CREAT)
+        .unwrap();
+    let handle = &test.fs.write_handles[&fh];
+    let id = handle.record_remote_id.clone();
+    let cache = handle.cache_path.clone();
+    test.fs
+        .db
+        .note_open_write(&id, &cache, now_unix() - 120)
+        .unwrap();
+    test.fs.change_handle_bytes(fh, 0, Some(b"first")).unwrap();
+    let record = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+    assert!(
+        recover_dirty_record(
+            &test.fs.db,
+            test.fs.backend.as_ref(),
+            record,
+            &mut |_, _| Ok(())
+        )
+        .unwrap()
+    );
+    test.fs
+        .change_handle_bytes(fh, 0, Some(b"second saved version"))
+        .unwrap();
+    test.fs.sync_handle(fh, false).unwrap();
+    // Drop only the volatile handle (no release), then reopen SQLite like a fresh daemon.
+    test.fs.write_handles.remove(&fh);
+    let reopened = Database::new(test.fs.db.path());
+    recover_interrupted_writes(&reopened).unwrap();
+    assert!(
+        reopened.pending_metadata_operation(&id).unwrap().is_none(),
+        "a content-only edit cannot acquire a cloud move on restart"
+    );
+    assert_eq!(
+        recover_dirty_uploads(&reopened, test.fs.backend.as_ref()).unwrap(),
+        1
+    );
+    let committed = reopened.get_by_remote_id(&id).unwrap().unwrap();
+    assert_eq!(committed.state, FileState::Cached);
+    assert_eq!(
+        test.fs
+            .backend
+            .download(committed.cloud_remote_id.as_deref().unwrap())
+            .unwrap(),
+        b"second saved version"
+    );
+}

@@ -460,6 +460,41 @@ fn upload_session_store_round_trips_with_private_permissions() {
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    // A newly constructed backend must use the persisted content identity.
+    let paths = AppPaths {
+        config_dir: root.clone(),
+        config_path: root.join("config.toml"),
+        data_dir: root.clone(),
+        cache_dir: root.join("cache"),
+        db_path: root.join("db"),
+        mount_dir: root.join("mount"),
+        token_path: root.join("tokens.json"),
+    };
+    TokenStore::new(&paths.token_path)
+        .save(&TokenData {
+            access_token: "synthetic-expired".into(),
+            refresh_token: None,
+            expires_at_unix: 0,
+        })
+        .unwrap();
+    let graph = GraphBackend::from_paths(&paths).unwrap();
+    let matching = |graph: &GraphBackend, digest: &str| {
+        graph
+            .matching_upload_session("/large.bin", 42, digest, Some("remote-id"), Some("etag"))
+            .unwrap()
+            .is_some()
+    };
+    assert!(matching(&graph, "test-content"));
+    assert!(!matching(&graph, "different-equal-length-content"));
+    drop(graph);
+    let mut legacy: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    legacy["sessions"]["/large.bin"]
+        .as_object_mut()
+        .unwrap()
+        .remove("content_id");
+    fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let graph = GraphBackend::from_paths(&paths).unwrap();
+    assert!(!matching(&graph, "test-content"));
     fs::remove_dir_all(root).unwrap();
 }
 
