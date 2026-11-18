@@ -16,7 +16,7 @@ class BackupPicker extends FileSelectorPlatform {
 }
 
 class BackupClient extends StorageClient {
-  BackupClient() {
+  BackupClient({this.versionedProviders = false}) {
     available = true;
     selected = active;
     profiles = [
@@ -31,11 +31,15 @@ class BackupClient extends StorageClient {
           'revision': 'rev-$id',
           'name': name,
           'account_name': 'test-$id@example.invalid',
-          'capabilities': {'backup': supported},
+          'capabilities': {
+            'backup': supported || versionedProviders,
+            'versioned_backup': !supported && versionedProviders,
+          },
         },
     ];
     status = snapshot();
   }
+  final bool versionedProviders;
   String active = 'a';
   final calls = <Json>[];
   final saved = <String, List<Json>>{
@@ -56,7 +60,9 @@ class BackupClient extends StorageClient {
     'connections': [
       for (final id in ['a', 'b', 'i', 'd']) {'id': id},
     ],
-    'capabilities': {'backup': active == 'a' || active == 'b'},
+    'capabilities': {
+      'backup': active == 'a' || active == 'b' || versionedProviders,
+    },
   };
   @override
   Future<Json> request(
@@ -215,6 +221,26 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('versioned clouds can save separate backup tasks', (
+    tester,
+  ) async {
+    final c = BackupClient(versionedProviders: true);
+    await open(tester, c);
+    for (final (name, id) in [('iCloud Drive', 'i'), ('百度网盘', 'd')]) {
+      await choose(tester, '$name · test-$id@example.invalid');
+      expect(c.selected, id);
+      expect(find.textContaining('带版本标记的文件'), findsOneWidget);
+      await tester.tap(find.text('选择备份文件夹'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('每个新版本单独保存'), findsOneWidget);
+      await tester.tap(find.text('开始备份'));
+      await tester.pumpAndSettle();
+      expect(c.saved[id]?.single['local'], '/local/Photos');
+    }
+    expect(c.saved['a']?.single['local'], '/local/Alpha');
+    expect(c.saved['b']?.single['local'], '/local/Beta');
+  });
 
   testWidgets(
     'load failure disables mutations until existing tasks reload successfully',

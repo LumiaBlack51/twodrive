@@ -73,6 +73,30 @@ impl RcloneDrive {
         progress(size, size)?;
         Ok(entry)
     }
+    pub(super) fn put_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        let (_root, _lock) = self.mutation_lock()?;
+        let size = fs::metadata(source)?.len();
+        progress(0, size)?;
+        ensure!(
+            self.get_metadata_by_path(path)?.is_none(),
+            "备份版本路径已存在"
+        );
+        let mut cmd = command(&self.exe, &self.state, &self.pass, &self.route);
+        // The worker allocates an unpredictable filename for each attempt and
+        // never retries a previously exposed name. Immutable mode also stops
+        // at an existing destination found by the component's initial lookup.
+        cmd.arg("copyto")
+            .arg(source)
+            .arg(format!("twodrive:{}", path.trim_start_matches('/')))
+            .args(["--immutable", "--ignore-existing"]);
+        self.mutate(cmd, &mut || progress(0, size))?;
+        progress(size, size)
+    }
     pub(super) fn mkdir_manual(&self, path: &str) -> anyhow::Result<MetadataEntry> {
         let (_root, _lock) = self.mutation_lock()?;
         valid_path(path)?;
