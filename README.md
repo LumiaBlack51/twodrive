@@ -87,7 +87,7 @@ Since 0.2.8, TwoDrive includes its public Microsoft application ID: **no app reg
 
 Tokens are stored in a local JSON file with mode `0600`, not an encrypted keyring; Secret Service is not integrated. File and directory rwx permissions are stored locally and enforced on this mount, including executable files and `chmod`; they survive remounts but do not sync to OneDrive. Cloud-only imports and existing entries default to 0644 (files) or 0755 (directories). Full POSIX ownership, special mode bits, and directory timestamp semantics are not preserved; the mount root mode remains fixed.
 
-The desktop helpers are still limited: **Settings can change upload sources; other settings remain read-only**, and **Pause sync currently changes the tray display only**, not the daemon. See [current limitations and safety](doc/usage.md#current-limitations-and-safety) before use.
+The desktop helpers are still limited: **Settings can change upload sources and periodic upload intervals for open mounted files**, and **Pause sync currently changes the tray display only**, not the daemon. See [current limitations and safety](doc/usage.md#current-limitations-and-safety) before use.
 
 ## Development
 

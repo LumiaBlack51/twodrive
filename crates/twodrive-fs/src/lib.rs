@@ -17,6 +17,7 @@ mod probes;
 #[cfg(unix)]
 mod read_pool;
 mod recovery;
+mod snapshot;
 mod upload_queue;
 
 #[cfg(unix)]

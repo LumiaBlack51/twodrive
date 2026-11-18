@@ -382,6 +382,7 @@ impl Database {
                 size = CASE WHEN ?3 = 1 THEN ?5 ELSE size END,
                 state = CASE
                     WHEN ?3 = 0 THEN state
+                    WHEN periodic_open = 1 THEN 'writing'
                     WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned'
                     ELSE 'cached'
                 END,

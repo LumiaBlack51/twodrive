@@ -2845,3 +2845,73 @@ fn atomic_replacement_without_old_handles_must_not_leak_superseded_cache() {
         "superseded cache has no handles or database reference, but replacement and prune both leave it behind"
     );
 }
+
+#[test]
+fn periodic_upload_keeps_open_writer_and_only_the_current_snapshot() {
+    let root = test_root("periodic-open-writer");
+    fs::create_dir_all(&root).unwrap();
+    let db = Database::new(root.join("db"));
+    db.init().unwrap();
+    let (backend, release) = ConcurrentBackend::with_blocked_first_upload();
+    let mut fuse = TwoDriveFs::new(db.clone(), root.join("cache"), backend).unwrap();
+    let (_, fh, _) = fuse
+        .create_upload(ROOT_INO, OsStr::new("open.pptx"), libc::O_CREAT)
+        .unwrap();
+    let id = fuse.write_handles[&fh].record_remote_id.clone();
+    let cache = fuse.write_handles[&fh].cache_path.clone();
+    let a = vec![0x41; (12 << 20) + 3];
+    let since = now_unix() - 600;
+    db.note_open_write(&id, &cache, since).unwrap();
+    fuse.change_handle_bytes(fh, 0, Some(&a)).unwrap();
+    assert_eq!(db.first_open_write(&id).unwrap(), Some(since));
+    let disabled = twodrive_core::PeriodicUpload {
+        enabled: false,
+        ..Default::default()
+    };
+    disabled.save(&db).unwrap();
+    crate::recovery::enqueue_due_checkpoints(&db, &fuse.upload_pool.sender).unwrap();
+    assert!(fuse.upload_pool.sender.pending.lock().unwrap().is_empty());
+    twodrive_core::PeriodicUpload::default().save(&db).unwrap();
+    crate::recovery::enqueue_due_checkpoints(&db, &fuse.upload_pool.sender).unwrap();
+    fuse.backend.wait_for_upload();
+    db.note_open_write(&id, &cache, since).unwrap();
+    let pos = 6 << 20;
+    fuse.change_handle_bytes(fh, pos, Some(b"B")).unwrap();
+    fuse.change_handle_bytes(fh, pos, Some(b"C")).unwrap();
+    let entry = root
+        .join("cache/.twodrive-upload-snapshots/entries")
+        .join(cache.file_name().unwrap());
+    assert_eq!(entry.join("6").metadata().unwrap().len(), 1 << 20);
+    assert_eq!(fs::read_dir(&entry).unwrap().count(), 3); // size, owner and one saved block
+    fuse.change_handle_bytes(fh, (11 << 20) + 3, None).unwrap();
+    release.send(()).unwrap();
+    deletion_tests::wait_for(|| {
+        db.get_by_remote_id(&id)
+            .unwrap()
+            .unwrap()
+            .cloud_remote_id
+            .is_some()
+    });
+    let record = db.get_by_remote_id(&id).unwrap().unwrap();
+    let remote = record.cloud_remote_id.unwrap();
+    assert_eq!(fuse.backend.download(&remote).unwrap(), a);
+    assert_eq!(record.state, FileState::Writing);
+    crate::recovery::enqueue_due_checkpoints(&db, &fuse.upload_pool.sender).unwrap();
+    deletion_tests::wait_for(|| {
+        db.first_open_write(&id).unwrap().is_none()
+            && db.get_by_remote_id(&id).unwrap().unwrap().state == FileState::Writing
+            && !entry.exists()
+    });
+    let mut expected = a[..(11 << 20) + 3].to_vec();
+    expected[pos as usize] = b'C';
+    assert_eq!(fuse.backend.download(&remote).unwrap(), expected);
+    assert!(fuse.write_handles.contains_key(&fh));
+    fuse.queue_upload_handle(fh).unwrap();
+    assert_eq!(
+        db.get_by_remote_id(&id).unwrap().unwrap().state,
+        FileState::Cached
+    );
+    assert!(db.pending_open_writes().unwrap().is_empty());
+    drop(fuse);
+    fs::remove_dir_all(root).unwrap();
+}

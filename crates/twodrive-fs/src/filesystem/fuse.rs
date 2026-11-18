@@ -130,13 +130,7 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         }
         if let Some(size) = size {
             let result = if let Some(fh) = fh.filter(|fh| self.write_handles.contains_key(fh)) {
-                self.begin_handle_write(fh).and_then(|()| {
-                    OpenOptions::new()
-                        .write(true)
-                        .open(&self.write_handles[&fh].cache_path)
-                        .and_then(|file| file.set_len(size))
-                        .map_err(anyhow::Error::from)
-                })
+                self.change_handle_bytes(fh, size, None)
             } else {
                 self.truncate_without_handle(ino, size)
             };
@@ -430,22 +424,15 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
             reply.error(libc::EINVAL);
             return;
         }
-        if !data.is_empty()
-            && let Err(err) = self.begin_handle_write(fh)
-        {
-            eprintln!("twodrive begin write error: {err:#}");
-            reply.error(libc::EIO);
-            return;
-        }
         let Some(handle) = self.write_handles.get(&fh) else {
             reply.error(libc::EBADF);
             return;
         };
 
-        match write_slice(&handle.cache_path, offset as u64, data) {
+        let ino = handle.ino;
+        match self.change_handle_bytes(fh, offset as u64, Some(data)) {
             Ok(()) => {
-                self.inodes
-                    .set_size(handle.ino, offset as u64 + data.len() as u64);
+                self.inodes.set_size(ino, offset as u64 + data.len() as u64);
                 reply.written(data.len() as u32);
             }
             Err(err) => {

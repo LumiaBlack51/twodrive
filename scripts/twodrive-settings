@@ -70,6 +70,16 @@ def save_known_folder_source(folder, path):
         return False, str(exc)
 
 
+def periodic_command(action, policy=None):
+    args = [twodrive_bin(), "periodic-upload", action]
+    if policy is not None:
+        args.append(json.dumps(policy))
+    result = subprocess.run(args, capture_output=True, text=True, timeout=10, check=False)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "Cannot update periodic uploads")
+    return json.loads(result.stdout)
+
+
 def cache_size(path):
     total = 0
     for root, _, files in os.walk(os.path.expanduser(path)):
@@ -143,6 +153,8 @@ class SettingsApp(Gtk.Application):
             row.append(right)
             box.append(row)
 
+        self.periodic_settings(box)
+
         sources_title = Gtk.Label(label="Upload sources")
         sources_title.add_css_class("title-3")
         sources_title.set_xalign(0)
@@ -159,6 +171,67 @@ class SettingsApp(Gtk.Application):
         scroll.set_child(box)
         window.set_child(scroll)
         window.present()
+
+    def periodic_settings(self, box):
+        heading = Gtk.Label(label="Periodic uploads for open files", xalign=0)
+        heading.add_css_class("title-3")
+        box.append(heading)
+        notice = Gtk.Label(xalign=0, wrap=True)
+        try:
+            policy = periodic_command("get")
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            notice.set_text(str(exc))
+            box.append(notice)
+            return
+
+        enabled = Gtk.CheckButton(label="Upload changed files while they are still open")
+        enabled.set_active(policy["enabled"])
+        box.append(enabled)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=6)
+        box.append(grid)
+        grid.attach(Gtk.Label(label="File size upper limit (MiB)", xalign=0), 0, 0, 1, 1)
+        grid.attach(Gtk.Label(label="Interval (minutes)", xalign=0), 1, 0, 1, 1)
+
+        def spin(value, col, row):
+            widget = Gtk.SpinButton.new_with_range(1, 4294967295, 1)
+            widget.set_value(value)
+            grid.attach(widget, col, row, 1, 1)
+            return widget
+
+        limits = [spin(policy[key], 0, row) for row, key in
+                  enumerate(("small_mib", "medium_mib"), 1)]
+        grid.attach(Gtk.Label(label="Above the second limit", xalign=0), 0, 3, 1, 1)
+        intervals = [spin(value, 1, row) for row, value in enumerate(policy["minutes"], 1)]
+        grid.set_sensitive(enabled.get_active())
+        enabled.connect("toggled", lambda button: grid.set_sensitive(button.get_active()))
+
+        def apply(_button, reset):
+            try:
+                if reset:
+                    saved = periodic_command("reset")
+                else:
+                    saved = periodic_command("set", {
+                        "enabled": enabled.get_active(),
+                        "small_mib": int(limits[0].get_value()),
+                        "medium_mib": int(limits[1].get_value()),
+                        "minutes": [int(widget.get_value()) for widget in intervals],
+                    })
+                enabled.set_active(saved["enabled"])
+                for widget, value in zip(limits + intervals, [
+                    saved["small_mib"], saved["medium_mib"], *saved["minutes"]
+                ]):
+                    widget.set_value(value)
+                notice.set_text("Saved. The running mount uses these intervals automatically.")
+            except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                notice.set_text(str(exc))
+
+        buttons = Gtk.Box(spacing=8)
+        for label, reset in (("Apply", False), ("Restore defaults", True)):
+            button = Gtk.Button(label=label)
+            button.connect("clicked", apply, reset)
+            buttons.append(button)
+        box.append(buttons)
+        box.append(notice)
 
     def refresh_sources(self, box, window, notice=None):
         while box.get_first_child():

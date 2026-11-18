@@ -32,3 +32,6 @@ mod tests;
 pub mod private_file;
 
 pub use exclusions::NameExclusions;
+
+mod periodic_upload;
+pub use periodic_upload::PeriodicUpload;

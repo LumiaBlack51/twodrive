@@ -1,5 +1,9 @@
 use std::{fs, io::Write, path::Path};
 use twodrive_core::{MetadataEntry, normalize_cloud_path};
+/// A seekable view of exactly one local save.
+pub trait UploadReader: std::io::Read + std::io::Seek {}
+impl<T: std::io::Read + std::io::Seek> UploadReader for T {}
+
 pub trait CloudBackend: Send + Sync + 'static {
     /// Classify version conflicts for recovery. The default retains historical
     /// OneDrive error compatibility for existing backend implementations;
@@ -86,6 +90,20 @@ pub trait CloudBackend: Send + Sync + 'static {
         let uploaded = self.upload_with_etag(path, content, if_match)?;
         on_progress(size, size)?;
         Ok(uploaded)
+    }
+    /// Path-only providers get a private stable file. Graph streams this reader directly.
+    fn upload_snapshot_with_version(
+        &self,
+        path: &str,
+        source: &mut dyn UploadReader,
+        remote_id: Option<&str>,
+        if_match: Option<&str>,
+        on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
+    ) -> anyhow::Result<MetadataEntry> {
+        let mut temp = tempfile::NamedTempFile::new()?;
+        source.rewind()?;
+        std::io::copy(source, temp.as_file_mut())?;
+        self.upload_file_with_version(path, temp.path(), remote_id, if_match, on_progress)
     }
     fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry>;
     fn rename(&self, remote_id: &str, new_path: &str) -> anyhow::Result<MetadataEntry>;

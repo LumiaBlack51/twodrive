@@ -46,6 +46,20 @@ class Widget:
 
 
 class SettingsTests(unittest.TestCase):
+    def test_periodic_policy_round_trip_and_validation_error(self):
+        policy = {"enabled": False, "small_mib": 8, "medium_mib": 64, "minutes": [2, 4, 9]}
+        result = subprocess.CompletedProcess([], 0, json.dumps(policy), "")
+        with patch.object(settings, "twodrive_bin", return_value="/test/twodrive"), patch.object(
+                settings.subprocess, "run", return_value=result) as run:
+            self.assertEqual(settings.periodic_command("set", policy), policy)
+            args = run.call_args.args[0]
+            self.assertEqual(args[:3], ["/test/twodrive", "periodic-upload", "set"])
+            self.assertEqual(json.loads(args[3]), policy)
+        with patch.object(settings.subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 1, "", "limits must be increasing")):
+            with self.assertRaisesRegex(RuntimeError, "limits must be increasing"):
+                settings.periodic_command("set", policy)
+
     def test_status_errors_are_displayable_instead_of_claiming_no_errors(self):
         for result in [subprocess.CompletedProcess([], 1, "", "cannot read config"),
                        subprocess.CompletedProcess([], 0, "invalid JSON", "")]:

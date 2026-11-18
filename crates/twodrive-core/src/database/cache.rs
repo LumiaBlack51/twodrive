@@ -40,6 +40,7 @@ impl Database {
     pub fn begin_truncated_write(&self, record: &FileRecord, cache: &Path) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
             "UPDATE files SET state = ?1, size = 0,
+            first_unpublished_write=CASE WHEN ?1='writing' THEN COALESCE(first_unpublished_write,?3) ELSE NULL END,
             cache_path = ?2, cache_accessed_unix = ?3, modified_unix = ?3
             WHERE remote_id = ?4 AND state = ?5 AND cache_path IS ?6
                 AND cloud_remote_id IS ?7 AND etag = ?8 AND size = ?9 AND modified_unix = ?10",
@@ -253,7 +254,7 @@ impl Database {
     pub fn mark_dirty_with_size(&self, remote_id: &str, size: u64) -> anyhow::Result<()> {
         let conn = self.connect()?;
         let changed = conn.execute(
-            "UPDATE files SET state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            "UPDATE files SET periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
             params![
                 FileState::Dirty.as_str(),
                 i64::try_from(size).unwrap_or(i64::MAX),

@@ -11,6 +11,7 @@ pub mod cloud;
 mod delete_retry;
 mod metadata;
 mod mutations;
+mod periodic;
 mod pins;
 mod queries;
 mod schema;

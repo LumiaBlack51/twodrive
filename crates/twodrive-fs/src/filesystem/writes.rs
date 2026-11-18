@@ -135,6 +135,8 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             anyhow::bail!("cache was released while opening; retry the save");
         }
         if truncate {
+            let gate = crate::snapshot::CacheGate::acquire(&cache_path)?;
+            gate.preserve(&cache_path, 0, u64::MAX)?;
             if !self.db.begin_truncated_write(&record, &cache_path)? {
                 anyhow::bail!("truncate target changed since open; reopen before writing");
             }
@@ -193,6 +195,42 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         }
         handle.changed = true;
         Ok(())
+    }
+
+    pub(super) fn change_handle_bytes(
+        &mut self,
+        fh: u64,
+        offset: u64,
+        data: Option<&[u8]>,
+    ) -> anyhow::Result<()> {
+        let handle = self
+            .write_handles
+            .get(&fh)
+            .ok_or_else(|| anyhow::anyhow!("unknown write handle"))?;
+        let gate = crate::snapshot::CacheGate::acquire(&handle.cache_path)?;
+        let end = match data {
+            Some(bytes) => offset
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| anyhow::anyhow!("offset overflow"))?,
+            None => u64::MAX,
+        };
+        if data.is_some_and(|bytes| bytes.is_empty()) {
+            return Ok(());
+        }
+        gate.preserve(&handle.cache_path, offset, end)?;
+        self.begin_handle_write(fh)?;
+        let handle = &self.write_handles[&fh];
+        if !handle.unlinked {
+            self.db.note_open_write(
+                &handle.record_remote_id,
+                &handle.cache_path,
+                twodrive_core::now_unix(),
+            )?;
+        }
+        match data {
+            Some(bytes) => write_slice(&handle.cache_path, offset, bytes),
+            None => Ok(handle._cache_guard.set_len(offset)?),
+        }
     }
 
     #[cfg(test)]
@@ -352,11 +390,16 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             handle.activity.take();
             return Ok(());
         }
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&handle.cache_path)?
-            .sync_all()?;
+        let _gate = crate::snapshot::CacheGate::acquire(&handle.cache_path)?;
+        handle._cache_guard.sync_all()?;
+        if self
+            .db
+            .finish_checkpointed_handle(&handle.record_remote_id, &handle.cache_path)?
+        {
+            handle.uploaded = true;
+            handle.activity.take();
+            return Ok(());
+        }
         let size = fs::metadata(&handle.cache_path)?.len();
         self.db
             .mark_dirty_with_size(&handle.record_remote_id, size)?;
@@ -433,6 +476,8 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .read(true)
             .write(true)
             .open(&cache_path)?;
+        let gate = crate::snapshot::CacheGate::acquire(&cache_path)?;
+        gate.preserve(&cache_path, size, u64::MAX)?;
         file.set_len(size)?;
         file.sync_all()?;
         self.db

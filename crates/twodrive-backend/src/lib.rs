@@ -5,7 +5,7 @@ pub mod onedrive;
 mod storage;
 
 pub use mock::MockBackend;
-pub use storage::{CloudBackend, DeltaResult};
+pub use storage::{CloudBackend, DeltaResult, UploadReader};
 // Compatibility re-export for existing consumers.
 pub use onedrive::GraphBackend;
 

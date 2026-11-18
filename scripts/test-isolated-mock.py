@@ -58,6 +58,33 @@ def main():
             sample = mount / "README-cloud.txt"
             assert b"Welcome to the mock OneDrive tree." in sample.read_bytes()
             assert record("/README-cloud.txt")[0] == "cached"
+            # Keep the application's descriptor open across two timer publications.
+            # Backdate only the synthetic dirty time so this exercises the production
+            # five-second scheduler without adding two minutes to the smoke test.
+            def checkpoint_elapsed():
+                with sqlite3.connect(database) as connection:
+                    assert connection.execute(
+                        "UPDATE files SET first_unpublished_write=1 WHERE path=? AND state='writing'"
+                        " AND first_unpublished_write IS NOT NULL", ("/open.pptx",)).rowcount == 1
+
+            def acknowledged_open(expected_size):
+                with sqlite3.connect(database) as connection:
+                    return connection.execute(
+                        "SELECT 1 FROM files WHERE path=? AND state='writing' AND periodic_open=1"
+                        " AND first_unpublished_write IS NULL AND cloud_remote_id IS NOT NULL AND size=?",
+                        ("/open.pptx", expected_size)).fetchone() is not None
+
+            with (mount / "open.pptx").open("wb", buffering=0) as presentation:
+                presentation.write(b"A" * (11 << 20))
+                os.fsync(presentation.fileno())
+                checkpoint_elapsed()
+                wait_for(lambda: acknowledged_open(11 << 20), process, "first open checkpoint")
+                presentation.truncate(7 << 20)
+                os.fsync(presentation.fileno())
+                checkpoint_elapsed()
+                wait_for(lambda: acknowledged_open(7 << 20), process, "second open checkpoint")
+            wait_for(lambda: record("/open.pptx")[0] == "cached", process, "checkpoint close")
+
             # Durable local writes, upload acknowledgement, and rename/delete.
             created = mount / "refactor-smoke.txt"
             with created.open("wb") as output:
