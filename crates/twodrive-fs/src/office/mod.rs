@@ -367,6 +367,15 @@ pub(crate) fn sync(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+pub(crate) fn handle_size(path: &Path, file: &File, office: Option<&Office>) -> Result<u64> {
+    if let Some(map) = office {
+        return map.size(LIVE);
+    }
+    match Office::open(path)? {
+        Some(map) => map.size(LIVE),
+        None => Ok(file.metadata()?.len()),
+    }
+}
 pub(crate) fn read_handle(
     path: &Path,
     file: &File,

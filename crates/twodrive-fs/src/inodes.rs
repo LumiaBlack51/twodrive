@@ -263,11 +263,11 @@ pub(crate) fn attr_for_record(ino: u64, record: &FileRecord) -> FileAttr {
     }
 }
 
-pub(crate) fn unlinked_file_attr(ino: u64, file: &fs::File) -> Option<FileAttr> {
+pub(crate) fn unlinked_file_attr(ino: u64, file: &fs::File, size: u64) -> Option<FileAttr> {
     let metadata = file.metadata().ok()?;
     let mut attr = root_attr();
     attr.ino = ino;
-    attr.size = metadata.len();
+    attr.size = size;
     attr.blocks = attr.size.div_ceil(512);
     attr.kind = FileType::RegularFile;
     attr.perm = 0o644;

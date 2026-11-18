@@ -121,7 +121,8 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 // Never block this dispatcher on a deferred network download.
                 if let Ok(guard) = handle._cache_guard.try_lock()
                     && let Some(file) = guard.as_ref()
-                    && let Ok(size) = crate::office::logical_size(&file.path)
+                    && let Ok(size) =
+                        crate::office::handle_size(&file.path, &file.file, file.office.as_ref())
                 {
                     attr.size = size;
                     attr.blocks = attr.size.div_ceil(512);
@@ -132,7 +133,15 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         self.write_handles
             .values()
             .find(|handle| handle.ino == ino)
-            .and_then(|handle| unlinked_file_attr(ino, &handle._cache_guard))
+            .and_then(|handle| {
+                let size = crate::office::handle_size(
+                    &handle.cache_path,
+                    &handle._cache_guard,
+                    handle.office.as_ref(),
+                )
+                .ok()?;
+                unlinked_file_attr(ino, &handle._cache_guard, size)
+            })
     }
 
     pub(crate) fn refresh_child_records(&mut self, parent_path: &str) {

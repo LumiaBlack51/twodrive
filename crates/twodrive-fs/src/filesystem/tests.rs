@@ -3085,3 +3085,63 @@ fn office_temp_replacement_uses_same_directory_upload_and_survives_restart() {
     drop(restored);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn unlinked_read_write_office_handle_reports_visible_bytes_until_close() {
+    use crate::office::Office;
+    let mut test = TestFs::new("office-unlinked-writer-size");
+    let basis = crate::office::tests::Fixture::new();
+    Office::enroll(&basis.original, &basis.original, true)
+        .unwrap()
+        .unwrap();
+    let (ino, fh, _) = test
+        .fs
+        .create_upload(
+            ROOT_INO,
+            OsStr::new("~$save.tmp"),
+            libc::O_RDWR | libc::O_CREAT,
+        )
+        .unwrap();
+    let path = test.fs.write_handles[&fh].cache_path.clone();
+    Office::enroll(&path, &basis.original, false)
+        .unwrap()
+        .unwrap();
+    let mut expected = fs::read(&basis.original).unwrap();
+    for (i, b) in expected.chunks(65536).enumerate() {
+        test.fs
+            .change_handle_bytes(fh, (i * 65536) as u64, Some(b))
+            .unwrap();
+    }
+    assert_eq!(path.metadata().unwrap().len(), 0);
+    let record = test.fs.db.get_by_path("/~$save.tmp").unwrap().unwrap();
+    assert!(
+        test.fs
+            .unlink_record_with_open_handles(ino, &record)
+            .unwrap()
+    );
+    let attr = test.fs.attr_for_ino(ino).unwrap();
+    assert_eq!(attr.size, expected.len() as u64);
+    assert_eq!(attr.blocks, attr.size.div_ceil(512));
+    assert_eq!(attr.nlink, 0);
+    assert_eq!(
+        test.fs.read_open_handle(fh, 0, attr.size as u32).unwrap(),
+        expected
+    );
+    test.fs
+        .change_handle_bytes(fh, attr.size, Some(b"append"))
+        .unwrap();
+    expected.extend_from_slice(b"append");
+    assert_eq!(
+        test.fs.attr_for_ino(ino).unwrap().size,
+        expected.len() as u64
+    );
+    test.fs.change_handle_bytes(fh, 73, None).unwrap();
+    expected.truncate(73);
+    assert_eq!(test.fs.attr_for_ino(ino).unwrap().size, 73);
+    assert_eq!(test.fs.read_open_handle(fh, 0, 1024).unwrap(), expected);
+    test.fs.queue_upload_handle(fh).unwrap();
+    test.fs.write_handles.remove(&fh);
+    test.fs.cleanup_unlinked_cache(&path).unwrap();
+    assert!(test.fs.attr_for_ino(ino).is_none());
+    assert!(!path.exists());
+}
