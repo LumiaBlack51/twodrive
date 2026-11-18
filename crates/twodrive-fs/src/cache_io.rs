@@ -1,14 +1,28 @@
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use twodrive_core::{Database, FileRecord, FileState};
+
+pub(crate) fn logical_size(path: &Path) -> anyhow::Result<u64> {
+    #[cfg(unix)]
+    {
+        crate::office::logical_size(path)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(path.metadata()?.len())
+    }
+}
 
 pub(crate) fn read_slice(path: &Path, offset: u64, size: u32) -> anyhow::Result<Vec<u8>> {
     let mut file = fs::File::open(path)?;
     file.seek(SeekFrom::Start(offset))?;
     let mut data = vec![0; size as usize];
-    let read = file.read(&mut data)?;
+    #[cfg(unix)]
+    let read = crate::office::read_at(path, &file, &mut data, offset)?;
+    #[cfg(not(unix))]
+    let read = std::io::Read::read(&mut file, &mut data)?;
     data.truncate(read);
     Ok(data)
 }
@@ -30,9 +44,9 @@ pub(crate) fn has_existing_cache(record: &FileRecord) -> bool {
             | FileState::Dirty
             | FileState::Uploading
     ) && record.cache_path.as_deref().is_some_and(|path| {
-        fs::metadata(path).is_ok_and(|metadata| {
+        logical_size(path).is_ok_and(|size| {
             !matches!(record.state, FileState::Cached | FileState::Pinned)
-                || metadata.len() == record.metadata.size
+                || size == record.metadata.size
         })
     })
 }
@@ -43,7 +57,7 @@ pub(crate) fn reconcile_cached_record(
 ) -> anyhow::Result<FileRecord> {
     if matches!(record.state, FileState::Cached | FileState::Pinned)
         && let Some(path) = &record.cache_path
-        && fs::metadata(path).is_ok_and(|metadata| metadata.len() != record.metadata.size)
+        && logical_size(path).is_ok_and(|size| size != record.metadata.size)
     {
         db.invalidate_cached_snapshot(record)?;
         return db

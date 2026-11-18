@@ -70,7 +70,13 @@ The homepage's [real screenshot](../README.md) shows the tray **at idle**, not d
 
 **Pause sync is currently display-only.** It changes the tray label/icon, not the daemon or transfers. To actually stop after closing mounted files, use `systemctl --user stop twodrive-daemon.service`; restart with `systemctl --user start twodrive-daemon.service`. Stopping the daemon also makes the mount unavailable; it is not an offline pause mode.
 
-Settings is a **GTK 4 overview with an upload source chooser** for token-file state, paths, measured cache usage, configured values and source diagnostics. It can change upload sources; other configuration remains read-only. “Pinned used” remains a placeholder, and source checks are not a complete error history. A displayed token path is not a live authentication check.
+Settings is a **GTK 4 overview with an upload source chooser** for token-file state, paths, measured cache usage, configured values and source diagnostics. Under **Periodic uploads for open files**, enable or disable checkpoints, adjust the two upper size limits and three intervals, and select **Apply**. The mounted daemon picks up the saved policy within its next five-second timer scan. Defaults are 1 minute through 10 MiB, 3 minutes through 100 MiB and 5 minutes above that. Time starts with the first unpublished write. Closing a changed file remains an immediate upload trigger when periodic uploads are disabled.
+
+A checkpoint covers bytes written into the mount. Edits still in an application’s memory reach the drive after the application saves. A timer can catch a multi-step save in progress. Each active Graph upload reads a frozen local revision. For recognized Office packages over 10 MiB, the mount locates candidate ZIP payloads, compares raw bytes on write, and stores references to matching ranges alongside new bytes. Readers see the latest local save. Temporary replacement files use this optimization when there is one eligible Office upload in the same directory. Other large files preserve overwritten or truncated 1 MiB blocks. Graph transfers the whole revision in sequential fragments. Upload completion confirms that revision; later edits remain pending. A machine failure can still lose data that had not reached OneDrive. The timer applies to mounted files; external upload sources use the known-folder watcher.
+
+For a manual backup of unsynced work, stop the mount and preserve the referenced cache file together with its entire `.twodrive-office/<cache filename>/` directory, including the base, map and SQLite journals. Preserve hard links to avoid additional copies. The mount presents the complete document. A private cache file alone may omit the latest edits.
+
+“Pinned used” remains a placeholder, and source checks are not a complete error history. A displayed token path is not a live authentication check.
 
 ## Current limitations and safety
 

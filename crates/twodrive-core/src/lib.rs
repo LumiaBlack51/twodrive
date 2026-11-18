@@ -13,8 +13,8 @@ pub use config::{
     KnownFoldersConfig, PowerConfig, SyncConfig,
 };
 pub use credentials::{TokenData, TokenStore};
-pub use database::Database;
 pub use database::cloud::{CloudIdentity, DownloadTask, IndexedItem};
+pub use database::{Database, OpenWriteClock};
 pub use domain::{
     CoreError, DeleteFailureKind, FileRecord, FileState, MetadataEntry, PendingDelete,
     PendingMetadataKind, PendingMetadataOperation,
@@ -23,7 +23,9 @@ pub use known_folders::{
     KnownFolderDiagnostic, KnownFolderSourceState, expand_known_folder_home,
     inspect_known_folder_source, known_folder_diagnostics,
 };
-pub use paths::{AppPaths, join_cloud_path, normalize_cloud_path};
+pub use paths::{
+    AppPaths, cache_content_size, join_cloud_path, normalize_cloud_path, office_cache_directory,
+};
 pub use time::{now_unix, parse_duration_seconds};
 
 #[cfg(test)]
@@ -32,3 +34,6 @@ mod tests;
 pub mod private_file;
 
 pub use exclusions::NameExclusions;
+
+mod periodic_upload;
+pub use periodic_upload::PeriodicUpload;

@@ -322,12 +322,14 @@ fn upload_session_sends_sequential_ranges_and_finishes_with_metadata() {
     source.set_len(UPLOAD_FRAGMENT_SIZE as u64 + 3).unwrap();
     drop(source);
     let mut progress = Vec::new();
+    let mut reader = fs::File::open(&source_path).unwrap();
+    let contents = super::upload::UploadContents::inspect(&mut reader).unwrap();
     let uploaded = upload_session_file(
         &Client::new(),
         &upload_url,
         "/large.bin",
-        &source_path,
-        UPLOAD_FRAGMENT_SIZE as u64 + 3,
+        &mut reader,
+        &contents,
         0,
         &mut |done, total| {
             progress.push((done, total));
@@ -400,12 +402,14 @@ fn upload_session_resumes_from_a_persisted_offset() {
     let source = fs::File::create(&source_path).unwrap();
     source.set_len(UPLOAD_FRAGMENT_SIZE as u64 + 3).unwrap();
     drop(source);
+    let mut reader = fs::File::open(&source_path).unwrap();
+    let contents = super::upload::UploadContents::inspect(&mut reader).unwrap();
     let uploaded = upload_session_file(
         &Client::new(),
         &upload_url,
         "/large.bin",
-        &source_path,
-        UPLOAD_FRAGMENT_SIZE as u64 + 3,
+        &mut reader,
+        &contents,
         UPLOAD_FRAGMENT_SIZE as u64,
         &mut |_, _| Ok(()),
     )
@@ -440,7 +444,7 @@ fn upload_session_store_round_trips_with_private_permissions() {
         PersistedUploadSession {
             upload_url: "https://upload.example/session".to_string(),
             source_size: 42,
-            source_modified_unix: 7,
+            content_id: Some("test-content".into()),
             remote_id: Some("remote-id".to_string()),
             if_match: Some("etag".to_string()),
         },
@@ -456,6 +460,41 @@ fn upload_session_store_round_trips_with_private_permissions() {
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+    // A newly constructed backend must use the persisted content identity.
+    let paths = AppPaths {
+        config_dir: root.clone(),
+        config_path: root.join("config.toml"),
+        data_dir: root.clone(),
+        cache_dir: root.join("cache"),
+        db_path: root.join("db"),
+        mount_dir: root.join("mount"),
+        token_path: root.join("tokens.json"),
+    };
+    TokenStore::new(&paths.token_path)
+        .save(&TokenData {
+            access_token: "synthetic-expired".into(),
+            refresh_token: None,
+            expires_at_unix: 0,
+        })
+        .unwrap();
+    let graph = GraphBackend::from_paths(&paths).unwrap();
+    let matching = |graph: &GraphBackend, digest: &str| {
+        graph
+            .matching_upload_session("/large.bin", 42, digest, Some("remote-id"), Some("etag"))
+            .unwrap()
+            .is_some()
+    };
+    assert!(matching(&graph, "test-content"));
+    assert!(!matching(&graph, "different-equal-length-content"));
+    drop(graph);
+    let mut legacy: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    legacy["sessions"]["/large.bin"]
+        .as_object_mut()
+        .unwrap()
+        .remove("content_id");
+    fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let graph = GraphBackend::from_paths(&paths).unwrap();
+    assert!(!matching(&graph, "test-content"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -476,4 +515,68 @@ fn upload_session_store_is_shared_for_the_same_data_path() {
     drop(first);
     drop(second);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn changed_tail_after_first_put_never_reaches_session_commit() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/upload", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let mut body = Vec::new();
+        request.as_reader().read_to_end(&mut body).unwrap();
+        assert_eq!(body, vec![0; UPLOAD_FRAGMENT_SIZE]);
+        request
+            .respond(
+                Response::from_string(format!(
+                    r#"{{"nextExpectedRanges":["{}-"]}}"#,
+                    UPLOAD_FRAGMENT_SIZE
+                ))
+                .with_status_code(202),
+            )
+            .unwrap();
+        if let Some(req) = server.recv_timeout(Duration::from_secs(1)).unwrap() {
+            req.respond(
+                Response::from_string(
+                    r#"{"id":"mixed","name":"x.pptx","size":10485763,"eTag":"mixed"}"#,
+                )
+                .with_status_code(201),
+            )
+            .unwrap();
+            panic!("a mixed revision reached the server");
+        }
+    });
+    let source = tempfile::NamedTempFile::new().unwrap();
+    source
+        .as_file()
+        .set_len(UPLOAD_FRAGMENT_SIZE as u64 + 3)
+        .unwrap();
+    let mut reader = fs::File::open(source.path()).unwrap();
+    let old = super::upload::UploadContents::inspect(&mut reader).unwrap();
+    let result = upload_session_file(
+        &Client::new(),
+        &url,
+        "/x.pptx",
+        &mut reader,
+        &old,
+        0,
+        &mut |done, _| {
+            if done == UPLOAD_FRAGMENT_SIZE as u64 {
+                fs::write(source.path(), vec![0x42; UPLOAD_FRAGMENT_SIZE + 3])?;
+            }
+            Ok(())
+        },
+    );
+    worker.join().unwrap();
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("local content changed")
+    );
+    let new = super::upload::UploadContents::inspect(&mut reader).unwrap();
+    assert_ne!(old.id, new.id);
 }

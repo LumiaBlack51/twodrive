@@ -33,16 +33,11 @@ pub(crate) fn preserve_conflict_copy<B: CloudBackend>(
         conflict_path.rsplit('/').next().unwrap_or(""),
         Some(original.metadata.size),
     );
-    let result = backend.upload_file_with_version(
-        &conflict_path,
-        cache_path,
-        None,
-        None,
-        &mut |done, total| {
+    let result =
+        crate::snapshot::upload_cached(backend, &conflict_path, cache_path, &mut |done, total| {
             activity.set_progress(done, Some(total));
             on_progress(done, total)
-        },
-    );
+        });
     drop(activity);
     let conflict = result?;
     if db.complete_deleted_upload(&original.metadata.remote_id, &conflict)? {

@@ -5,9 +5,10 @@ use super::paths::{encode_graph_path, percent_encode_path_segment};
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{CONTENT_RANGE, IF_MATCH};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -94,7 +95,8 @@ impl UploadSessionStore {
 pub(super) struct PersistedUploadSession {
     pub(super) upload_url: String,
     pub(super) source_size: u64,
-    pub(super) source_modified_unix: i64,
+    #[serde(default)]
+    pub(super) content_id: Option<String>,
     pub(super) remote_id: Option<String>,
     pub(super) if_match: Option<String>,
 }
@@ -171,16 +173,67 @@ pub(super) fn upload_session_create_url(
     ))
 }
 
+/// Hash each wire fragment before opening a session. Persist the hash of the
+/// ordered fragment hashes; legacy sessions without it are never resumed.
+pub(super) struct UploadContents {
+    pub(super) size: u64,
+    pub(super) id: String,
+    hashes: Vec<[u8; 32]>,
+}
+
+impl UploadContents {
+    pub(super) fn inspect(source: &mut dyn crate::UploadReader) -> anyhow::Result<Self> {
+        let size = source.seek(SeekFrom::End(0))?;
+        source.rewind()?;
+        let mut remaining = size;
+        let mut hashes = Vec::new();
+        let mut identity = Sha256::new();
+        identity.update(size.to_le_bytes());
+        let mut buf = vec![0; remaining.min(UPLOAD_FRAGMENT_SIZE as u64) as usize];
+        while remaining > 0 {
+            let n = remaining.min(buf.len() as u64) as usize;
+            source.read_exact(&mut buf[..n])?;
+            let hash: [u8; 32] = Sha256::digest(&buf[..n]).into();
+            identity.update(hash);
+            hashes.push(hash);
+            remaining -= n as u64;
+        }
+        source.rewind()?;
+        Ok(Self {
+            size,
+            id: format!("{:x}", identity.finalize()),
+            hashes,
+        })
+    }
+
+    fn fragment(&self, file: &mut dyn crate::UploadReader, offset: u64) -> anyhow::Result<Vec<u8>> {
+        let width = UPLOAD_FRAGMENT_SIZE as u64;
+        let start = offset / width * width;
+        let mut buf = vec![0; (self.size - start).min(width) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut buf)?;
+        let hash: [u8; 32] = Sha256::digest(&buf).into();
+        anyhow::ensure!(
+            hash == self.hashes[(start / width) as usize],
+            "local content changed during upload; start a new revision"
+        );
+        if start != offset {
+            buf.drain(..(offset - start) as usize);
+        }
+        Ok(buf)
+    }
+}
+
 pub(super) fn upload_session_file(
     client: &Client,
     upload_url: &str,
     cloud_path: &str,
-    source_path: &Path,
-    total_size: u64,
+    file: &mut dyn crate::UploadReader,
+    contents: &UploadContents,
     initial_offset: u64,
     on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
 ) -> anyhow::Result<MetadataEntry> {
-    let mut file = fs::File::open(source_path)?;
+    let total_size = contents.size;
     let mut offset = initial_offset.min(total_size);
     if offset > 0 {
         on_progress(offset, total_size)?;
@@ -188,11 +241,8 @@ pub(super) fn upload_session_file(
     let mut stalled_responses = 0_u8;
 
     while offset < total_size {
-        file.seek(SeekFrom::Start(offset))?;
-        let chunk_len = (total_size - offset).min(UPLOAD_FRAGMENT_SIZE as u64) as usize;
-        let mut chunk = vec![0_u8; chunk_len];
-        file.read_exact(&mut chunk)?;
-        let end = offset + chunk_len as u64 - 1;
+        let chunk = contents.fragment(file, offset)?;
+        let end = offset + chunk.len() as u64 - 1;
         let content_range = format!("bytes {offset}-{end}/{total_size}");
         let mut next_offset = None;
         let mut last_error = None;

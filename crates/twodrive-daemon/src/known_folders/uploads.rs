@@ -114,8 +114,7 @@ pub(super) fn process_known_folder_uploads<B: CloudBackend>(
         for (job, result) in result_rx {
             let local_key = job.local_path.to_string_lossy().into_owned();
             match result {
-                Ok(uploaded) => {
-                    db.upsert_metadata(&uploaded)?;
+                Ok(_) => {
                     state.complete_upload(local_key, job.snapshot)?;
                 }
                 Err(err) => {
@@ -184,6 +183,9 @@ pub(super) fn upload_known_folder_file<B: CloudBackend>(
             Ok(())
         },
     )?;
+    // The service has committed this version even if the visible file changed.
+    // Retain its ETag so the queued successor can conditionally replace it.
+    db.upsert_metadata(&uploaded)?;
     let after = fs::metadata(local_path)?;
     let after_snapshot = FileSnapshot::from_metadata(&after);
     if after_snapshot != *snapshot {

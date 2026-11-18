@@ -95,6 +95,18 @@ fn mount_backend_with_retention<B: CloudBackend>(
     let recovery_db = fs.db.clone();
     let recovery_backend = Arc::clone(&fs.backend);
     let sender = fs.upload_pool.sender.clone();
+    let (timer_stop, timer_wait) = mpsc::channel();
+    let timer_db = recovery_db.clone();
+    let timer_queue = sender.clone();
+    let timer = thread::spawn(move || {
+        while timer_wait.recv_timeout(Duration::from_secs(5))
+            == Err(mpsc::RecvTimeoutError::Timeout)
+        {
+            if let Err(err) = crate::recovery::enqueue_due_checkpoints(&timer_db, &timer_queue) {
+                eprintln!("twodrive: open-file upload scan deferred: {err:#}");
+            }
+        }
+    });
     let recovery = thread::spawn(move || {
         loop {
             // Replay via the normal workers so recovery and new saves share item locks.
@@ -119,6 +131,8 @@ fn mount_backend_with_retention<B: CloudBackend>(
     ];
     let result = fuser::mount2(fs, &mount_dir, &options);
     let _ = stop_tx.send(());
+    let _ = timer_stop.send(());
+    let _ = timer.join();
     let _ = recovery.join();
     result?;
     Ok(())
@@ -127,6 +141,8 @@ fn mount_backend_with_retention<B: CloudBackend>(
 fn maintain_cache(db: &Database, cache: &Path, retain_seconds: i64) -> anyhow::Result<()> {
     db.prune_cache(retain_seconds)?;
     db.prune_retired_cache(cache)?;
+    crate::snapshot::prune_abandoned(cache)?;
+    crate::office::maintain(cache, db)?;
     Ok(())
 }
 

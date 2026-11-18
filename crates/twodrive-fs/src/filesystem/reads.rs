@@ -17,7 +17,11 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             fh,
             ReadHandle {
                 open_attr,
-                _cache_guard: Arc::new(Mutex::new(Some(cache_guard))),
+                _cache_guard: Arc::new(Mutex::new(Some(ReadCache {
+                    file: cache_guard,
+                    path: cache_path.clone(),
+                    office: None,
+                }))),
                 ino,
                 cache_path,
                 unlinked: false,
@@ -29,31 +33,38 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn read_open_handle(
-        &self,
+        &mut self,
         fh: u64,
         offset: u64,
         size: u32,
     ) -> anyhow::Result<Vec<u8>> {
         if let Some(handle) = self.read_handles.get(&fh) {
-            use std::os::unix::fs::FileExt;
-            let guard = handle
+            let mut guard = handle
                 ._cache_guard
                 .lock()
                 .map_err(|_| anyhow::anyhow!("read handle poisoned"))?;
             let file = guard
-                .as_ref()
+                .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("read is still deferred"))?;
             let mut bytes = vec![0; size as usize];
             let count = file.read_at(&mut bytes, offset)?;
             bytes.truncate(count);
             return Ok(bytes);
         }
-        let cache_path = self
+        let handle = self
             .write_handles
-            .get(&fh)
-            .map(|handle| &handle.cache_path)
+            .get_mut(&fh)
             .ok_or_else(|| anyhow::anyhow!("open file handle does not exist"))?;
-        read_slice(cache_path, offset, size)
+        let mut bytes = vec![0; size as usize];
+        let n = crate::office::read_handle(
+            &handle.cache_path,
+            &handle._cache_guard,
+            &mut handle.office,
+            &mut bytes,
+            offset,
+        )?;
+        bytes.truncate(n);
+        Ok(bytes)
     }
 
     pub(super) fn sync_read_handle(&self, fh: u64, datasync: bool) -> anyhow::Result<()> {
@@ -64,6 +75,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         if handle.deferred_record.is_some() {
             return Ok(());
         }
+        crate::office::sync(&handle.cache_path)?;
         let file = fs::File::open(&handle.cache_path)?;
         if datasync {
             file.sync_data()?;

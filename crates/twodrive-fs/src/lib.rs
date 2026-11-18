@@ -13,10 +13,13 @@ mod metadata;
 #[cfg(unix)]
 mod mount;
 #[cfg(unix)]
+mod office;
+#[cfg(unix)]
 mod probes;
 #[cfg(unix)]
 mod read_pool;
 mod recovery;
+mod snapshot;
 mod upload_queue;
 
 #[cfg(unix)]

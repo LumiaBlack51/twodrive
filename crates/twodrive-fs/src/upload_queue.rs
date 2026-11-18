@@ -219,7 +219,10 @@ pub(crate) fn run_upload_worker<B: CloudBackend>(
             Ok(Some(record))
                 if matches!(
                     record.state,
-                    FileState::Dirty | FileState::Uploading | FileState::Conflict
+                    FileState::Writing
+                        | FileState::Dirty
+                        | FileState::Uploading
+                        | FileState::Conflict
                 ) =>
             {
                 record

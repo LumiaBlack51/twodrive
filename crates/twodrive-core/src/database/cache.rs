@@ -7,6 +7,47 @@ use crate::paths::normalize_cloud_path;
 use crate::{FileRecord, FileState, now_unix};
 
 impl Database {
+    pub fn has_cache_reference(&self, path: &Path) -> anyhow::Result<bool> {
+        Ok(self.connect()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE cache_path=?1 OR upload_cache_path=?1)
+            OR EXISTS(SELECT 1 FROM pending_deletes WHERE cache_path=?1 OR upload_cache_path=?1)",
+            [path.to_string_lossy()],
+            |row| row.get(0),
+        )?)
+    }
+    /// Claim a delayed writer against its open cache and ETag. A worker can
+    /// move Dirty -> Uploading between open and write. Its first create
+    /// acknowledgement is also valid for the still-open, previously unbound
+    /// inode. A new ETag supplied by an external delta is never eligible.
+    pub fn claim_open_write(
+        &self,
+        id: &str,
+        cache: &Path,
+        opened_etag: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let mut c = self.connect()?;
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let target:Option<(String,String)>=tx.query_row(
+            "SELECT name,state FROM files WHERE remote_id=?1 AND cache_path=?2 AND
+            (state='local_only' OR (CASE WHEN cloud_remote_id IS NOT NULL THEN NULLIF(etag,'') END) IS ?3
+            OR (?3 IS NULL AND cloud_remote_id IS NOT NULL AND first_local_ack=etag))",
+            params![id,cache.to_string_lossy(),opened_etag],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        let Some((name, state)) = target else {
+            return Ok(false);
+        };
+        let state = if state == "local_only" || self.excludes_file_name(&name) {
+            "local_only"
+        } else {
+            "writing"
+        };
+        tx.execute(
+            "UPDATE files SET state=?2 WHERE remote_id=?1",
+            params![id, state],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Claim the inspected cache/remote baseline before a delayed first write.
     /// A concurrent delta or upload completion must not supply a newer ETag
     /// for bytes that were opened from an older cached version.
@@ -40,6 +81,7 @@ impl Database {
     pub fn begin_truncated_write(&self, record: &FileRecord, cache: &Path) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
             "UPDATE files SET state = ?1, size = 0,
+            first_unpublished_write=CASE WHEN ?1='writing' THEN COALESCE(first_unpublished_write,?3) ELSE NULL END,
             cache_path = ?2, cache_accessed_unix = ?3, modified_unix = ?3
             WHERE remote_id = ?4 AND state = ?5 AND cache_path IS ?6
                 AND cloud_remote_id IS ?7 AND etag = ?8 AND size = ?9 AND modified_unix = ?10",
@@ -253,7 +295,7 @@ impl Database {
     pub fn mark_dirty_with_size(&self, remote_id: &str, size: u64) -> anyhow::Result<()> {
         let conn = self.connect()?;
         let changed = conn.execute(
-            "UPDATE files SET state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            "UPDATE files SET periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
             params![
                 FileState::Dirty.as_str(),
                 i64::try_from(size).unwrap_or(i64::MAX),

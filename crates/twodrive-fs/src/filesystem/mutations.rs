@@ -130,6 +130,9 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             .record_for_ino(ino)
             .map(|record| self.refresh_record(&record))
             .ok_or_else(|| anyhow::anyhow!("source record does not exist"))?;
+        if let Some(cache) = &record.cache_path {
+            crate::office::sync(cache)?;
+        }
         // Keep remote-backed bytes locally before suppressing a rename/upload.
         if !record.metadata.is_dir && self.db.excludes_file_name(newname) {
             self.ensure_cached(&record)?;
