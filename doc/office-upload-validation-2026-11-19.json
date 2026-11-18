@@ -1,0 +1,161 @@
+{
+  "source_commit": "9311c9c744ad41bc2ec6dcefb36f5010c2927416",
+  "version": "0.2.26-1",
+  "git_source_files_verified": 341,
+  "debian_manifests_verified": [
+    "dsc",
+    "buildinfo",
+    "changes"
+  ],
+  "offline_vendor_verified": true,
+  "binary_version": "0.2.26",
+  "scope": "Stable Linux mount, isolated local Graph HTTP and mock FUSE. No live cloud content test.",
+  "pr": "https://github.com/LumiaBlack51/twodrive/pull/66",
+  "ci": [
+    {
+      "name": "Debian package",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999257/job/134970040904"
+    },
+    {
+      "name": "Debian packaging policy",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999315/job/134969850169"
+    },
+    {
+      "name": "test (ubuntu-latest, --features mount, target/release/twodrive-dev)",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999215/job/134969851275"
+    },
+    {
+      "name": "Native checks (Windows)",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999212/job/134969850927"
+    },
+    {
+      "name": "windows",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999218/job/134969850191"
+    },
+    {
+      "name": "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999215/job/134969850303"
+    },
+    {
+      "name": "Native checks (Linux)",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999212/job/134969850215"
+    },
+    {
+      "name": "linux",
+      "url": "https://github.com/LumiaBlack51/twodrive/actions/runs/44351999218/job/134969849806"
+    }
+  ],
+  "dot_review": "https://github.com/LumiaBlack51/twodrive/pull/66#issuecomment-6985327265",
+  "local_workspace_tests": {
+    "passed": 263,
+    "ignored": 14
+  },
+  "explicit_linux_fuse_tests": 13,
+  "nautilus_tests": 25,
+  "settings_tests": 6,
+  "disposable_mount_restart": {
+    "first_ack_seconds": 59.96,
+    "writer_open": true,
+    "latest_survives_process_kill": true
+  },
+  "stable_gtk": "Widget edits, disable and restore defaults using an isolated display and CLI",
+  "office_mount": {
+    "ordinary_save": {
+      "file": 110260186,
+      "cache_baseline": 110313472,
+      "peak": 220590080,
+      "extra": 110276608,
+      "end": 220577792,
+      "rss_start": 7671808,
+      "rss_peak": 8278016,
+      "cpu_seconds": 0.6900000000000002,
+      "elapsed": 2.9736024440062465,
+      "samples": 558
+    },
+    "active_upload": {
+      "file": 110260186,
+      "cache_baseline": 110366720,
+      "peak": 110612480,
+      "extra": 245760,
+      "end": 110436352,
+      "rss_start": 7925760,
+      "rss_peak": 8744960,
+      "cpu_seconds": 1.68,
+      "elapsed": 6.489496114998474,
+      "samples": 1182
+    },
+    "offline_restart": {
+      "file": 110260186,
+      "cache_baseline": 110366720,
+      "peak": 110612480,
+      "extra": 245760,
+      "end": 110436352,
+      "rss_start": 8040448,
+      "rss_peak": 8818688,
+      "cpu_seconds": 1.7600000000000002,
+      "elapsed": 6.58932013699814,
+      "samples": 1194
+    },
+    "all_images_replaced": {
+      "file": 110260186,
+      "cache_baseline": 110366720,
+      "peak": 238125056,
+      "extra": 127758336,
+      "end": 236662784,
+      "rss_start": 7831552,
+      "rss_peak": 11489280,
+      "cpu_seconds": 5.42,
+      "elapsed": 16.82310059900192,
+      "samples": 3098
+    },
+    "merge_interrupted_offline_reopen": "PASS",
+    "measurement": "Allocated cache file and directory blocks sampled every ~5ms, counting hard links once. Mount process CPU/RSS only, generated three-image PPTX saved and reopened with LibreOffice; disk-backed simulated transport.",
+    "fold_normal": {
+      "folded_flat_hash_matches": true,
+      "post_ack_peak_bytes": 110788608,
+      "merge_wait_seconds": 175.88944246999745
+    },
+    "fold_interrupted": {
+      "folded_flat_hash_matches": true,
+      "post_ack_peak_bytes": 110833664,
+      "merge_wait_seconds": 122.54146857400337
+    }
+  },
+  "source_merge": "98fd2cbbeae089d9b2ce19423b28e46f79b3ad7b",
+  "release": {
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.26-1",
+    "published_at": "2026-11-18T17:16:06Z",
+    "verified_assets": 11,
+    "ci_artifact": "14453390629 sha256:e66c4e7abfd93d04b1f4c9bc507d72071432cbacb50a33503ddf0708c4bb7b92"
+  },
+  "local_deployment": {
+    "version": "0.2.26",
+    "running_daemon_matches_release": true,
+    "mounted": true,
+    "database": "ok",
+    "unchanged_config": true,
+    "reference_sets_equal": {
+      "cache": true,
+      "deletes": true,
+      "metadata": true
+    },
+    "binary_sha256": {
+      "twodrive": "ac82630fa455884bd1e9940e5236b4b75ad2412aec034a92997f6acdc7a540ff",
+      "twodrive-daemon": "47957a5477d52bab4d5aec8e0e91607627a9e2b97604d8281c0a6c17df7433b4",
+      "twodrive-settings": "1c0e6cfd0775815302601f403425c0652f5d0d083d469cede2a26e6a002fc8c4"
+    },
+    "installed_disposable_mount": "pass",
+    "installed_gtk_widgets": "pass"
+  },
+  "filesystem": "ext4",
+  "application": "LibreOffice 26.8.2.2 680(Build:2)",
+  "regression_before_fix": {
+    "unlinked_office_expected_size": 11534474,
+    "unlinked_office_reported_size": 0
+  },
+  "limits": [
+    "Generated PPTX files and LibreOffice Impress. Microsoft PowerPoint was not exercised.",
+    "Abrupt daemon termination and simulated offline transport were exercised. Whole-machine power loss and a real OneDrive account were not exercised.",
+    "Peaks sampled in the TwoDrive cache. Excludes editor resources, OS page cache, simulated remote and user files."
+  ]
+}
