@@ -693,6 +693,9 @@ pub fn run(
             status["state"] = json!("idle");
             Ok(())
         })();
+        // Recovery can confirm an older version before a newer upload fails.
+        // Reconcile even on errors, before the next scan sees it as confirmed.
+        confirmed_files = manifest.confirmed_files();
         status["active"] = json!([]);
         status["recent"] = json!(recent);
         status["confirmed_files"] = json!(confirmed_files);
@@ -874,6 +877,115 @@ mod tests {
         assert!(record.intent.is_some());
         assert_eq!(backend.download(&entry.remote_id).unwrap(), b"committed");
     }
+    #[test]
+    fn recovered_version_stays_counted_when_the_changed_source_upload_fails() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let root = tempfile::tempdir().unwrap();
+        let state = State::new(root.path().join("state")).unwrap();
+        let profile = Profile {
+            id: "recovery-count".into(),
+            mount_path: root.path().join("mount"),
+            ..Default::default()
+        };
+        let dir = directory(&state, &profile).unwrap();
+        let source = root.path().join("source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("file.txt"), b"changed source").unwrap();
+        save_folders(
+            &state,
+            &profile,
+            &[Folder {
+                local: source,
+                remote: "/backup".into(),
+                enabled: true,
+            }],
+        )
+        .unwrap();
+        let mut provider = OpaqueProvider::default();
+        provider.versioned = true;
+        provider.caps.conditional_upload = false;
+        provider.create_folder("/backup").unwrap();
+        let dest = "/backup/file.txt";
+        let previous = provider
+            .upload(&new_version_path(dest), b"previous source".to_vec())
+            .unwrap();
+        dir.save(
+            "manifest.json",
+            &json!({
+                "binding": "synthetic-binding",
+                "files": {dest: {
+                    "hash": "", "etag": null, "intent": null,
+                    "version_intent": {
+                        "path": previous.path,
+                        "hash": format!("{:x}", Sha256::digest(b"previous source")),
+                    },
+                }},
+            }),
+        )
+        .unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let calls = attempts.clone();
+        let stop_config = dir.dir.join("folders.json");
+        provider.before_mutation = Some(Arc::new(move || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                anyhow::bail!("synthetic upload failure");
+            }
+            // After the successful retry, stop the actual worker at its next
+            // configuration read, without adding a production test hook.
+            fs::write(&stop_config, b"invalid test configuration")?;
+            Ok(())
+        }));
+        let backend = Backend::new(provider.clone());
+        let worker = thread::spawn(move || {
+            run(
+                &state,
+                &profile,
+                backend,
+                "synthetic-binding".into(),
+                vec![],
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let failed = loop {
+            let report = dir.read::<Value>("report.json").unwrap_or_default();
+            if report["state"] == "error" || Instant::now() >= deadline || worker.is_finished() {
+                break report;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        while !worker.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if !worker.is_finished() {
+            fs::write(dir.dir.join("folders.json"), b"invalid test configuration").unwrap();
+        }
+        // Join before assertions so the fixture cannot outlive this test.
+        assert!(worker.join().unwrap().is_err());
+        let finished: Value = dir.read("report.json").unwrap();
+        let manifest: Manifest = dir.read("manifest.json").unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(failed["error"], "synthetic upload failure");
+        assert_eq!(failed["confirmed_files"], 1);
+        assert_eq!(finished["state"], "idle");
+        assert_eq!(finished["confirmed_files"], 1);
+        assert_eq!(manifest.confirmed_files(), 1);
+        assert_eq!(finished["recent"][0]["logical_path"], dest);
+        assert_eq!(
+            provider.download(&previous.remote_id).unwrap(),
+            b"previous source"
+        );
+        let latest = provider
+            .get_metadata_by_path(manifest.files[dest].version_path.as_ref().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_ne!(latest.path, previous.path);
+        assert_eq!(
+            provider.download(&latest.remote_id).unwrap(),
+            b"changed source"
+        );
+    }
+
     #[test]
     fn backup_versions_recover_lost_confirmation_and_preserve_conflicting_cloud_files() {
         let mut provider = OpaqueProvider::default();

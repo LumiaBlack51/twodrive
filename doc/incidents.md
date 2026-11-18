@@ -1,5 +1,40 @@
 # TwoDrive 故障记录
 
+## TD-20261118-05：恢复独立版本后新上传失败导致备份确认计数漏计
+
+- 日期：2026-11-18
+- 状态：已验证（Linux 隔离合成 worker 与 Rust 全目标回归）。
+- 影响版本与环境：DavidXile/twodrive PR #5，`dec31418faee30e33990558af6e322a056a26e0a`，iCloud/百度独立版本备份路径。
+- 关联历史故障：TD-20261118-04 的独立版本恢复；TD-20261111-16 的确认计数与历史恢复。本次是恢复成功后同轮新上传失败的状态转换，并非原位替换意图的处理。
+
+### 症状与影响
+
+清单已有已确认的独立版本，但运行中的报告仍少计一个文件，后续重试成功也不能补齐。尚未观察到内容丢失或旧版本覆盖。
+
+### 触发条件与复现
+
+仅使用临时目录和 OpaqueProvider 合成内容：预置已提交、尚未确认的首版意图，本地内容已再次变化；第一轮恢复首版后注入新上传失败，第二轮允许重试成功，检查两轮报告和新旧版本字节。
+
+### 根因与证据
+
+`save_version` 可先 `confirm_version` 再返回上传错误，绕过 `run` 的 `newly_confirmed` 累加。下一轮 `was_confirmed` 已为真，无法补计。旧代码运行新回归，报告计数断言得到 0、期望 1，退出码 101；修复后同一回归通过。
+
+### 解决办法与恢复操作
+
+在每轮扫描结束（含错误）从清单校准确认计数，保留文件级上传期间的增量报告。未操作真实账户、文件、挂载或现用客户端。
+
+### 验证结果与边界
+
+官方 Rust 1.91.0 安装在隔离工作区。`cargo test --locked --features mount --all-targets` 通过：215 passed、12 ignored；其中新增回归实际运行完整 worker 的失败轮和成功重试轮，两个报告均为 1，旧版本及新版本字节正确、目标路径不同。`cargo fmt --all -- --check` 和 `git diff --check` 通过。严格 Clippy 仅因原有 `desktop_quit_mounts.rs:243` 的 `nonminimal_bool` 失败（原 head 同一行未修改）；仅添加命令行 `-A clippy::nonminimal_bool` 后全目标检查通过，其余警告仍为错误。未修改 lint 设置或该无关代码。Windows、真实云端、被忽略的环境测试未执行；Flutter 未修改，未重跑。
+
+### 防复发措施与后续
+
+保留 `recovered_version_stays_counted_when_the_changed_source_upload_fails`，验证错误轮、成功重试轮及旧版本字节；保留失败前/通过后对照。
+
+### 交付记录
+
+修复随 PR #5 分支提交；提交哈希与新 head CI 待推送后核实。不合并、批准或部署。
+
 ## TD-20261118-04：为 iCloud Drive 和百度网盘增加版本保留备份
 
 - 2026-11-18，Linux TwoDrive DAV。关联 TD-20261104-04 的备份目标能力过滤。
