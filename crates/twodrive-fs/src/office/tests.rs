@@ -175,3 +175,59 @@ fn rejected_write_keeps_the_previous_complete_save() {
         .unwrap();
     assert_eq!(got, want);
 }
+
+#[test]
+fn small_office_writes_checkpoint_within_budget_and_sync_on_both_page_layouts() {
+    let fixture = Fixture::new();
+    let map = dir(&fixture.original);
+    let old = fs::read(&fixture.original).unwrap();
+    let mut expected = old.clone();
+    drop(
+        Office::enroll(&fixture.original, &fixture.original, true)
+            .unwrap()
+            .unwrap(),
+    );
+
+    for page_size in [1024, 4096] {
+        if page_size == 4096 {
+            // Recreate the layout of an in-flight map from 0.2.26.
+            let db = Connection::open(map.join("map")).unwrap();
+            db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA page_size=4096; VACUUM; PRAGMA journal_mode=WAL;").unwrap();
+        }
+        let mut writer = Office::open(&fixture.original).unwrap().unwrap();
+        let actual: u32 = writer
+            .db
+            .pragma_query_value(None, "page_size", |row| row.get(0))
+            .unwrap();
+        assert_eq!(actual, page_size);
+        let pages: u32 = writer
+            .db
+            .pragma_query_value(None, "wal_autocheckpoint", |row| row.get(0))
+            .unwrap();
+        assert_eq!(pages * actual, 256 * 1024);
+        writer.freeze().unwrap();
+        let frozen = expected.clone();
+        for i in 0..19 {
+            let off = 4096 * i;
+            let value = (i + page_size as usize / 1024) as u8;
+            expected[off..off + 4096].fill(value);
+            writer
+                .write(off as u64, &expected[off..off + 4096])
+                .unwrap();
+        }
+        writer.sync().unwrap();
+        // Inspect a copy of the checkpointed database alone while the writer
+        // remains open. No close-time checkpoint or original WAL can help it.
+        let copy = fixture.root.join(format!("checkpoint-{page_size}"));
+        fs::create_dir(&copy).unwrap();
+        fs::copy(map.join("map"), copy.join("map")).unwrap();
+        fs::hard_link(map.join("base"), copy.join("base")).unwrap();
+        let saved = Office::at(&copy).unwrap();
+        let mut got = vec![0; old.len()];
+        assert_eq!(saved.read(LIVE, 0, &mut got).unwrap(), got.len());
+        assert_eq!(got, expected);
+        assert_eq!(saved.read(1, 0, &mut got).unwrap(), got.len());
+        assert_eq!(got, frozen);
+        writer.thaw().unwrap();
+    }
+}

@@ -1,3 +1,10 @@
+twodrive (0.2.27-1) unstable; urgency=medium
+
+  * Reduce visible Office save stalls from frequent range-map checkpoints.
+  * Keep existing page layouts readable and checkpoint explicit saves.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 19 Nov 2026 08:10:00 +0800
+
 twodrive (0.2.26-1) unstable; urgency=medium
 
   * Upload open mounted files at configurable size-dependent intervals.

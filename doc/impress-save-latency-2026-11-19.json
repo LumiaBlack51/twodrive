@@ -1,0 +1,152 @@
+{
+  "date": "2026-11-19",
+  "previous_release": "v0.2.26-1",
+  "candidate": "0.2.27-1",
+  "editor": "LibreOffice 26.8.2.2 680(Build:2)",
+  "sample_bytes": 110349901,
+  "fixture": {
+    "source": "Generated ODP with editable text boxes and three 3500 × 3500 RGB PNG images, converted with LibreOffice Impress to PPTX. Each trial opened a fresh copy.",
+    "change": "Append X to the title. The all-images condition also replaced each image before timing.",
+    "display": "Private Xvfb display, GTK 3 VCL, Impress with a dedicated profile. Document opened and edited before timing."
+  },
+  "method": {
+    "event_loop": "One outstanding com.sun.star.awt.AsyncCallback, rearmed about every 20 ms. Record the longest interval straddling the save. Times are monotonic seconds.",
+    "input": "Send Ctrl+S via X11 XTEST, then Ctrl+M about 95 ms later. Observe OnSaveDone and poll DrawPages.Count to confirm receipt of one new, unsaved slide. No second shortcut was required. This observes processed input, not individual pixels or dropped frames.",
+    "transport": "Disposable production FUSE and daemon code with a disk-backed mock receiver. The active case holds acknowledgement while the old snapshot is live. Both received SHA-256 values were compared with their respective complete documents. Idle case waits for the initial upload to complete.",
+    "resources": "Sample allocated cache blocks accounting for hard links and daemon RSS about every 5 ms during save; record process CPU delta. The editor, OS page cache and receiver disk are excluded. Concurrent machine activity can affect results.",
+    "ordering": "Sequential interleaved B/F/C, F/C/B, C/B/F; B is previous active, F optimized active and C previous idle. One all-images save per build."
+  },
+  "observations": {
+    "previous_active": [
+      {
+        "save_done_s": 5.3492,
+        "ui_max_gap_s": 5.3686,
+        "insert_key_sent_s": 0.0947,
+        "insert_observed_s": 5.3691,
+        "idle_max_gap_s": 0.0318,
+        "cache_extra_bytes": 245760,
+        "mount_rss_extra_bytes": 794624,
+        "mount_cpu_s": 1.79
+      },
+      {
+        "save_done_s": 5.4296,
+        "ui_max_gap_s": 5.4338,
+        "insert_key_sent_s": 0.0962,
+        "insert_observed_s": 5.4483,
+        "idle_max_gap_s": 0.0375,
+        "cache_extra_bytes": 253952,
+        "mount_rss_extra_bytes": 847872,
+        "mount_cpu_s": 1.86
+      },
+      {
+        "save_done_s": 5.3333,
+        "ui_max_gap_s": 5.3414,
+        "insert_key_sent_s": 0.0922,
+        "insert_observed_s": 5.3478,
+        "idle_max_gap_s": 0.0386,
+        "cache_extra_bytes": 253952,
+        "mount_rss_extra_bytes": 794624,
+        "mount_cpu_s": 1.69
+      }
+    ],
+    "optimized_active": [
+      {
+        "save_done_s": 2.0691,
+        "ui_max_gap_s": 2.0882,
+        "insert_key_sent_s": 0.0957,
+        "insert_observed_s": 2.0916,
+        "idle_max_gap_s": 0.056,
+        "cache_extra_bytes": 335872,
+        "mount_rss_extra_bytes": 929792,
+        "mount_cpu_s": 0.85
+      },
+      {
+        "save_done_s": 2.0933,
+        "ui_max_gap_s": 2.1007,
+        "insert_key_sent_s": 0.0933,
+        "insert_observed_s": 2.1057,
+        "idle_max_gap_s": 0.0436,
+        "cache_extra_bytes": 335872,
+        "mount_rss_extra_bytes": 884736,
+        "mount_cpu_s": 0.89
+      },
+      {
+        "save_done_s": 2.0924,
+        "ui_max_gap_s": 2.1118,
+        "insert_key_sent_s": 0.0934,
+        "insert_observed_s": 2.1048,
+        "idle_max_gap_s": 0.0324,
+        "cache_extra_bytes": 335872,
+        "mount_rss_extra_bytes": 815104,
+        "mount_cpu_s": 0.88
+      }
+    ],
+    "previous_idle": [
+      {
+        "save_done_s": 1.6153,
+        "ui_max_gap_s": 1.6148,
+        "insert_key_sent_s": 0.095,
+        "insert_observed_s": 1.6347,
+        "idle_max_gap_s": 0.0481,
+        "cache_extra_bytes": 110329856,
+        "mount_rss_extra_bytes": 634880,
+        "mount_cpu_s": 0.65
+      },
+      {
+        "save_done_s": 1.5835,
+        "ui_max_gap_s": 1.5897,
+        "insert_key_sent_s": 0.0948,
+        "insert_observed_s": 1.5961,
+        "idle_max_gap_s": 0.0382,
+        "cache_extra_bytes": 110329856,
+        "mount_rss_extra_bytes": 622592,
+        "mount_cpu_s": 0.62
+      },
+      {
+        "save_done_s": 1.5173,
+        "ui_max_gap_s": 1.5301,
+        "insert_key_sent_s": 0.094,
+        "insert_observed_s": 1.5351,
+        "idle_max_gap_s": 0.0336,
+        "cache_extra_bytes": 110329856,
+        "mount_rss_extra_bytes": 618496,
+        "mount_cpu_s": 0.67
+      }
+    ],
+    "all_images_replaced": {
+      "previous": {
+        "save_done_s": 13.0469,
+        "ui_max_gap_s": 13.0471,
+        "insert_key_sent_s": 0.0944,
+        "insert_observed_s": 13.0609,
+        "idle_max_gap_s": 0.061,
+        "cache_extra_bytes": 127873024,
+        "mount_rss_extra_bytes": 2670592,
+        "mount_cpu_s": 5.45
+      },
+      "optimized": {
+        "save_done_s": 5.367,
+        "ui_max_gap_s": 5.3835,
+        "insert_key_sent_s": 0.0951,
+        "insert_observed_s": 5.3891,
+        "idle_max_gap_s": 0.0478,
+        "cache_extra_bytes": 117358592,
+        "mount_rss_extra_bytes": 3637248,
+        "mount_cpu_s": 2.86
+      }
+    }
+  },
+  "checks": {
+    "workspace_passed": 264,
+    "workspace_ignored": 14,
+    "separately_mounted": 13,
+    "offline_after_SIGKILL": "Byte-identical latest document reopened in graphical Impress with its new title and all three images while the receiver stayed blocked.",
+    "durability": "For 1 KiB and legacy 4 KiB SQLite pages, a separate copy of just the checkpointed database and base reproduced both whole views while the original writer was still open.",
+    "unmeasured": [
+      "Microsoft PowerPoint",
+      "real OneDrive transport",
+      "whole-machine power loss",
+      "physical display frame times"
+    ]
+  }
+}
