@@ -223,6 +223,12 @@ impl Database {
         ensure_column(
             &conn,
             "files",
+            "upload_retry_seconds",
+            "ALTER TABLE files ADD COLUMN upload_retry_seconds INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &conn,
+            "files",
             "office_backup_from",
             "ALTER TABLE files ADD COLUMN office_backup_from TEXT",
         )?;

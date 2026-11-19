@@ -41,7 +41,7 @@ impl Database {
             "writing"
         };
         tx.execute(
-            "UPDATE files SET state=?2 WHERE remote_id=?1",
+            "UPDATE files SET state=?2, upload_retry_seconds=0, upload_after=NULL, office_backup_from=NULL, office_replacement_id=NULL WHERE remote_id=?1",
             params![id, state],
         )?;
         tx.commit()?;
@@ -53,7 +53,7 @@ impl Database {
     /// for bytes that were opened from an older cached version.
     pub fn begin_cached_write(&self, record: &FileRecord) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
-            "UPDATE files SET state = ?8
+            "UPDATE files SET state = ?8, upload_retry_seconds=0, upload_after=NULL, office_backup_from=NULL, office_replacement_id=NULL
              WHERE remote_id = ?1 AND cache_path IS ?2 AND cloud_remote_id IS ?3
                AND etag = ?4 AND state = ?5 AND size = ?6 AND modified_unix = ?7",
             params![
@@ -80,7 +80,7 @@ impl Database {
     /// size as Writing, never as an uploadable handle-less generation.
     pub fn begin_truncated_write(&self, record: &FileRecord, cache: &Path) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
-            "UPDATE files SET state = ?1, size = 0,
+            "UPDATE files SET state = ?1, size = 0, upload_retry_seconds=0, upload_after=NULL, office_backup_from=NULL, office_replacement_id=NULL,
             first_unpublished_write=CASE WHEN ?1='writing' THEN COALESCE(first_unpublished_write,?3) ELSE NULL END,
             cache_path = ?2, cache_accessed_unix = ?3, modified_unix = ?3
             WHERE remote_id = ?4 AND state = ?5 AND cache_path IS ?6
@@ -162,16 +162,28 @@ impl Database {
         record: &FileRecord,
         state: FileState,
     ) -> anyhow::Result<()> {
+        // An unavailable receiver may exhaust a whole HTTP retry sequence.
+        // The periodic recovery scan can already have queued this identity
+        // again. Back off that generation without delaying a newer local edit.
+        let now = now_unix();
+        let defer = state == FileState::Dirty
+            && record.metadata.size >= 10 * 1024 * 1024
+            && super::periodic::office_upload_after(
+                &record.metadata.path,
+                record.metadata.size,
+                now,
+            )
+            .is_some();
         self.connect()?.execute(
-            "UPDATE files SET state = ?1
-            WHERE remote_id = ?2 AND state = 'uploading' AND path = ?3
-                AND cache_path IS ?4 AND etag = ?5",
+            "UPDATE files SET state = ?1,
+                upload_retry_seconds=CASE WHEN ?6 THEN min(900,max(30,2*upload_retry_seconds)) ELSE 0 END,
+                upload_after=CASE WHEN ?6 THEN ?7 + min(900,max(30,2*upload_retry_seconds)) END
+             WHERE remote_id = ?2 AND state = 'uploading' AND path = ?3
+                AND cache_path IS ?4 AND etag = ?5 AND size = ?8 AND modified_unix = ?9",
             params![
-                state.as_str(),
-                record.metadata.remote_id,
-                record.metadata.path,
-                record.cache_path.as_ref().map(|p| p.to_string_lossy()),
-                record.metadata.etag
+                state.as_str(), record.metadata.remote_id, record.metadata.path,
+                record.cache_path.as_ref().map(|p| p.to_string_lossy()), record.metadata.etag,
+                defer, now, record.metadata.size as i64, record.metadata.modified_unix
             ],
         )?;
         Ok(())
@@ -301,7 +313,7 @@ impl Database {
         let now = now_unix();
         let conn = self.connect()?;
         let changed = conn.execute(
-            "UPDATE files SET office_backup_from=NULL, office_replacement_id=NULL, upload_after=?5, periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            "UPDATE files SET upload_retry_seconds=0, office_backup_from=NULL, office_replacement_id=NULL, upload_after=?5, periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
             params![
                 FileState::Dirty.as_str(),
                 i64::try_from(size).unwrap_or(i64::MAX),

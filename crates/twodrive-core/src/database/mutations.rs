@@ -178,7 +178,7 @@ impl Database {
         tx.execute(
             "UPDATE files SET office_backup_from=CASE WHEN ?7 AND NOT EXISTS
                 (SELECT 1 FROM pending_metadata_operations WHERE local_id=?4) THEN path END,
-                office_replacement_id=NULL, upload_after=?6, path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
+                office_replacement_id=NULL, upload_retry_seconds=0, upload_after=?6, path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
             params![
                 new_path,
                 parent_cloud_path(&new_path),
@@ -385,7 +385,7 @@ impl Database {
                 size = ?4,
                 modified_unix = ?5,
                 state = CASE WHEN ?11 THEN 'local_only' WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
-                office_backup_from=NULL, office_replacement_id=NULL, upload_after=?12, periodic_open = 0, first_local_ack=NULL,
+                office_backup_from=NULL, office_replacement_id=NULL, upload_retry_seconds=0, upload_after=?12, periodic_open = 0, first_local_ack=NULL,
                 first_unpublished_write = CASE WHEN ?6 = 'writing' AND NOT ?11 THEN ?8 ELSE NULL END,
                 cache_path = ?7,
                 cache_accessed_unix = ?8,
