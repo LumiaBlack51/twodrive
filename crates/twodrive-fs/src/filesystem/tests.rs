@@ -2884,6 +2884,13 @@ fn periodic_upload_keeps_open_writer_and_only_the_current_snapshot() {
     assert_eq!(entry.join("6").metadata().unwrap().len(), 1 << 20);
     assert_eq!(fs::read_dir(&entry).unwrap().count(), 3); // size, owner and one saved block
     fuse.change_handle_bytes(fh, (11 << 20) + 3, None).unwrap();
+    // Multiple timer ticks during one transfer must not consume the new edits.
+    for _ in 0..3 {
+        crate::recovery::enqueue_due_checkpoints(&db, &fuse.upload_pool.sender).unwrap();
+    }
+    assert_eq!(db.first_open_write(&id).unwrap(), Some(since));
+    assert_eq!(fuse.backend.max_active_uploads.load(Ordering::SeqCst), 1);
+    disabled.save(&db).unwrap();
     release.send(()).unwrap();
     deletion_tests::wait_for(|| {
         db.get_by_remote_id(&id)
@@ -2896,6 +2903,8 @@ fn periodic_upload_keeps_open_writer_and_only_the_current_snapshot() {
     let remote = record.cloud_remote_id.unwrap();
     assert_eq!(fuse.backend.download(&remote).unwrap(), a);
     assert_eq!(record.state, FileState::Writing);
+    assert!(db.open_write_timing(&id).unwrap().unwrap().1 >= 1);
+    twodrive_core::PeriodicUpload::default().save(&db).unwrap();
     crate::recovery::enqueue_due_checkpoints(&db, &fuse.upload_pool.sender).unwrap();
     deletion_tests::wait_for(|| {
         db.first_open_write(&id).unwrap().is_none()
@@ -3144,4 +3153,119 @@ fn unlinked_read_write_office_handle_reports_visible_bytes_until_close() {
     test.fs.cleanup_unlinked_cache(&path).unwrap();
     assert!(test.fs.attr_for_ino(ino).is_none());
     assert!(!path.exists());
+}
+
+#[test]
+fn occupied_snapshot_keeps_the_periodic_write_clock() {
+    let mut test = TestFs::new("timer-snapshot-owned");
+    let (_, fh, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("held"), libc::O_CREAT)
+        .unwrap();
+    let id = test.fs.write_handles[&fh].record_remote_id.clone();
+    let cache = test.fs.write_handles[&fh].cache_path.clone();
+    let since = now_unix() - 120;
+    test.fs.db.note_open_write(&id, &cache, since).unwrap();
+    test.fs.change_handle_bytes(fh, 0, Some(b"first")).unwrap();
+    let gate = crate::snapshot::CacheGate::acquire(&cache).unwrap();
+    let held = gate.capture(&cache).unwrap().unwrap();
+    drop(gate);
+    test.fs.change_handle_bytes(fh, 0, Some(b"later")).unwrap();
+    let record = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+    assert!(
+        !recover_dirty_record(
+            &test.fs.db,
+            test.fs.backend.as_ref(),
+            record,
+            &mut |_, _| Ok(())
+        )
+        .unwrap()
+    );
+    assert_eq!(test.fs.db.first_open_write(&id).unwrap(), Some(since));
+    drop(held);
+    let record = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+    assert!(
+        recover_dirty_record(
+            &test.fs.db,
+            test.fs.backend.as_ref(),
+            record,
+            &mut |_, _| Ok(())
+        )
+        .unwrap()
+    );
+    let record = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+    assert_eq!(
+        test.fs
+            .backend
+            .download(record.cloud_remote_id.as_deref().unwrap())
+            .unwrap(),
+        b"later"
+    );
+}
+
+#[test]
+fn slow_upload_delays_periodic_reruns_but_close_publishes_the_latest_edit() {
+    let mut test = TestFs::new("adaptive-rerun");
+    let (_, fh, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("slow"), libc::O_CREAT)
+        .unwrap();
+    let id = test.fs.write_handles[&fh].record_remote_id.clone();
+    let cache = test.fs.write_handles[&fh].cache_path.clone();
+    let db = Database::new(test.fs.db.path());
+    test.fs
+        .change_handle_bytes(fh, 0, Some(b"initial"))
+        .unwrap();
+    let old = test
+        .fs
+        .backend
+        .upload("/slow", b"initial".to_vec())
+        .unwrap();
+    db.mark_dirty_with_size(&id, 7).unwrap();
+    assert!(
+        db.begin_upload(&db.get_by_remote_id(&id).unwrap().unwrap())
+            .unwrap()
+    );
+    // Edit before the old ACK. Five minutes of dirty age exceeds the small-file
+    // tier, but a measured ten-minute transfer needs twelve and a half minutes.
+    let since = now_unix() - 301;
+    db.note_open_write(&id, &cache, since).unwrap();
+    test.fs
+        .change_handle_bytes(fh, 0, Some(b"updated"))
+        .unwrap();
+    db.commit_timed_upload(
+        &id,
+        "/slow",
+        &old,
+        &cache,
+        Some(Duration::from_millis(599_501)),
+    )
+    .unwrap();
+    let db = Database::new(db.path());
+    assert_eq!(db.open_write_timing(&id).unwrap(), Some((since, 600)));
+    crate::recovery::enqueue_due_checkpoints(&db, &test.fs.upload_pool.sender).unwrap();
+    assert!(
+        test.fs
+            .upload_pool
+            .sender
+            .pending
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    let record = db.get_by_remote_id(&id).unwrap().unwrap();
+    assert!(
+        !recover_dirty_record(&db, test.fs.backend.as_ref(), record, &mut |_, _| Ok(())).unwrap()
+    );
+    test.fs
+        .change_handle_bytes(fh, 0, Some(b"newest!"))
+        .unwrap();
+    test.fs.queue_upload_handle(fh).unwrap();
+    deletion_tests::wait_for(|| {
+        db.get_by_remote_id(&id).unwrap().unwrap().state == FileState::Cached
+    });
+    assert_eq!(
+        test.fs.backend.download(&old.remote_id).unwrap(),
+        b"newest!"
+    );
 }

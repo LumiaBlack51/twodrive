@@ -17,12 +17,25 @@ impl Database {
     }
 
     pub fn pending_open_writes(&self) -> anyhow::Result<Vec<(String, PathBuf, i64)>> {
+        Ok(self
+            .pending_open_write_timers()?
+            .into_iter()
+            .map(|(id, cache, since, _)| (id, cache, since))
+            .collect())
+    }
+
+    pub fn pending_open_write_timers(&self) -> anyhow::Result<Vec<(String, PathBuf, i64, u64)>> {
         let conn = self.connect()?;
-        let mut stmt=conn.prepare("SELECT remote_id,cache_path,first_unpublished_write FROM files
+        let mut stmt=conn.prepare("SELECT remote_id,cache_path,first_unpublished_write,last_upload_secs FROM files
             WHERE state='writing' AND first_unpublished_write IS NOT NULL AND cache_path IS NOT NULL")?;
         Ok(stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, PathBuf::from(r.get::<_, String>(1)?), r.get(2)?))
+                Ok((
+                    r.get(0)?,
+                    PathBuf::from(r.get::<_, String>(1)?),
+                    r.get(2)?,
+                    r.get(3)?,
+                ))
             })?
             .collect::<Result<_, _>>()?)
     }
@@ -41,15 +54,19 @@ impl Database {
     }
 
     pub fn first_open_write(&self, id: &str) -> anyhow::Result<Option<i64>> {
+        Ok(self.open_write_timing(id)?.map(|(since, _)| since))
+    }
+
+    pub fn open_write_timing(&self, id: &str) -> anyhow::Result<Option<(i64, u64)>> {
         Ok(self
             .connect()?
             .query_row(
-                "SELECT first_unpublished_write FROM files WHERE remote_id=?1 AND state='writing'",
+                "SELECT first_unpublished_write,last_upload_secs FROM files
+             WHERE remote_id=?1 AND state='writing' AND first_unpublished_write IS NOT NULL",
                 [id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .optional()?
-            .flatten())
+            .optional()?)
     }
 
     /// Called under the byte-write gate. Make this exact open revision eligible

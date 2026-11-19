@@ -1,3 +1,10 @@
+twodrive (0.2.28-1) unstable; urgency=medium
+
+  * Adapt open-file upload deadlines to measured transfer times.
+  * Speed up changed Office media writes and checkpoint range maps in the background.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 19 Nov 2026 09:35:45 +0800
+
 twodrive (0.2.27-1) unstable; urgency=medium
 
   * Reduce visible Office save stalls from frequent range-map checkpoints.

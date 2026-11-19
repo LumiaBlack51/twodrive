@@ -318,6 +318,17 @@ impl Database {
         uploaded: &MetadataEntry,
         cache_path: &Path,
     ) -> anyhow::Result<FileRecord> {
+        self.commit_timed_upload(local_id, requested_path, uploaded, cache_path, None)
+    }
+
+    pub fn commit_timed_upload(
+        &self,
+        local_id: &str,
+        requested_path: &str,
+        uploaded: &MetadataEntry,
+        cache_path: &Path,
+        elapsed: Option<std::time::Duration>,
+    ) -> anyhow::Result<FileRecord> {
         // Upload acknowledgement changes the cloud version, not the local
         // content's mtime. Readers such as Poppler reject saves if that mtime
         // changes after open. Matching delta echoes must preserve it as well.
@@ -380,6 +391,8 @@ impl Database {
                     WHEN ?3 = 1 OR cloud_remote_id IS NULL THEN ?1
                     ELSE cloud_remote_id
                 END,
+                last_upload_secs = CASE WHEN ?9=1 AND (cache_path=?6 OR upload_cache_path=?6)
+                    THEN COALESCE(?10,last_upload_secs) ELSE last_upload_secs END,
                 first_local_ack = CASE WHEN ?3=1 AND cloud_remote_id IS NULL THEN ?2 ELSE first_local_ack END,
                 etag = CASE WHEN ?9 = 1 THEN ?2 ELSE etag END,
                 modified_unix = CASE WHEN ?3 = 1 THEN ?4 ELSE modified_unix END,
@@ -404,6 +417,7 @@ impl Database {
                 now_unix(),
                 local_id,
                 cloud_identity_matches as i64,
+                elapsed.map(|d| d.as_secs().saturating_add(u64::from(d.subsec_nanos() != 0)).min(i64::MAX as u64) as i64),
             ],
         )?;
         if needs_cloud_move {
