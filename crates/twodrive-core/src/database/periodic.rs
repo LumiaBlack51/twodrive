@@ -212,6 +212,7 @@ impl OpenWriteClock {
         self.db
             .prepare_cached(
                 "UPDATE files SET first_unpublished_write=COALESCE(first_unpublished_write,?3),
+                upload_retry_seconds=0, upload_after=NULL, office_backup_from=NULL, office_replacement_id=NULL,
                 state='writing' WHERE remote_id=?1 AND cache_path=?2
                 AND state IN ('writing','dirty','uploading','cached','pinned')
                 AND (first_unpublished_write IS NULL OR state<>'writing')",

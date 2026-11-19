@@ -1175,6 +1175,30 @@ fn failed_metadata_write_does_not_block_another_clone() {
 
 #[cfg(unix)]
 #[test]
+fn new_bytes_on_the_same_open_office_handle_supersede_a_failed_checkpoint() {
+    let test = TestDatabase::new("open-office-retry");
+    let id = "original";
+    let size = 12 * 1024 * 1024;
+    let cache = test.root.join("open.cache");
+    fs::File::create(&cache).unwrap().set_len(size).unwrap();
+    add_file(&test.db, id, "/open.pptx");
+    test.db.mark_cached(id, &cache).unwrap();
+    let clock = test.db.open_write_clock().unwrap();
+    for since in [100, 200] {
+        clock.note(id, &cache, since).unwrap();
+        let writing = test.db.get_by_remote_id(id).unwrap().unwrap();
+        assert!(test.db.publish_open_write(&writing, since, size).unwrap());
+        let dirty = test.db.get_by_remote_id(id).unwrap().unwrap();
+        assert!(test.db.begin_upload(&dirty).unwrap());
+        test.db
+            .finish_failed_upload(&dirty, FileState::Dirty)
+            .unwrap();
+        assert!(test.db.upload_settling(id).unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn large_office_upload_failure_backs_off_only_the_unchanged_generation() {
     let test = TestDatabase::new("large-upload-backoff");
     let id = "original";
