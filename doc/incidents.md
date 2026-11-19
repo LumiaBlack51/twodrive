@@ -48,7 +48,7 @@
 ## TD-20261119-07：按需读取期间图标提前恢复云朵，Pin 与挂载进程重复下载
 
 - 日期：2026-11-19（Asia/Shanghai）
-- 状态：已定位，稳定版候选已修复；正式发布和本机安装待验证。
+- 状态：已修复，稳定版 0.2.29-1 已发布并更新本机。独立进程回归与原文件的本地固定缓存已验证。
 - 影响版本与环境：本机 Linux TwoDrive CLI 和 daemon 均报告 0.2.28，Nautilus、Soda PowerPoint。
 - 关联历史故障：[后台读取调查](background-download-investigation-2026-09-08.md)针对后台程序触发首次读取，本次首次读取有 PowerPoint 调用者证据。[显式释放时取消下载](download-cancellation-2026-09-08.md)针对 Release 操作，本次操作为关闭 Office 后 Pin。
 
@@ -82,7 +82,11 @@ Dot 提出的数据库文件符号链接别名可在隔离 SQLite 上复现：�
 
 ### 交付记录
 
-候选版本 0.2.29-1。正式制品、PR 和本机升级结果待实际产生后补充。
+[PR #76](https://github.com/LumiaBlack51/twodrive/pull/76) 合入 main 的提交为 `b867a190ea7e1bc5f9b190cc87d49a67823488df`。[Dot 最终复核](https://github.com/LumiaBlack51/twodrive/pull/76#issuecomment-6999041127) 与 8 项 GitHub 检查对应最终代码。本地最终提交通过 273 项默认 Rust 测试及严格 Clippy；另用正式包内 CLI 和本机已安装 CLI 分别通过独立进程 Pin 成功及失败接手的 FUSE 回归。正式包内 daemon 与 CLI 通过隔离挂载冒烟。
+
+[稳定版 0.2.29-1](https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.29-1) 包含 11 项制品。已核对发布标签与合并提交、CI 归档摘要、源码与 Git 树、16,294 份 vendored 输入，以及 Debian 三种清单的成员大小和 SHA-256。发布前后均校验了完整资产集合。升级前已确认无活动写入并私有保全配置、数据库、持久队列、未同步缓存和上一版程序。用户级 CLI 和运行中的 daemon 均为 0.2.29，摘要与正式包一致，挂载已恢复。
+
+原演示文稿在升级前已完成 Pin。升级后仍为固定状态，现有本地缓存为 83,110,080 字节，升级前后 SHA-256 一致，PPTX 全部 ZIP 条目 CRC 校验通过。为保护用户数据，跨进程重现使用隔离模拟后端；没有释放或重新下载用户文件，也未将本地缓存与真实 OneDrive 逐字节对照。
 
 ## TD-20261119-05：正式包隔离冒烟偶发在回收站夹具初始化时超时
 
