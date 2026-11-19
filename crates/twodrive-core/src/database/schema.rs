@@ -214,6 +214,13 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_open_write_timer ON files(first_unpublished_write)
             WHERE first_unpublished_write IS NOT NULL AND state='writing'",
         )?;
+        ensure_column(
+            &conn,
+            "files",
+            "upload_after",
+            "ALTER TABLE files ADD COLUMN upload_after INTEGER",
+        )?;
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_closed_upload_timer ON files(upload_after) WHERE upload_after IS NOT NULL")?;
         drop(conn);
         if !migrated {
             self.recompute_pin_inheritance()?;

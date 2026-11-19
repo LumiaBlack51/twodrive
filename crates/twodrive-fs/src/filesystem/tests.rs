@@ -3154,6 +3154,79 @@ fn reopened_local_temp_accepts_first_create_ack_but_not_external_etag() {
     assert!(test.fs.begin_handle_write(stale).is_err());
 }
 
+// Unit-test filesystems have no mount timer. Advance just its durable deadlines.
+fn settle_closed_uploads<B: CloudBackend>(fuse: &TwoDriveFs<B>) {
+    for id in fuse.db.take_due_closed_uploads(i64::MAX).unwrap() {
+        fuse.upload_pool.enqueue(id).unwrap();
+    }
+}
+
+#[test]
+fn powerpoint_temp_reopens_coalesce_and_surviving_temp_uploads_after_restart() {
+    let mut test = TestFs::new("powerpoint-save-burst");
+    let (_, first, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("pptA12F.tmp"), libc::O_CREAT)
+        .unwrap();
+    let id = test.fs.write_handles[&first].record_remote_id.clone();
+    test.fs.queue_upload_handle(first).unwrap();
+    test.fs.write_handles.remove(&first);
+    for revision in [b"first".as_slice(), b"final".as_slice()] {
+        let record = test.fs.db.get_by_remote_id(&id).unwrap().unwrap();
+        assert!(test.fs.db.upload_settling(&id).unwrap());
+        assert!(
+            !recover_dirty_record(
+                &test.fs.db,
+                test.fs.backend.as_ref(),
+                record.clone(),
+                &mut |_, _| Ok(())
+            )
+            .unwrap()
+        );
+        let (_, next, _) = test.fs.create_overwrite_upload(record, true).unwrap();
+        test.fs
+            .change_handle_bytes(next, 0, Some(revision))
+            .unwrap();
+        test.fs.queue_upload_handle(next).unwrap();
+        test.fs.write_handles.remove(&next);
+    }
+    deletion_tests::wait_for(|| {
+        test.fs
+            .upload_pool
+            .sender
+            .pending
+            .lock()
+            .unwrap()
+            .is_empty()
+    });
+    let db = Database::new(test.fs.db.path());
+    recover_interrupted_writes(&db).unwrap();
+    assert!(db.upload_settling(&id).unwrap());
+    assert!(
+        test.fs
+            .backend
+            .get_metadata_by_path("/pptA12F.tmp")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(db.take_due_closed_uploads(i64::MAX).unwrap(), vec![id]);
+    assert!(db.take_due_closed_uploads(i64::MAX).unwrap().is_empty());
+    assert_eq!(
+        recover_dirty_uploads(&db, test.fs.backend.as_ref()).unwrap(),
+        1
+    );
+    let remote = test
+        .fs
+        .backend
+        .get_metadata_by_path("/pptA12F.tmp")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        test.fs.backend.download(&remote.remote_id).unwrap(),
+        b"final"
+    );
+}
+
 #[test]
 fn office_temp_replacement_uses_same_directory_upload_and_survives_restart() {
     let archive = crate::office::tests::Fixture::new();
@@ -3170,6 +3243,7 @@ fn office_temp_replacement_uses_same_directory_upload_and_survives_restart() {
     fuse.change_handle_bytes(old, 0, Some(&bytes)).unwrap();
     fuse.queue_upload_handle(old).unwrap();
     fuse.write_handles.remove(&old);
+    settle_closed_uploads(&fuse);
     fuse.backend.wait_for_upload();
     let (ino, fh, _) = fuse
         .create_upload(ROOT_INO, OsStr::new("~$replacement.tmp"), libc::O_CREAT)
@@ -3199,6 +3273,7 @@ fn office_temp_replacement_uses_same_directory_upload_and_survives_restart() {
         edited
     );
     fuse.release_read_handle(read).unwrap();
+    settle_closed_uploads(&fuse);
     release.send(()).unwrap();
     deletion_tests::wait_for(|| {
         db.get_by_path("/real.pptx")

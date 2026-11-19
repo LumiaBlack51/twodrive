@@ -1,3 +1,10 @@
+twodrive (0.2.30-1) unstable; urgency=medium
+
+  * Coalesce temporary PowerPoint saves and closed large Office packages.
+  * Share the immutable HTTP fragment buffer across upload retries.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 19 Nov 2026 16:14:09 +0800
+
 twodrive (0.2.29-1) unstable; urgency=medium
 
   * Share on-demand downloads between the mount and explicit pin requests.

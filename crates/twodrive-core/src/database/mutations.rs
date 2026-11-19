@@ -163,8 +163,15 @@ impl Database {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
-            params![new_path, parent_cloud_path(&new_path), cloud_name(&new_path), local_id, self.excludes_file_name(&cloud_name(&new_path))],
+            "UPDATE files SET upload_after=?6, path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
+            params![
+                new_path,
+                parent_cloud_path(&new_path),
+                cloud_name(&new_path),
+                local_id,
+                self.excludes_file_name(&cloud_name(&new_path)),
+                super::periodic::office_upload_after(&new_path, record.metadata.size, now_unix()),
+            ],
         )?;
         for descendant in descendants {
             let suffix = descendant
@@ -292,7 +299,7 @@ impl Database {
                 size = ?4,
                 modified_unix = ?5,
                 state = CASE WHEN ?11 THEN 'local_only' WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
-                periodic_open = 0, first_local_ack=NULL,
+                upload_after=?12, periodic_open = 0, first_local_ack=NULL,
                 first_unpublished_write = CASE WHEN ?6 = 'writing' AND NOT ?11 THEN ?8 ELSE NULL END,
                 cache_path = ?7,
                 cache_accessed_unix = ?8,
@@ -314,6 +321,7 @@ impl Database {
                 target_local_id,
                 source.local_mode,
                 self.excludes_file_name(&cloud_name(&new_path)),
+                super::periodic::office_upload_after(&new_path, source.metadata.size, now_unix()),
             ],
         )?;
         anyhow::ensure!(updated == 1, "replacement target was not updated");

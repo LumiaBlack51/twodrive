@@ -268,7 +268,7 @@ impl Database {
             "UPDATE files SET state = 'uploading', upload_path = path,
                 upload_target_id = cloud_remote_id, upload_cache_path = cache_path
              WHERE remote_id = ?1 AND path = ?2 AND cache_path IS ?3
-               AND state = ?4 AND size = ?5 AND modified_unix = ?6
+               AND (upload_after IS NULL OR upload_after <= ?9) AND state = ?4 AND size = ?5 AND modified_unix = ?6
                AND etag = ?7 AND cloud_remote_id IS ?8
                AND NOT EXISTS (SELECT 1 FROM pending_deletes WHERE path = ?2 OR upload_path = ?2 OR uploaded_path = ?2)
                AND NOT EXISTS (SELECT 1 FROM pending_metadata_operations op
@@ -287,20 +287,27 @@ impl Database {
                 record.metadata.modified_unix,
                 record.metadata.etag,
                 record.cloud_remote_id,
+                now_unix(),
             ],
         )?;
         Ok(changed == 1)
     }
 
     pub fn mark_dirty_with_size(&self, remote_id: &str, size: u64) -> anyhow::Result<()> {
+        self.mark_closed_write(remote_id, "", size)
+    }
+
+    pub fn mark_closed_write(&self, remote_id: &str, path: &str, size: u64) -> anyhow::Result<()> {
+        let now = now_unix();
         let conn = self.connect()?;
         let changed = conn.execute(
-            "UPDATE files SET periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            "UPDATE files SET upload_after=?5, periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
             params![
                 FileState::Dirty.as_str(),
                 i64::try_from(size).unwrap_or(i64::MAX),
-                now_unix(),
-                remote_id
+                now,
+                remote_id,
+                super::periodic::office_upload_after(path, size, now),
             ],
         )?;
         if changed == 0 {

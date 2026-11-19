@@ -3,7 +3,55 @@ use crate::{FileRecord, now_unix};
 use rusqlite::{OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
+// PowerPoint briefly closes an empty pptXXXX.tmp, writes its package, and
+// rotates the old presentation through XXXXXXXX.tmp. A surviving temp is a
+// normal user file and must eventually upload under its own name.
+pub(super) fn office_upload_after(path: &str, bytes: u64, now: i64) -> Option<i64> {
+    if !cfg!(unix) {
+        return None;
+    }
+    let name = Path::new(path).file_name()?.to_str()?;
+    let (stem, ext) = name.rsplit_once('.')?;
+    let temp = ext.eq_ignore_ascii_case("tmp")
+        && ((stem.len() == 8 && stem.bytes().all(|b| b.is_ascii_hexdigit()))
+            || (stem.len() == 7
+                && stem.get(..3).is_some_and(|s| s.eq_ignore_ascii_case("ppt"))
+                && stem.as_bytes()[3..].iter().all(u8::is_ascii_hexdigit)));
+    let large_package = bytes >= 10 * 1024 * 1024
+        && ["pptx", "pptm", "xlsx", "xlsm", "docx", "docm"]
+            .iter()
+            .any(|kind| ext.eq_ignore_ascii_case(kind));
+    (temp || large_package).then_some(now + 10)
+}
+
 impl Database {
+    pub fn upload_settling(&self, id: &str) -> anyhow::Result<bool> {
+        Ok(self.connect()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE remote_id=?1 AND upload_after>?2)",
+            params![id, now_unix()],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Removing the deadline only consumes the timer notification. The dirty
+    /// generation remains durable until a matching receiver acknowledgement.
+    pub fn take_due_closed_uploads(&self, now: i64) -> anyhow::Result<Vec<String>> {
+        let conn = self.connect()?;
+        if !conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE upload_after <= ?1)",
+            [now],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn.prepare(
+            "UPDATE files SET upload_after=NULL WHERE upload_after <= ?1 RETURNING remote_id",
+        )?;
+        Ok(stmt
+            .query_map([now], |r| r.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+
     pub fn open_write_clock(&self) -> anyhow::Result<OpenWriteClock> {
         Ok(OpenWriteClock {
             db: self.connect()?,

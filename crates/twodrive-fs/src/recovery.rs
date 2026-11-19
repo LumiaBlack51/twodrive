@@ -100,6 +100,9 @@ pub fn recover_dirty_record<B: CloudBackend>(
     if db.excludes_upload(&current) || db.excludes_upload(&record) {
         return Ok(false);
     }
+    if record.state == FileState::Dirty && db.upload_settling(&record.metadata.remote_id)? {
+        return Ok(false);
+    }
     if db.is_pending_delete(&record.metadata.remote_id, &record.metadata.path)? {
         return Ok(false);
     }
@@ -583,6 +586,9 @@ pub(crate) fn enqueue_recovery(db: &Database, sender: &UploadQueue) -> anyhow::R
 
 #[cfg(unix)]
 pub(crate) fn enqueue_due_checkpoints(db: &Database, sender: &UploadQueue) -> anyhow::Result<()> {
+    for id in db.take_due_closed_uploads(twodrive_core::now_unix())? {
+        sender.send(UploadCommand::Upload(id))?;
+    }
     let policy = twodrive_core::PeriodicUpload::load(db)?;
     if !policy.enabled {
         return Ok(());

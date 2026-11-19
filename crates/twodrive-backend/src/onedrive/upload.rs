@@ -241,7 +241,8 @@ pub(super) fn upload_session_file(
     let mut stalled_responses = 0_u8;
 
     while offset < total_size {
-        let chunk = contents.fragment(file, offset)?;
+        // Retrying a 10 MiB fragment should share its immutable allocation.
+        let chunk = bytes::Bytes::from(contents.fragment(file, offset)?);
         let end = offset + chunk.len() as u64 - 1;
         let content_range = format!("bytes {offset}-{end}/{total_size}");
         let mut next_offset = None;
