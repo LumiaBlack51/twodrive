@@ -7,7 +7,6 @@ use twodrive_core::{Database, FileRecord, normalize_cloud_path};
 
 use crate::activity::ActivityGuard;
 use crate::cache_io::{download_cache_path, has_existing_cache, reconcile_cached_record};
-use crate::locks::item_sync_lock;
 
 pub fn hydrate_pending_pins<B: CloudBackend>(
     db: &Database,
@@ -58,10 +57,7 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
     if record.metadata.is_dir {
         anyhow::bail!("cannot hydrate a directory");
     }
-    let lock = item_sync_lock(&format!("hydrate:{}", record.metadata.remote_id));
-    let _guard = lock
-        .lock()
-        .map_err(|_| anyhow::anyhow!("hydration lock poisoned"))?;
+    let _owner = db.lock_hydration(&record.metadata.remote_id)?;
     check_download_generation(db, &record.metadata.remote_id, generation)?;
     let refreshed = db.get_by_remote_id(&record.metadata.remote_id)?;
     let record = refreshed.as_ref().unwrap_or(record);
@@ -77,10 +73,10 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         record.state != twodrive_core::FileState::LocalOnly,
         "local-only content is unavailable; preserve its metadata for recovery"
     );
+    fs::create_dir_all(cache_dir)?;
     if !db.begin_hydration(&record.metadata.remote_id, generation)? {
         return Err(hydration_cancelled().into());
     }
-    fs::create_dir_all(cache_dir)?;
 
     let mut activity = ActivityGuard::start(
         cache_dir,
@@ -91,18 +87,19 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
     );
     let cache_path = download_cache_path(cache_dir, &record.metadata.remote_id, generation);
     let tmp_path = cache_path.with_extension("tmp");
-    let mut tmp_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&tmp_path)?;
-    let cloud_remote_id = record
-        .cloud_remote_id
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content to hydrate"))?;
-    let mut last_check = std::time::Instant::now();
-    let result = verify_remote_version(db, backend, record).and_then(|_| {
-        backend.download_sized_to(
+    let result = (|| -> anyhow::Result<()> {
+        let mut tmp_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)?;
+        let cloud_remote_id = record
+            .cloud_remote_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content to hydrate"))?;
+        let mut last_check = std::time::Instant::now();
+        verify_remote_version(db, backend, record)?;
+        let count = backend.download_sized_to(
             cloud_remote_id,
             record.metadata.size,
             &mut tmp_file,
@@ -114,17 +111,15 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
                 activity.set_progress(bytes_done, Some(record.metadata.size));
                 Ok(())
             },
-        )
-    });
-    drop(tmp_file);
-    let result = result.and_then(|count| {
+        )?;
+        drop(tmp_file);
         anyhow::ensure!(
             count == record.metadata.size,
             "download returned an unexpected length"
         );
         verify_remote_version(db, backend, record)?;
         check_download_generation(db, &record.metadata.remote_id, generation)
-    });
+    })();
     let result = result.and_then(|_| {
         if db.finish_hydration(
             &record.metadata.remote_id,

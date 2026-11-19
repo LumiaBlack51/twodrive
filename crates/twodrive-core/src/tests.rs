@@ -549,6 +549,54 @@ fn explicit_release_overrides_pin_but_prune_preserves_it() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn pin_refresh_through_database_symlink_sees_the_original_owner() {
+    let test = TestDatabase::new("aliased-hydration");
+    add_file(&test.db, "active", "/active");
+    let alias = test.root.join("linked.sqlite3");
+    std::os::unix::fs::symlink(test.db.path(), &alias).unwrap();
+    let secondary = Database::new(alias);
+    let _owner = test.db.lock_hydration("active").unwrap();
+    assert!(
+        test.db
+            .begin_hydration("active", test.db.download_generation("active").unwrap())
+            .unwrap()
+    );
+    secondary.recompute_pin_inheritance().unwrap();
+    assert_eq!(
+        secondary.get_by_path("/active").unwrap().unwrap().state,
+        FileState::Hydrating
+    );
+}
+
+#[test]
+fn pin_refresh_clears_abandoned_hydration_without_affecting_another_item() {
+    let test = TestDatabase::new("abandoned-hydration");
+    add_file(&test.db, "active", "/active");
+    add_file(&test.db, "abandoned", "/abandoned");
+    let owner = test.db.lock_hydration("active").unwrap();
+    for id in ["active", "abandoned"] {
+        let generation = test.db.download_generation(id).unwrap();
+        assert!(test.db.begin_hydration(id, generation).unwrap());
+    }
+    test.db.recompute_pin_inheritance().unwrap();
+    assert_eq!(
+        test.db.get_by_path("/active").unwrap().unwrap().state,
+        FileState::Hydrating
+    );
+    assert_eq!(
+        test.db.get_by_path("/abandoned").unwrap().unwrap().state,
+        FileState::OnlineOnly
+    );
+    drop(owner);
+    test.db.recompute_pin_inheritance().unwrap();
+    assert_eq!(
+        test.db.get_by_path("/active").unwrap().unwrap().state,
+        FileState::OnlineOnly
+    );
+}
+
 #[test]
 fn folder_release_cancels_nested_pins_and_downloads_but_keeps_dirty_data() {
     let test = TestDatabase::new("release-pinned-folder");

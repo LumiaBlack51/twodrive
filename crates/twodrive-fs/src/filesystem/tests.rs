@@ -553,6 +553,7 @@ fn test_root(name: &str) -> PathBuf {
 
 #[derive(Debug)]
 struct SlowDownloadBackend {
+    gate: Option<Mutex<mpsc::Receiver<bool>>>,
     inner: MockBackend,
     started: Sender<()>,
 }
@@ -563,7 +564,14 @@ impl CloudBackend for SlowDownloadBackend {
     }
     fn download(&self, remote_id: &str) -> anyhow::Result<Vec<u8>> {
         let _ = self.started.send(());
-        thread::sleep(Duration::from_secs(3));
+        if let Some(gate) = &self.gate {
+            anyhow::ensure!(
+                gate.lock().unwrap().recv_timeout(Duration::from_secs(15))?,
+                "simulated interrupted read"
+            );
+        } else {
+            thread::sleep(Duration::from_secs(3));
+        }
         self.inner.download(remote_id)
     }
     fn upload(&self, path: &str, content: Vec<u8>) -> anyhow::Result<MetadataEntry> {
@@ -581,6 +589,126 @@ impl CloudBackend for SlowDownloadBackend {
 }
 
 #[test]
+fn empty_delta_refresh_keeps_an_active_read_visible() {
+    let root = test_root("hydration-refresh");
+    fs::create_dir_all(&root).unwrap();
+    let db = Database::new(root.join("db"));
+    db.init().unwrap();
+    let (started, ready) = mpsc::channel();
+    let (finish, gate) = mpsc::channel();
+    let backend = SlowDownloadBackend {
+        inner: MockBackend::new(),
+        started,
+        gate: Some(Mutex::new(gate)),
+    };
+    sync_metadata(&db, &backend).unwrap();
+    let record = db.get_by_path("/README-cloud.txt").unwrap().unwrap();
+    thread::scope(|scope| {
+        let read = scope.spawn(|| hydrate_record(&db, &root.join("cache"), &backend, &record));
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        db.upsert_metadata_batch(&[]).unwrap();
+        let state = db
+            .get_by_path(&record.metadata.path)
+            .unwrap()
+            .unwrap()
+            .state;
+        finish.send(false).unwrap();
+        assert!(read.join().unwrap().is_err());
+        assert_eq!(state, FileState::Hydrating);
+        assert_eq!(
+            db.get_by_path(&record.metadata.path)
+                .unwrap()
+                .unwrap()
+                .state,
+            FileState::OnlineOnly
+        );
+    });
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "requires FUSE and TWODRIVE_TEST_CLI pointing to the packaged or newly built CLI"]
+fn mounted_read_and_cli_pin_share_download_and_recover_from_owner_failure() {
+    for owner_succeeds in [true, false] {
+        let root = test_root("pin-during-read");
+        let mount = root.join("mount");
+        fs::create_dir_all(&mount).unwrap();
+        let data = root.join("data/twodrive");
+        let db = Database::new(data.join("twodrive.sqlite3"));
+        db.init().unwrap();
+        let (started, ready) = mpsc::channel();
+        let (finish, gate) = mpsc::channel();
+        let backend = SlowDownloadBackend {
+            inner: MockBackend::new(),
+            started,
+            gate: Some(Mutex::new(gate)),
+        };
+        // Only the mount's backend has the custom file. A second fetch by the CLI fails.
+        let path = if owner_succeeds {
+            "/mount-only.txt"
+        } else {
+            "/README-cloud.txt"
+        };
+        if owner_succeeds {
+            backend.inner.upload(path, b"owner bytes".to_vec()).unwrap();
+        }
+        sync_metadata(&db, &backend).unwrap();
+        let record = db.get_by_path(path).unwrap().unwrap();
+        let bytes = backend.inner.download(&record.metadata.remote_id).unwrap();
+        let filesystem = TwoDriveFs::new(db.clone(), data.join("cache"), backend).unwrap();
+        let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+        let mounted = mount.join(path.trim_start_matches('/'));
+        let read = thread::spawn(move || fs::read(mounted));
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut child = Command::new(std::env::var_os("TWODRIVE_TEST_CLI").unwrap())
+            .args(["pin", path])
+            .env("TWODRIVE_BACKEND", "mock")
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("TWODRIVE_MOUNT_DIR", &mount)
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !db.get_by_path(path).unwrap().unwrap().pin_explicit {
+            assert!(Instant::now() < deadline, "CLI never persisted the pin");
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Keep the owner at its network boundary while the separate CLI enters hydration.
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while Instant::now() < deadline && child.try_wait().unwrap().is_none() {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "Pin finished while the original download was blocked"
+        );
+        finish.send(owner_succeeds).unwrap();
+        drop(finish);
+        let result = child.wait_with_output().unwrap();
+        let read = read.join().unwrap();
+        session.join();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // Linux can retry the failed FUSE read after the waiting CLI has published its bytes.
+        match read {
+            Ok(content) => assert_eq!(content, bytes),
+            Err(err) => {
+                assert!(!owner_succeeds);
+                assert_eq!(err.raw_os_error(), Some(libc::EIO));
+            }
+        }
+        let cached = db.get_by_path(path).unwrap().unwrap();
+        assert_eq!(cached.state, FileState::Pinned);
+        assert_eq!(fs::read(cached.cache_path.unwrap()).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 #[ignore = "requires /dev/fuse and fusermount3; uses an isolated temporary mount"]
 fn mounted_large_listing_and_copy_remain_responsive_during_download() {
     let root = test_root("mounted-responsiveness");
@@ -590,6 +718,7 @@ fn mounted_large_listing_and_copy_remain_responsive_during_download() {
     db.init().unwrap();
     let (started, waiting) = mpsc::channel();
     let backend = SlowDownloadBackend {
+        gate: None,
         inner: MockBackend::new(),
         started,
     };
@@ -905,6 +1034,7 @@ fn deferred_reader_rechecks_indexer_before_downloading() {
     db.init().unwrap();
     let (started, downloads) = mpsc::channel();
     let backend = SlowDownloadBackend {
+        gate: None,
         inner: MockBackend::new(),
         started,
     };
@@ -965,6 +1095,7 @@ fn gio_directory_metadata_does_not_download_unknown_large_files() {
     db.init().unwrap();
     let (started, downloads) = mpsc::channel();
     let backend = SlowDownloadBackend {
+        gate: None,
         inner: MockBackend::new(),
         started,
     };

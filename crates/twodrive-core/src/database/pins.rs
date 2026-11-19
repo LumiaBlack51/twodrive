@@ -58,9 +58,13 @@ impl Database {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("pin inheritance: beginning write transaction")?;
-        let mut stmt = tx.prepare(
-            "SELECT remote_id, path, pin_explicit, pin_inheritance_blocked FROM files ORDER BY length(path), path",
-        ).context("pin inheritance: preparing records")?;
+        let mut stmt = tx
+            .prepare(
+                "SELECT remote_id, path, pin_explicit, pin_inheritance_blocked,
+             is_dir = 0 AND cache_path IS NULL AND state IN ('hydrating', 'pinned')
+             FROM files ORDER BY length(path), path",
+            )
+            .context("pin inheritance: preparing records")?;
         let records = stmt
             .query_map([], |row| {
                 Ok((
@@ -68,6 +72,7 @@ impl Database {
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)? != 0,
                     row.get::<_, i64>(3)? != 0,
+                    row.get::<_, bool>(4)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
@@ -78,13 +83,13 @@ impl Database {
         // pin still wins, so independently pinned descendants remain pinned.
         let policies = records
             .iter()
-            .filter(|(_, _, explicit, blocked)| *explicit || *blocked)
-            .map(|(remote_id, path, explicit, _)| {
+            .filter(|(_, _, explicit, blocked, _)| *explicit || *blocked)
+            .map(|(remote_id, path, explicit, _, _)| {
                 (path.clone(), explicit.then(|| remote_id.clone()))
             })
             .collect::<HashMap<_, _>>();
 
-        for (remote_id, path, explicit, inheritance_blocked) in records {
+        for (remote_id, path, explicit, inheritance_blocked, pending_download) in records {
             let origin = if explicit || inheritance_blocked {
                 None
             } else {
@@ -103,6 +108,8 @@ impl Database {
                 origin
             };
             let effective = explicit || origin.is_some();
+            let downloading =
+                !effective && pending_download && self.hydration_in_progress(&remote_id)?;
             tx.execute(
                 r#"
                 UPDATE files
@@ -112,13 +119,13 @@ impl Database {
                         WHEN state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict', 'error') THEN state
                         WHEN ?2 = 1 AND is_dir = 1 THEN 'pinned'
                         WHEN ?2 = 1 AND cache_path IS NOT NULL THEN 'pinned'
-                        WHEN ?2 = 1 THEN 'hydrating'
+                        WHEN ?2 = 1 OR ?4 THEN 'hydrating'
                         WHEN cache_path IS NOT NULL THEN 'cached'
                         ELSE 'online_only'
                     END
                 WHERE remote_id = ?3
                 "#,
-                params![origin, effective as i64, remote_id],
+                params![origin, effective as i64, remote_id, downloading],
             ).context("pin inheritance: updating record")?;
         }
         tx.commit()
