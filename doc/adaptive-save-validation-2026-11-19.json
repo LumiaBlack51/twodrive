@@ -281,6 +281,312 @@
     "first_upload_seconds": 307,
     "minimum_next_interval_seconds": 384,
     "latest_ack_dirty_age_seconds": 385,
-    "full_digests_checked": true
+    "full_digests_checked": true,
+    "final_build_repeat": {
+      "first_upload_seconds": 307,
+      "minimum_next_interval_seconds": 384,
+      "latest_ack_dirty_age_seconds": 385,
+      "full_digests_checked": true
+    }
+  },
+  "controlled_followup": {
+    "test": "All images replaced, runs on the same synthetic source. An ordinary filesystem and tmpfs bypass TwoDrive. Idle and held mounts use the disk mock. Times are per-trial, not a guaranteed floor.",
+    "flat_local": {
+      "save_done": 1.005,
+      "idle_max_gap": 0.0548,
+      "max_ui_heartbeat_gap": 1.0178,
+      "first_key_at": 0.0956,
+      "first_key_accepted": true,
+      "edit_visible": 1.0186,
+      "retry_at": null,
+      "source_size": 110350788
+    },
+    "mount_idle": {
+      "save_done": 1.3391,
+      "idle_max_gap": 0.0509,
+      "max_ui_heartbeat_gap": 1.3374,
+      "first_key_at": 0.0959,
+      "first_key_accepted": true,
+      "edit_visible": 1.359,
+      "retry_at": null,
+      "source_size": 110350790,
+      "extra": 110329856,
+      "rss": 655360,
+      "cpu": 0.51,
+      "active_maps": 1,
+      "document_checked": true
+    },
+    "active_candidate": {
+      "save_done": 2.0639,
+      "idle_max_gap": 0.052,
+      "max_ui_heartbeat_gap": 2.0662,
+      "first_key_at": 0.0953,
+      "first_key_accepted": true,
+      "edit_visible": 2.078,
+      "retry_at": null,
+      "source_size": 110350794,
+      "extra": 118554624,
+      "rss": 3866624,
+      "cpu": 1.29,
+      "active_maps": 2,
+      "document_checked": true
+    },
+    "active_previous": {
+      "save_done": 5.6611,
+      "idle_max_gap": 0.0644,
+      "max_ui_heartbeat_gap": 5.6812,
+      "first_key_at": 0.0955,
+      "first_key_accepted": true,
+      "edit_visible": 5.6753,
+      "retry_at": null,
+      "source_size": 110350793,
+      "extra": 117358592,
+      "rss": 3764224,
+      "cpu": 3.26,
+      "active_maps": 2,
+      "document_checked": true
+    },
+    "tmpfs": [
+      {
+        "save_done": 0.7203,
+        "idle_max_gap": 0.0518,
+        "max_ui_heartbeat_gap": 0.7269,
+        "first_key_at": 0.096,
+        "first_key_accepted": true,
+        "edit_visible": 0.7392,
+        "retry_at": null,
+        "source_size": 110350795
+      },
+      {
+        "save_done": 1.0426,
+        "idle_max_gap": 0.0462,
+        "max_ui_heartbeat_gap": 1.0551,
+        "first_key_at": 0.0912,
+        "first_key_accepted": true,
+        "edit_visible": 1.0552,
+        "retry_at": null,
+        "source_size": 110350790
+      }
+    ]
+  },
+  "delivery": {
+    "pr": "https://github.com/LumiaBlack51/twodrive/pull/70",
+    "source_commit": "5b35f2c3d626f7e6a192efd592b27d0a999ea072",
+    "merge_commit": "5f1309b3570342912d381f823d7d0d1ee41cb6d0",
+    "dot": "https://github.com/LumiaBlack51/twodrive/pull/70#issuecomment-6997346762",
+    "release": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.28-1",
+    "asset_count": 11,
+    "archive_sha256": "sha256:0f612045263ab23f0d01349755faa213271743c0b3dd07b28c72f8e638f21513",
+    "checks": {
+      "Debian package": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481348/job/135279907081",
+      "Debian packaging policy": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481353/job/135279776286",
+      "test (ubuntu-latest, --features mount, target/release/twodrive-dev)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481356/job/135279777034",
+      "Native checks (Windows)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481326/job/135279776321",
+      "windows": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481357/job/135279776309",
+      "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481356/job/135279776816",
+      "Native checks (Linux)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481326/job/135279775996",
+      "linux": "https://github.com/LumiaBlack51/twodrive/actions/runs/44440481357/job/135279776660"
+    },
+    "rust_workspace_tests_passed": 270,
+    "additional_fs_tests_passed": 14,
+    "explicit_fuse_tests_in_additional_set": 13,
+    "settings_tests_with_gtk": 7,
+    "nautilus_tests": 25,
+    "release_guard_tests": 6,
+    "strict_clippy_and_format": true
+  },
+  "local_deployment": {
+    "version": "twodrive 0.2.28",
+    "running_daemon_matches_package": true,
+    "installed_sha256": {
+      "twodrive": "660503069f4f8c0e1985dfabb6e223fc2c30dfd45dfeef3f4b9a1de22383ccfa",
+      "twodrive-daemon": "8faac277eb78f716480acb8d4e8ced406a20088bb0ec3df2110f70b97f9fdf8b",
+      "twodrive-settings": "ad4cbfedd201549693169ce3983df9742da4ee31909ac345621108e20ad1446c"
+    },
+    "reference_sets_equal": {
+      "cache": true,
+      "deletes": true,
+      "metadata": true
+    },
+    "sqlite_integrity": "ok",
+    "config_unchanged": true,
+    "unit_unchanged": true,
+    "mount_active": true,
+    "mock_smoke": {
+      "initial": "Timed out after 20 s waiting for a trash payload while dependent directory metadata operations were pending. Open-file publishing checks had already passed.",
+      "unchanged_retry": "passed",
+      "parent_acknowledged_fixture": "passed"
+    },
+    "installed_ui_method": "The installed previous and final official daemons each ran on an isolated mount with the built-in mock. A test-only I/O delay held the mock provider reading its finished private transport file. Verified the old file digest and the latest full digest after cache release and rehydration. No production mount editing or live OneDrive writes.",
+    "installed_title": {
+      "save_done": 2.6162,
+      "idle_max_gap": 0.0249,
+      "max_ui_heartbeat_gap": 2.6315,
+      "first_key_at": 0.0946,
+      "first_key_accepted": true,
+      "edit_visible": 2.6283,
+      "retry_at": null,
+      "source_size": 110350847,
+      "extra": 1937408,
+      "rss": 71643136,
+      "cpu": 1.06,
+      "active_maps": 2,
+      "document_checked": true
+    },
+    "previous_all_images_trials": [
+      {
+        "save_done": 5.1539,
+        "idle_max_gap": 0.051,
+        "max_ui_heartbeat_gap": 5.182,
+        "first_key_at": 0.094,
+        "first_key_accepted": true,
+        "edit_visible": 5.1913,
+        "retry_at": null,
+        "source_size": 110350796,
+        "extra": 117358592,
+        "rss": 4165632,
+        "cpu": 3.04,
+        "active_maps": 2,
+        "document_checked": true
+      },
+      {
+        "save_done": 23.3886,
+        "idle_max_gap": 0.0435,
+        "max_ui_heartbeat_gap": 23.3982,
+        "first_key_at": 0.0955,
+        "first_key_accepted": true,
+        "edit_visible": 23.4085,
+        "retry_at": null,
+        "source_size": 110350787,
+        "extra": 117358592,
+        "rss": 4165632,
+        "cpu": 6.53,
+        "active_maps": 2,
+        "document_checked": true
+      },
+      {
+        "save_done": 23.19,
+        "idle_max_gap": 0.0533,
+        "max_ui_heartbeat_gap": 23.1894,
+        "first_key_at": 0.095,
+        "first_key_accepted": true,
+        "edit_visible": 23.2017,
+        "retry_at": null,
+        "source_size": 110350792,
+        "extra": 117358592,
+        "rss": 3981312,
+        "cpu": 6.19,
+        "active_maps": 2,
+        "document_checked": true
+      }
+    ],
+    "installed_all_images_trials": [
+      {
+        "save_done": 3.5477,
+        "idle_max_gap": 0.0599,
+        "max_ui_heartbeat_gap": 3.5464,
+        "first_key_at": 0.0954,
+        "first_key_accepted": true,
+        "edit_visible": 3.5665,
+        "retry_at": null,
+        "source_size": 110350792,
+        "extra": 130723840,
+        "rss": 31617024,
+        "cpu": 1.75,
+        "active_maps": 2,
+        "document_checked": true
+      },
+      {
+        "save_done": 3.0082,
+        "idle_max_gap": 0.0629,
+        "max_ui_heartbeat_gap": 3.0226,
+        "first_key_at": 0.0943,
+        "first_key_accepted": true,
+        "edit_visible": 3.0256,
+        "retry_at": null,
+        "source_size": 110350790,
+        "extra": 263360512,
+        "rss": 60268544,
+        "cpu": 1.57,
+        "active_maps": 2,
+        "document_checked": true
+      },
+      {
+        "save_done": 3.5293,
+        "idle_max_gap": 0.0514,
+        "max_ui_heartbeat_gap": 3.5445,
+        "first_key_at": 0.0955,
+        "first_key_accepted": true,
+        "edit_visible": 3.5492,
+        "retry_at": null,
+        "source_size": 110350791,
+        "extra": 124489728,
+        "rss": 4243456,
+        "cpu": 1.71,
+        "active_maps": 2,
+        "document_checked": true
+      },
+      {
+        "save_done": 3.4919,
+        "idle_max_gap": 0.0453,
+        "max_ui_heartbeat_gap": 3.4952,
+        "first_key_at": 0.0955,
+        "first_key_accepted": true,
+        "edit_visible": 3.5118,
+        "retry_at": null,
+        "source_size": 110350793,
+        "extra": 126742528,
+        "rss": 4354048,
+        "cpu": 1.73,
+        "active_maps": 2,
+        "document_checked": true,
+        "peak_components_bytes": {
+          "map": 114892800,
+          "map-wal": 11583488,
+          "map-shm": 262144
+        }
+      },
+      {
+        "save_done": 3.726,
+        "idle_max_gap": 0.0646,
+        "max_ui_heartbeat_gap": 3.7325,
+        "first_key_at": 0.0961,
+        "first_key_accepted": true,
+        "edit_visible": 3.7388,
+        "retry_at": null,
+        "source_size": 110350789,
+        "extra": 119332864,
+        "rss": 4329472,
+        "cpu": 1.78,
+        "active_maps": 2,
+        "document_checked": true,
+        "peak_components_bytes": {
+          "map": 114892800,
+          "map-wal": 4304896,
+          "map-shm": 131072
+        }
+      },
+      {
+        "save_done": 3.5511,
+        "idle_max_gap": 0.0582,
+        "max_ui_heartbeat_gap": 3.5581,
+        "first_key_at": 0.0956,
+        "first_key_accepted": true,
+        "edit_visible": 3.5644,
+        "retry_at": null,
+        "source_size": 110350791,
+        "extra": 121274368,
+        "rss": 4255744,
+        "cpu": 1.64,
+        "active_maps": 2,
+        "document_checked": true,
+        "peak_components_bytes": {
+          "map": 113287168,
+          "map-wal": 7786496,
+          "map-shm": 196608
+        }
+      }
+    ],
+    "peak_measurement": "Sampled allocated cache blocks, counted once per inode, relative to the instant before Ctrl+S. Excludes the mock transport temporary file, receiver memory and editor memory. File-level attribution was added only for the last three trials. The 251 MiB observation lacks file-level attribution."
   }
 }

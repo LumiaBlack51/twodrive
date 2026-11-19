@@ -108,8 +108,12 @@ def main():
             # Model the on-mount freedesktop trash format using only synthetic
             # files. Never invoke a session-wide "empty trash" command.
             trash = mount / f".Trash-{os.getuid()}"
-            (trash / "files").mkdir(parents=True)
-            (trash / "info").mkdir()
+            # This fixture exercises trash retention. Publish each parent before
+            # creating children so setup does not depend on the 60 s retry scan.
+            for directory in (trash, trash / "files", trash / "info"):
+                directory.mkdir()
+                relative = "/" + directory.relative_to(mount).as_posix()
+                wait_for(lambda: record(relative)[2] is not None, process, "trash directory upload")
             trash_records = []
             for name in ("restore-me.txt", "empty-me.txt"):
                 source = mount / name
