@@ -240,7 +240,7 @@ fn request_close(process: Identity) -> bool {
         return false;
     }
     let fd = unsafe { OwnedFd::from_raw_fd(raw as i32) };
-    if !process_info(process.pid).is_some_and(|live| live.identity == process) {
+    if process_info(process.pid).is_none_or(|live| live.identity != process) {
         return false;
     }
     unsafe {
