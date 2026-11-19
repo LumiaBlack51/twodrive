@@ -486,7 +486,9 @@ pub(crate) fn recover_pending_metadata_record<B: CloudBackend>(
     let Some(record) = db.get_by_remote_id(&operation.local_id)? else {
         return Ok(false);
     };
-    if db.excludes_upload(&record) {
+    if db.excludes_upload(&record)
+        || !db.metadata_operation_ready(&operation.local_id, &operation.path)?
+    {
         return Ok(false);
     }
     // A queued snapshot may predate a local parent rename. Never replay its

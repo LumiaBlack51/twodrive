@@ -301,7 +301,7 @@ impl Database {
         let now = now_unix();
         let conn = self.connect()?;
         let changed = conn.execute(
-            "UPDATE files SET upload_after=?5, periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
+            "UPDATE files SET office_backup_from=NULL, office_replacement_id=NULL, upload_after=?5, periodic_open=0, first_unpublished_write=NULL, state = CASE WHEN state = 'local_only' THEN state ELSE ?1 END, size = ?2, modified_unix = ?3 WHERE remote_id = ?4",
             params![
                 FileState::Dirty.as_str(),
                 i64::try_from(size).unwrap_or(i64::MAX),

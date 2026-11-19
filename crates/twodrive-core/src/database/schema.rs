@@ -220,6 +220,18 @@ impl Database {
             "upload_after",
             "ALTER TABLE files ADD COLUMN upload_after INTEGER",
         )?;
+        ensure_column(
+            &conn,
+            "files",
+            "office_backup_from",
+            "ALTER TABLE files ADD COLUMN office_backup_from TEXT",
+        )?;
+        ensure_column(
+            &conn,
+            "files",
+            "office_replacement_id",
+            "ALTER TABLE files ADD COLUMN office_replacement_id TEXT",
+        )?;
         conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_closed_upload_timer ON files(upload_after) WHERE upload_after IS NOT NULL")?;
         drop(conn);
         if !migrated {

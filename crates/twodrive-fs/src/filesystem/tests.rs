@@ -3162,6 +3162,80 @@ fn settle_closed_uploads<B: CloudBackend>(fuse: &TwoDriveFs<B>) {
 }
 
 #[test]
+fn powerpoint_rotation_preserves_original_cloud_identity_through_backup_unlink() {
+    let mut test = TestFs::new("powerpoint-rotation");
+    let bytes = vec![0x23; 10 * 1024 * 1024];
+    let original = test
+        .fs
+        .backend
+        .upload("/lesson.pptx", bytes.clone())
+        .unwrap();
+    sync_metadata(&test.fs.db, test.fs.backend.as_ref()).unwrap();
+    test.fs.refresh_child_records("/");
+    let old = test.fs.db.get_by_path("/lesson.pptx").unwrap().unwrap();
+    test.fs.ensure_cached(&old).unwrap();
+    let (_, fh, _) = test
+        .fs
+        .create_upload(ROOT_INO, OsStr::new("PPT533.tmp"), libc::O_CREAT)
+        .unwrap();
+    let mut final_bytes = bytes;
+    final_bytes[17] = 0x67;
+    test.fs
+        .change_handle_bytes(fh, 0, Some(&final_bytes))
+        .unwrap();
+    test.fs.queue_upload_handle(fh).unwrap();
+    test.fs.write_handles.remove(&fh);
+    for (from, to) in [
+        ("lesson.pptx", "123AB789.tmp"),
+        ("PPT533.tmp", "lesson.pptx"),
+    ] {
+        test.fs
+            .rename_record(ROOT_INO, OsStr::new(from), ROOT_INO, OsStr::new(to))
+            .unwrap();
+    }
+    let backup = test.fs.db.get_by_path("/123AB789.tmp").unwrap().unwrap();
+    assert_eq!(
+        recover_pending_metadata_operations(&test.fs.db, test.fs.backend.as_ref()).unwrap(),
+        0
+    );
+    let ino = test.fs.inodes.ino_for_path("/123AB789.tmp").unwrap();
+    test.fs.delete_record(ino, &backup).unwrap();
+    let final_record = test.fs.db.get_by_path("/lesson.pptx").unwrap().unwrap();
+    assert_eq!(final_record.metadata.remote_id, old.metadata.remote_id);
+    assert!(test.fs.db.pending_deletes().unwrap().is_empty());
+    assert_eq!(
+        test.fs
+            .backend
+            .get_metadata_by_path("/lesson.pptx")
+            .unwrap()
+            .unwrap()
+            .remote_id,
+        original.remote_id
+    );
+    assert!(
+        test.fs
+            .backend
+            .get_metadata_by_path("/123AB789.tmp")
+            .unwrap()
+            .is_none()
+    );
+    settle_closed_uploads(&test.fs);
+    deletion_tests::wait_for(|| {
+        test.fs
+            .db
+            .get_by_path("/lesson.pptx")
+            .unwrap()
+            .unwrap()
+            .state
+            == FileState::Cached
+    });
+    assert_eq!(
+        test.fs.backend.download(&original.remote_id).unwrap(),
+        final_bytes
+    );
+}
+
+#[test]
 fn powerpoint_temp_reopens_coalesce_and_surviving_temp_uploads_after_restart() {
     let mut test = TestFs::new("powerpoint-save-burst");
     let (_, first, _) = test
