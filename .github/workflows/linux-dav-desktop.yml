@@ -16,7 +16,11 @@ on:
       - 'scripts/install-dav-desktop.py'
       - 'scripts/test_dav_installer.py'
       - 'scripts/install-rclone-component.py'
+      - 'scripts/build-rclone-mount.py'
+      - 'scripts/test-rclone-gio-mount.py'
       - 'scripts/test_rclone_component.py'
+      - 'packaging/development/rclone-gio-mount.patch'
+      - 'packaging/nautilus/**'
       - 'scripts/verify-icloud-desktop.py'
       - 'scripts/test_icloud_validation_guard.py'
       - 'scripts/test_provider_login_console.py'
@@ -85,6 +89,15 @@ jobs:
           python3 scripts/install-rclone-component.py --platform linux-amd64 --destination dist/rclone
           TWODRIVE_TEST_RCLONE="$PWD/dist/rclone/rclone" cargo test --manifest-path experiments/twodrive-dev/Cargo.toml --locked --features mount rclone_drive:: -- --ignored
           TWODRIVE_TEST_RCLONE="$PWD/dist/rclone/rclone" cargo test --manifest-path experiments/twodrive-dev/Cargo.toml --locked --features mount readonly_mount::tests::official_rclone_reads_the_private_provider_bridge -- --ignored
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.11'
+          cache: false
+      - name: Build and check Linux Rclone mount helper
+        run: |
+          python3 scripts/build-rclone-mount.py --destination dist/rclone
+          python3 scripts/test-rclone-gio-mount.py dist/rclone/rclone dist/rclone/rclone-mount
+          python3 -m unittest discover -s packaging/nautilus -p 'test*.py'
       - name: Desktop IPC and WebDAV operations
         run: |
           python3 -m unittest discover -s scripts -p 'test_*.py'

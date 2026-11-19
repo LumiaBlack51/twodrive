@@ -1,0 +1,48 @@
+diff --git a/cmd/mount/file.go b/cmd/mount/file.go
+index 713ae3a..31c0343 100644
+--- a/cmd/mount/file.go
++++ b/cmd/mount/file.go
+@@ -7,0 +8,2 @@ import (
++	"path/filepath"
++	"strconv"
+@@ -68,0 +71,3 @@ func (f *File) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenR
++	if isTwoDriveGioProbe(int(req.Flags), req.Pid) {
++		return nil, syscall.ENODATA
++	}
+@@ -87,0 +93,17 @@ func (f *File) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenR
++func isTwoDriveGioProbe(flags int, pid uint32) bool {
++	if flags&(syscall.O_ACCMODE|syscall.O_NOATIME) != syscall.O_RDONLY|syscall.O_NOATIME {
++		return false
++	}
++	if os.Getenv("TWODRIVE_RCLONE_DEFER_GIO_PROBES") != "1" || pid == 0 {
++		return false
++	}
++	// GIO opens files this way to sniff the MIME type. ENODATA makes it
++	// use the filename without retrying with an ordinary open (as on EPERM).
++	executable, err := os.Readlink("/proc/" + strconv.FormatUint(uint64(pid), 10) + "/exe")
++	if err != nil {
++		return false
++	}
++	name := filepath.Base(executable)
++	return name == "gio" || name == "nautilus"
++}
++
+diff --git a/cmd/twodrive-mount/main.go b/cmd/twodrive-mount/main.go
+new file mode 100644
+index 0000000..995ac07
+--- /dev/null
++++ b/cmd/twodrive-mount/main.go
+@@ -0,0 +1,13 @@
++//go:build linux
++
++package main
++
++import (
++	_ "github.com/rclone/rclone/backend/local"
++	_ "github.com/rclone/rclone/backend/webdav"
++	"github.com/rclone/rclone/cmd"
++	_ "github.com/rclone/rclone/cmd/mount"
++	_ "github.com/rclone/rclone/cmd/rcd"
++)
++
++func main() { cmd.Main() }

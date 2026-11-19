@@ -98,6 +98,24 @@ class DavEmblemTests(unittest.TestCase):
             queued.assert_called_once()
         self.assertEqual(events, [])
 
+    def test_bridge_candidates_accepts_owned_mount_helper_and_official_component(self):
+        runtime = self.root / "runtime"
+        cache = self.root / "account-cache"
+        processes = []
+        for pid, executable, account_cache in (
+            (10, runtime / "rclone", cache),
+            (11, runtime / "rclone-mount", cache),
+            (12, self.root / "other/rclone-mount", cache),
+            (13, runtime / "rclone-mount", self.root / "other-cache"),
+        ):
+            process = self.root / str(pid)
+            process.mkdir()
+            (process / "exe").symlink_to(executable)
+            (process / "environ").write_bytes(f"RCLONE_CACHE_DIR={account_cache}\0".encode())
+            processes.append(process)
+        with patch.object(Path, "iterdir", return_value=processes):
+            self.assertEqual([pid for pid, _ in ext.bridge_candidates(cache)], [10, 11])
+
     def test_native_states_and_missing_cache_are_honest(self):
         p = self.profile("onedrive")
         db, mount = self.native(p)

@@ -467,12 +467,13 @@ def rc_read(env, operation):
 
 
 def bridge_candidates(cache_root):
-    executable = str(dav_state_dir().parent / "runtime/rclone")
+    runtime = dav_state_dir().parent / "runtime"
+    executables = {str(runtime / name) for name in ("rclone", "rclone-mount")}
     for process in Path("/proc").iterdir():
         if not process.name.isdigit():
             continue
         try:
-            if process.stat().st_uid != os.getuid() or os.readlink(process / "exe") != executable:
+            if process.stat().st_uid != os.getuid() or os.readlink(process / "exe") not in executables:
                 continue
             env = dict(item.decode().split("=", 1) for item in
                        (process / "environ").read_bytes().split(b"\0") if b"=" in item)
