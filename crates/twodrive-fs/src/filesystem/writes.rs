@@ -434,7 +434,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         }
         let size = crate::office::logical_size(&handle.cache_path)?;
         self.db
-            .mark_dirty_with_size(&handle.record_remote_id, size)?;
+            .mark_closed_write(&handle.record_remote_id, &handle.path, size)?;
         // Publish the completed local generation before an editor can reopen
         // it. A later directory refresh must not reveal a different mtime.
         let record = self
@@ -525,7 +525,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
                 .mark_state(&record.metadata.remote_id, FileState::LocalOnly)?;
         }
         self.db
-            .mark_dirty_with_size(&record.metadata.remote_id, size)?;
+            .mark_closed_write(&record.metadata.remote_id, &record.metadata.path, size)?;
         self.inodes.replace_size(ino, size);
         if !self.db.excludes_upload(
             &self

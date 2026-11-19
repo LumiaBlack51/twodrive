@@ -162,10 +162,44 @@ impl Database {
         let descendants = self.list_descendants(&old_path)?;
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let name = cloud_name(&new_path);
+        let now = now_unix();
+        let same_directory = record.metadata.parent_path == parent_cloud_path(&new_path);
+        let original_pptx = old_path.to_ascii_lowercase().ends_with(".pptx");
+        let backup = same_directory
+            && original_pptx
+            && record.metadata.size >= 10 * 1024 * 1024
+            && record.cache_path.is_some()
+            && super::periodic::powerpoint_backup(&name)
+            && !self.excludes_file_name(&name);
+        let deadline = super::periodic::office_upload_after(&new_path, record.metadata.size, now);
+        // A move that was already queued might be in flight. Only fold a fresh,
+        // fully observed same-directory backup rotation into its original ID.
         tx.execute(
-            "UPDATE files SET path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
-            params![new_path, parent_cloud_path(&new_path), cloud_name(&new_path), local_id, self.excludes_file_name(&cloud_name(&new_path))],
+            "UPDATE files SET office_backup_from=CASE WHEN ?7 AND NOT EXISTS
+                (SELECT 1 FROM pending_metadata_operations WHERE local_id=?4) THEN path END,
+                office_replacement_id=NULL, upload_retry_seconds=0, upload_after=?6, path = ?1, parent_path = ?2, name = ?3, pin_inheritance_blocked = 0, state = CASE WHEN is_dir = 0 AND ?5 AND cache_path IS NOT NULL THEN 'local_only' WHEN state = 'local_only' THEN 'dirty' WHEN state = 'error' AND cloud_remote_id IS NULL AND cache_path IS NOT NULL THEN 'dirty' ELSE state END WHERE remote_id = ?4",
+            params![
+                new_path,
+                parent_cloud_path(&new_path),
+                cloud_name(&new_path),
+                local_id,
+                self.excludes_file_name(&cloud_name(&new_path)),
+                deadline, backup,
+            ],
         )?;
+        if same_directory
+            && deadline.is_some()
+            && new_path.to_ascii_lowercase().ends_with(".pptx")
+            && super::periodic::powerpoint_temp(&record.metadata.name)
+            && !self.excludes_file_name(&name)
+        {
+            tx.execute(
+                "UPDATE files SET office_replacement_id=?1 WHERE parent_path=?2 AND office_backup_from=?3
+                 AND upload_after>?4 AND office_replacement_id IS NULL",
+                params![local_id, record.metadata.parent_path, new_path, now],
+            )?;
+        }
         for descendant in descendants {
             let suffix = descendant
                 .metadata
@@ -226,9 +260,65 @@ impl Database {
         target_local_id: &str,
         new_path: &str,
     ) -> anyhow::Result<FileRecord> {
+        self.replace_file(source_local_id, target_local_id, new_path, false)?
+            .ok_or_else(|| anyhow::anyhow!("replacement target disappeared"))
+    }
+
+    /// Unlink completes PowerPoint's three-operation save. Keep the target's
+    /// identity and any in-flight claim just as for rename-over-target. Up
+    /// to this point the local backup still has its original bytes and inode.
+    pub fn finish_office_backup(
+        &self,
+        backup: &FileRecord,
+    ) -> anyhow::Result<Option<(String, FileRecord)>> {
+        if !super::periodic::powerpoint_backup(&backup.metadata.name) {
+            return Ok(None);
+        }
+        let pair: Option<(String, String)> = self
+            .connect()?
+            .query_row(
+                "SELECT office_replacement_id, office_backup_from FROM files WHERE remote_id=?1
+             AND path=?2 AND upload_after>?3 AND office_replacement_id IS NOT NULL",
+                params![backup.metadata.remote_id, backup.metadata.path, now_unix()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((source, original)) = pair else {
+            return Ok(None);
+        };
+        let result = self.replace_file(&source, &backup.metadata.remote_id, &original, true)?;
+        Ok(result.map(|record| (source, record)))
+    }
+
+    fn replace_file(
+        &self,
+        source_local_id: &str,
+        target_local_id: &str,
+        new_path: &str,
+        rotation: bool,
+    ) -> anyhow::Result<Option<FileRecord>> {
         let new_path = normalize_cloud_path(new_path);
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if rotation {
+            let eligible: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM files b JOIN files s ON s.remote_id=b.office_replacement_id
+                 WHERE b.remote_id=?1 AND s.remote_id=?2 AND b.office_backup_from=?3
+                 AND b.upload_after>?4 AND s.path=?3 AND s.cloud_remote_id IS NULL
+                 AND s.upload_path IS NULL AND s.state='dirty' AND s.cache_path IS NOT NULL
+                 AND b.state IN ('cached','pinned','dirty','uploading') AND b.cache_path IS NOT NULL
+                 AND (b.upload_path IS NULL OR b.upload_path=?3)
+                 AND NOT EXISTS(SELECT 1 FROM pending_metadata_operations WHERE local_id=s.remote_id))",
+                params![target_local_id, source_local_id, new_path, now_unix()], |r| r.get(0))?;
+            if !eligible {
+                return Ok(None);
+            }
+            tx.execute(
+                "DELETE FROM pending_metadata_operations WHERE local_id=?1 AND kind='move'
+                       AND path=(SELECT path FROM files WHERE remote_id=?1)",
+                [target_local_id],
+            )?;
+        }
         // Read both identities under the write transaction: a delta or upload
         // acknowledgement must not change the replacement preconditions.
         let source = self
@@ -244,10 +334,13 @@ impl Database {
         if source.metadata.is_dir || target.metadata.is_dir {
             anyhow::bail!("cannot replace a directory as a file");
         }
-        anyhow::ensure!(target.metadata.path == new_path, "replacement target moved");
+        anyhow::ensure!(
+            rotation || target.metadata.path == new_path,
+            "replacement target moved"
+        );
         if source_local_id == target_local_id {
             // Preserve content, state, upload claims and pending metadata jobs.
-            return Ok(target);
+            return Ok(Some(target));
         }
         // An atomic save replaces the target's bytes, not its cloud identity or
         // destination. Keep its pending rename; only the source job is obsolete.
@@ -292,7 +385,7 @@ impl Database {
                 size = ?4,
                 modified_unix = ?5,
                 state = CASE WHEN ?11 THEN 'local_only' WHEN ?6 = 'writing' THEN 'writing' ELSE 'dirty' END,
-                periodic_open = 0, first_local_ack=NULL,
+                office_backup_from=NULL, office_replacement_id=NULL, upload_retry_seconds=0, upload_after=?12, periodic_open = 0, first_local_ack=NULL,
                 first_unpublished_write = CASE WHEN ?6 = 'writing' AND NOT ?11 THEN ?8 ELSE NULL END,
                 cache_path = ?7,
                 cache_accessed_unix = ?8,
@@ -314,13 +407,13 @@ impl Database {
                 target_local_id,
                 source.local_mode,
                 self.excludes_file_name(&cloud_name(&new_path)),
+                super::periodic::office_upload_after(&new_path, source.metadata.size, now_unix()),
             ],
         )?;
         anyhow::ensure!(updated == 1, "replacement target was not updated");
         tx.commit()?;
         self.recompute_pin_inheritance()?;
-        self.get_by_remote_id(target_local_id)?
-            .ok_or_else(|| anyhow::anyhow!("local replacement disappeared"))
+        self.get_by_remote_id(target_local_id)
     }
 
     pub fn pending_metadata_operation(

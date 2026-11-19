@@ -37,6 +37,30 @@ impl<B: CloudBackend> TwoDriveFs<B> {
     }
 
     pub(super) fn delete_record(&mut self, ino: u64, record: &FileRecord) -> anyhow::Result<()> {
+        if let Some((source_id, updated)) = self.db.finish_office_backup(record)? {
+            self.inodes.remove_ino(ino);
+            if let Some(source_ino) = self.inodes.ino_for_path(&updated.metadata.path) {
+                self.inodes.replace_ino_record(source_ino, updated.clone());
+            }
+            for handle in self
+                .write_handles
+                .values_mut()
+                .filter(|h| h.record_remote_id == source_id && !h.unlinked)
+            {
+                handle.record_remote_id = updated.metadata.remote_id.clone();
+                handle.base_etag = record_upload_etag(&updated);
+                handle.created_new_record = updated.cloud_remote_id.is_none();
+            }
+            if let Err(err) = self.upload_pool.enqueue(updated.metadata.remote_id) {
+                eprintln!("twodrive: folded Office save remains queued: {err:#}");
+            }
+            if let Some(cache) = &record.cache_path
+                && let Err(err) = self.cleanup_unlinked_cache(cache)
+            {
+                eprintln!("twodrive: Office backup cache retirement deferred: {err:#}");
+            }
+            return Ok(());
+        }
         if record.state == FileState::LocalOnly
             && self.db.remove_local_only_file(&record.metadata.remote_id)?
         {
