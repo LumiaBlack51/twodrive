@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 
 impl Database {
     pub fn open_write_clock(&self) -> anyhow::Result<OpenWriteClock> {
-        Ok(OpenWriteClock(self.connect()?))
+        Ok(OpenWriteClock {
+            db: self.connect()?,
+            last: Default::default(),
+        })
     }
     pub fn note_open_write(
         &self,
@@ -115,10 +118,28 @@ impl Database {
     }
 }
 /// Reuse the conditional statement across successive FUSE writes.
-pub struct OpenWriteClock(rusqlite::Connection);
+pub struct OpenWriteClock {
+    db: rusqlite::Connection,
+    last: std::cell::RefCell<Option<(String, PathBuf, i64)>>,
+}
 impl OpenWriteClock {
     pub fn note(&self, id: &str, cache: &Path, first_write_time: i64) -> anyhow::Result<()> {
-        self.0
+        // The snapshot publisher, conflict handler and rename paths all use
+        // other SQLite connections. Any commit there invalidates this hint.
+        // Sample before the update so an intervening commit cannot be missed.
+        let version: i64 = self
+            .db
+            .prepare_cached("PRAGMA data_version")?
+            .query_row([], |r| r.get(0))?;
+        if self
+            .last
+            .borrow()
+            .as_ref()
+            .is_some_and(|(item, path, epoch)| item == id && path == cache && *epoch == version)
+        {
+            return Ok(());
+        }
+        self.db
             .prepare_cached(
                 "UPDATE files SET first_unpublished_write=COALESCE(first_unpublished_write,?3),
                 state='writing' WHERE remote_id=?1 AND cache_path=?2
@@ -126,6 +147,8 @@ impl OpenWriteClock {
                 AND (first_unpublished_write IS NULL OR state<>'writing')",
             )?
             .execute(params![id, cache.to_string_lossy(), first_write_time])?;
+        self.last
+            .replace(Some((id.to_owned(), cache.to_owned(), version)));
         Ok(())
     }
 }

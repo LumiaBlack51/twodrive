@@ -81,5 +81,206 @@
     }
   },
   "recovery": "Held mock upload, killed mount process after save, remounted with mock transfer still held, checked document digest, reopened latest title and three images in Impress.",
-  "scope": "Linux, ext4, synthetic documents, real Impress UI and FUSE, disk-backed mock receiver. No live OneDrive writes or hardware power-loss test."
+  "scope": "Linux, ext4, synthetic documents, real Impress UI and FUSE, disk-backed mock receiver. No live OneDrive writes or hardware power-loss test.",
+  "followup": {
+    "method": "Six sequential pairs, in order preliminary/final/final/preliminary/preliminary/final for each edit. Local low-priority builds and tests ran during part of this series. Times are observations on a shared host. Both mock receiver versions checked in every trial.",
+    "observations": {
+      "preliminary_all_images": [
+        {
+          "save_done": 2.3176,
+          "idle_max_gap": 0.0611,
+          "max_ui_heartbeat_gap": 2.3185,
+          "first_key_at": 0.0943,
+          "first_key_accepted": true,
+          "edit_visible": 2.3309,
+          "retry_at": null,
+          "source_size": 110350790,
+          "extra": 118558720,
+          "rss": 3862528,
+          "cpu": 1.47,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 4.2036,
+          "idle_max_gap": 0.0605,
+          "max_ui_heartbeat_gap": 4.222,
+          "first_key_at": 0.0936,
+          "first_key_accepted": true,
+          "edit_visible": 4.2359,
+          "retry_at": null,
+          "source_size": 110350794,
+          "extra": 118132736,
+          "rss": 3747840,
+          "cpu": 2.05,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 3.471,
+          "idle_max_gap": 0.0501,
+          "max_ui_heartbeat_gap": 3.4823,
+          "first_key_at": 0.0918,
+          "first_key_accepted": true,
+          "edit_visible": 3.4892,
+          "retry_at": null,
+          "source_size": 110350793,
+          "extra": 119087104,
+          "rss": 3751936,
+          "cpu": 1.95,
+          "active_maps": 2,
+          "document_checked": true
+        }
+      ],
+      "preliminary_title": [
+        {
+          "save_done": 2.0177,
+          "idle_max_gap": 0.039,
+          "max_ui_heartbeat_gap": 2.0375,
+          "first_key_at": 0.0953,
+          "first_key_accepted": true,
+          "edit_visible": 2.0451,
+          "retry_at": null,
+          "source_size": 110350846,
+          "extra": 1171456,
+          "rss": 811008,
+          "cpu": 1.01,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 3.6529,
+          "idle_max_gap": 0.0472,
+          "max_ui_heartbeat_gap": 3.6838,
+          "first_key_at": 0.0946,
+          "first_key_accepted": true,
+          "edit_visible": 3.6934,
+          "retry_at": null,
+          "source_size": 110350848,
+          "extra": 1175552,
+          "rss": 692224,
+          "cpu": 1.3,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 2.0636,
+          "idle_max_gap": 0.0368,
+          "max_ui_heartbeat_gap": 2.065,
+          "first_key_at": 0.0952,
+          "first_key_accepted": true,
+          "edit_visible": 2.0791,
+          "retry_at": null,
+          "source_size": 110350850,
+          "extra": 1146880,
+          "rss": 794624,
+          "cpu": 1.02,
+          "active_maps": 2,
+          "document_checked": true
+        }
+      ],
+      "final_all_images": [
+        {
+          "save_done": 2.2904,
+          "idle_max_gap": 0.0462,
+          "max_ui_heartbeat_gap": 2.3146,
+          "first_key_at": 0.0924,
+          "first_key_accepted": true,
+          "edit_visible": 2.316,
+          "retry_at": null,
+          "source_size": 110350790,
+          "extra": 117870592,
+          "rss": 3928064,
+          "cpu": 1.45,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 2.2831,
+          "idle_max_gap": 0.0416,
+          "max_ui_heartbeat_gap": 2.2831,
+          "first_key_at": 0.0943,
+          "first_key_accepted": true,
+          "edit_visible": 2.3024,
+          "retry_at": null,
+          "source_size": 110350790,
+          "extra": 118403072,
+          "rss": 3858432,
+          "cpu": 1.4,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 2.2781,
+          "idle_max_gap": 0.0494,
+          "max_ui_heartbeat_gap": 2.2941,
+          "first_key_at": 0.096,
+          "first_key_accepted": true,
+          "edit_visible": 2.3038,
+          "retry_at": null,
+          "source_size": 110350793,
+          "extra": 118013952,
+          "rss": 3866624,
+          "cpu": 1.44,
+          "active_maps": 2,
+          "document_checked": true
+        }
+      ],
+      "final_title": [
+        {
+          "save_done": 1.7086,
+          "idle_max_gap": 0.0404,
+          "max_ui_heartbeat_gap": 1.7261,
+          "first_key_at": 0.0953,
+          "first_key_accepted": true,
+          "edit_visible": 1.7234,
+          "retry_at": null,
+          "source_size": 110350847,
+          "extra": 1146880,
+          "rss": 864256,
+          "cpu": 0.75,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 2.7512,
+          "idle_max_gap": 0.0474,
+          "max_ui_heartbeat_gap": 2.7765,
+          "first_key_at": 0.0917,
+          "first_key_accepted": true,
+          "edit_visible": 2.7829,
+          "retry_at": null,
+          "source_size": 110350849,
+          "extra": 1191936,
+          "rss": 819200,
+          "cpu": 0.98,
+          "active_maps": 2,
+          "document_checked": true
+        },
+        {
+          "save_done": 1.8671,
+          "idle_max_gap": 0.0597,
+          "max_ui_heartbeat_gap": 1.8777,
+          "first_key_at": 0.0955,
+          "first_key_accepted": true,
+          "edit_visible": 1.8818,
+          "retry_at": null,
+          "source_size": 110350845,
+          "extra": 1142784,
+          "rss": 815104,
+          "cpu": 0.89,
+          "active_maps": 2,
+          "document_checked": true
+        }
+      ]
+    },
+    "other_prototypes": "Reusing a stripe lock descriptor gave little additional improvement; packing literals into larger blobs reduced disk use slightly but slowed saves. Both were omitted."
+  },
+  "slow_mock_transfer": {
+    "method": "Held the built-in mock transport for over five minutes in a disposable mount. Only the initial scheduling age was backdated; transfer duration and the following deadline elapsed in real time. Two writes occurred during the held transfer. Checked original bytes and evicted then rehydrated the final file from the mock backend.",
+    "first_upload_seconds": 307,
+    "minimum_next_interval_seconds": 384,
+    "latest_ack_dirty_age_seconds": 385,
+    "full_digests_checked": true
+  }
 }

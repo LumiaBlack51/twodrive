@@ -17,7 +17,7 @@ use twodrive_core::{Database, FileRecord, FileState, join_cloud_path};
 use crate::activity::{ActivityGuard, clear_activity_file};
 use crate::cache_io::{
     download_cache_path, has_existing_cache, read_slice, reconcile_cached_record,
-    sanitize_cache_name, unique_suffix, write_slice,
+    sanitize_cache_name, unique_suffix,
 };
 use crate::conflicts::record_upload_etag;
 use crate::hydration::{hydrate_generation, hydrate_record};

@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(test)]
 use crate::conflicts::preserve_conflict_copy;
+use std::os::unix::fs::FileExt;
 
 impl<B: CloudBackend> TwoDriveFs<B> {
     #[cfg(test)]
@@ -231,7 +232,11 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         if data.is_some_and(|bytes| bytes.is_empty()) {
             return Ok(());
         }
-        gate.preserve(&handle.cache_path, offset, end)?;
+        // A mapped write changes only the SQLite views; the raw basis that an
+        // upload reads remains untouched. Flat writes still preserve its blocks.
+        if handle.office.is_none() {
+            gate.preserve(&handle.cache_path, offset, end)?;
+        }
         self.begin_handle_write(fh)?;
         let handle = self.write_handles.get_mut(&fh).unwrap();
         if handle.office.is_none() {
@@ -251,7 +256,7 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             };
         }
         match data {
-            Some(bytes) => write_slice(&handle.cache_path, offset, bytes),
+            Some(bytes) => Ok(handle._cache_guard.write_all_at(bytes, offset)?),
             None => Ok(handle._cache_guard.set_len(offset)?),
         }
     }

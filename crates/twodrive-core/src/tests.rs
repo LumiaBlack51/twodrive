@@ -1822,3 +1822,40 @@ fn delta_metadata_does_not_undo_a_pending_local_move() {
             .is_some()
     );
 }
+
+#[test]
+fn unchanged_open_write_clock_needs_no_writer_slot_and_rechecks_after_a_checkpoint() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let test = TestDatabase::new("write-clock-reader");
+    let cache = test.root.join("cache");
+    fs::write(&cache, b"one").unwrap();
+    test.db
+        .create_local_file_with_mode("id", "/doc", &cache, 0o644)
+        .unwrap();
+    let clock = test.db.open_write_clock().unwrap();
+    clock.note("id", &cache, 100).unwrap();
+    let mut other = Connection::open(test.db.path()).unwrap();
+    let tx = other
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let (send, recv) = mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let result = clock.note("id", &cache, 101).is_ok();
+        send.send(result).ok();
+        (clock, cache)
+    });
+    let independent = recv.recv_timeout(Duration::from_secs(2));
+    tx.rollback().unwrap();
+    let (clock, cache) = thread.join().unwrap();
+    assert_eq!(
+        independent,
+        Ok(true),
+        "an already recorded edit clock waited for another writer"
+    );
+    assert_eq!(test.db.first_open_write("id").unwrap(), Some(100));
+    let r = test.db.get_by_remote_id("id").unwrap().unwrap();
+    assert!(test.db.publish_open_write(&r, 100, 3).unwrap());
+    clock.note("id", &cache, 102).unwrap();
+    assert_eq!(test.db.first_open_write("id").unwrap(), Some(102));
+}
