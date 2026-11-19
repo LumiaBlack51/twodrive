@@ -549,6 +549,27 @@ fn explicit_release_overrides_pin_but_prune_preserves_it() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn pin_refresh_through_database_symlink_sees_the_original_owner() {
+    let test = TestDatabase::new("aliased-hydration");
+    add_file(&test.db, "active", "/active");
+    let alias = test.root.join("linked.sqlite3");
+    std::os::unix::fs::symlink(test.db.path(), &alias).unwrap();
+    let secondary = Database::new(alias);
+    let _owner = test.db.lock_hydration("active").unwrap();
+    assert!(
+        test.db
+            .begin_hydration("active", test.db.download_generation("active").unwrap())
+            .unwrap()
+    );
+    secondary.recompute_pin_inheritance().unwrap();
+    assert_eq!(
+        secondary.get_by_path("/active").unwrap().unwrap().state,
+        FileState::Hydrating
+    );
+}
+
 #[test]
 fn pin_refresh_clears_abandoned_hydration_without_affecting_another_item() {
     let test = TestDatabase::new("abandoned-hydration");

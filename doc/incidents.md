@@ -74,6 +74,8 @@ CLI、挂载读取和后台补下载在打开临时文件前，持有数据库�
 
 0.2.28 的按需读取在空增量更新后从 hydrating 变为 online_only；独立 CLI 在隔离 FUSE 挂载仍持有自定义文件的下载时，重复请求该文件并因自己的模拟后端没有此文件而失败。候选测试覆盖空刷新、下载失败后状态清理、等待中的 CLI 复用挂载下载，以及原下载中断后由 CLI 完成并逐字节校验固定缓存。测试使用本地模拟后端。真实现场的调用者、重复字节进度和临时文件争用已核对；未重新从 OneDrive 下载用户演示文稿。
 
+Dot 提出的数据库文件符号链接别名可在隔离 SQLite 上复现：首次候选通过别名刷新时错判原路径的下载锁为空闲。改用数据库真实路径派生锁目录后，别名回归通过。
+
 ### 防复发措施与后续
 
 保留 empty_delta_refresh_keeps_an_active_read_visible 和 pin_refresh_clears_abandoned_hydration_without_affecting_another_item。Linux 原生 CI 使用单独 CLI 与真实隔离挂载运行 mounted_read_and_cli_pin_share_download_and_recover_from_owner_failure。
