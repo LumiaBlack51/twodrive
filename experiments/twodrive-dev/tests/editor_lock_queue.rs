@@ -200,11 +200,17 @@ fn editor_close_and_same_name_reopen_do_not_wait_for_slow_cloud_mutations() {
         started.elapsed() < Duration::from_millis(400),
         "close/read/reopen waited for the cloud"
     );
-    wait(|| {
-        p.get_metadata_by_path("/.~lock.book.xlsx#")
-            .unwrap()
-            .is_some_and(|m| p.download(&m.remote_id).unwrap() == b"second editor lock")
-    });
+    // The worker removes the first lock before publishing the replacement.
+    // Wait for both operations before resolving and downloading the cloud ID.
+    wait(|| twodrive_dev::mount_write::recovery_status(&spool).unwrap()["editor_pending"] == 0);
+    let cloud_lock = p
+        .get_metadata_by_path("/.~lock.book.xlsx#")
+        .unwrap()
+        .expect("the settled queue should leave the second editor lock in the cloud");
+    assert_eq!(
+        p.download(&cloud_lock.remote_id).unwrap(),
+        b"second editor lock"
+    );
     let started = Instant::now();
     assert_eq!(call(&c, &bridge, Method::DELETE, lock, "").status(), 204);
     assert!(started.elapsed() < Duration::from_millis(400));
