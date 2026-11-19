@@ -1,17 +1,5 @@
 # TwoDrive 故障记录
 
-## TD-20261119-01：DAV 传输记录与文件导航修正迁移至上游
-
-- 2026-11-19，基于上游 `dev` 的 `3987f81`。前序实现见 [fork PR #3](https://github.com/DavidXile/twodrive/pull/3) 与 [fork PR #4](https://github.com/DavidXile/twodrive/pull/4)。
-
-### 症状与处理
-
-手动上传、下载和打开记录需要在窗口重启后保留。文件页加载需要独立于总览状态请求，且旧路径的迟到响应不能覆盖正在浏览的目录。迁移保留账号和配置身份、重启历史、选择后的立即读取，以及 Linux 挂载占用提示与用户确认路径。GNOME iCloud 文件打开记录通过原有主动启用的 GVfs 选项提供。Linux DAV CI 增加使用标准 `dpkg-buildpackage` 的测试产物。
-
-### 兼容与验证
-
-保留上游的连接自动挂载偏好、同步排除规则、Windows native runtime 停止顺序，以及默认打开总览的行为。目录测试通过真实的「文件」入口选择页面。Rust 启用 mount 的全目标测试 240 项通过，12 项按既有设置忽略。Flutter 161 项及静态分析通过。Nautilus 模拟回归 16 项、Debian 打包策略及脚本语法检查通过。本机使用测试夹具，实际 Debian 制品与 Windows 原生运行由托管检查覆盖。备份历史及确认计数见 [上游 PR #71](https://github.com/LumiaBlack51/twodrive/pull/71)。
-
 ## TD-20261111-21：启动恢复绕过自动挂载偏好，断开与重启语义不明确
 
 - 日期：2026-11-11；状态：根因确认，旧实现回归失败、修复后完整 Flutter 验证通过；新提交托管 CI 待执行。
@@ -1889,6 +1877,10 @@ Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项�
 
 初始实现：[fff7c59](https://github.com/LumiaBlack51/twodrive/commit/fff7c59)，验证边界修正及本轮已验证的最终运行时代码：[4fb5b25](https://github.com/LumiaBlack51/twodrive/commit/4fb5b25ffeb0406b05fc1161b7f85bfb90e595a3)。[原生 Linux CI](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401817) 和[原生 Windows CI](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401486) 均成功，日志已核实测试数及 PDF/DOCX/PPTX 增量/全量逐字节结果。代码与记录由指向 dev 的 [PR #48](https://github.com/LumiaBlack51/twodrive/pull/48) 交付；本记录后续只补验证证据，不改运行时代码/锁文件。未创建 Release，也未安装或替换现用程序。
 
+
+## 独立验证记录
+
+- [TD-20261119-01](incidents/TD-20261119-01.md) 记录上游 DAV 传输历史、目录读取、Linux 挂载退出和 Debian CI 打包的迁移与回归。
 
 ## 记录模板
 
