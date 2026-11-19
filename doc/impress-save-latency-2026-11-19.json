@@ -148,5 +148,50 @@
       "whole-machine power loss",
       "physical display frame times"
     ]
+  },
+  "release": {
+    "source": "174ad74e71692a0cec1ec0949ab97f12c6bb447f",
+    "merge": "0e515725fe14bed58b805c60368ecf9ff247c89d",
+    "url": "https://github.com/LumiaBlack51/twodrive/releases/tag/v0.2.27-1",
+    "published_at": "2026-11-19T00:41:03Z",
+    "assets_verified": 11,
+    "ci_artifact_digest": "sha256:c8796209676a16e80a58a168dff273768fbb7857907391ec55a75bc27f8aa22d",
+    "review": "https://github.com/LumiaBlack51/twodrive/pull/68#issuecomment-6995621547",
+    "ci": {
+      "Debian package": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791140/job/135237021689",
+      "Debian packaging policy": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791093/job/135237021042",
+      "test (ubuntu-latest, --features mount, target/release/twodrive-dev)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791180/job/135237021656",
+      "Native checks (Windows)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791125/job/135237021178",
+      "windows": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791106/job/135237021614",
+      "test (windows-latest, -C target-feature=+crt-static, target/release/twodrive-dev.exe)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791180/job/135237021207",
+      "Native checks (Linux)": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791125/job/135237021560",
+      "linux": "https://github.com/LumiaBlack51/twodrive/actions/runs/44427791106/job/135237021229"
+    }
+  },
+  "local_deployment": {
+    "version": "twodrive 0.2.27",
+    "running_daemon_matches_package": true,
+    "installed_sha256": {
+      "twodrive": "761ceeb53c9abfc47b7b0d62e5a9fa67a8c5e5450b00182775dec04c02a2f927",
+      "twodrive-daemon": "8f4f318dd4290711f3b737d301baec8d8c747fbfae8a09ce50275018102e571e",
+      "twodrive-settings": "1c0e6cfd0775815302601f403425c0652f5d0d083d469cede2a26e6a002fc8c4"
+    },
+    "reference_sets_equal": {
+      "cache": true,
+      "deletes": true,
+      "metadata": true
+    },
+    "sqlite_integrity": "ok",
+    "config_unchanged": true,
+    "unit_unchanged": true,
+    "mount_active": true,
+    "installed_isolated_daemon_smoke": "passed",
+    "installed_idle_gui_verify": {
+      "transport": "built-in mock with initial upload acknowledged",
+      "save_done_s": 1.5312,
+      "max_ui_gap_s": 1.5402,
+      "insert_observed_s": 1.5436,
+      "saved_pptx_verified": true
+    }
   }
 }
