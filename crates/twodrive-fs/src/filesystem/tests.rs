@@ -3199,7 +3199,27 @@ fn powerpoint_rotation_preserves_original_cloud_identity_through_backup_unlink()
         0
     );
     let ino = test.fs.inodes.ino_for_path("/123AB789.tmp").unwrap();
-    test.fs.delete_record(ino, &backup).unwrap();
+    let cache = backup.cache_path.clone().unwrap();
+    let read = test.fs.open_read_handle(ino, cache.clone()).unwrap();
+    let (_, writer, _) = test
+        .fs
+        .create_overwrite_upload(backup.clone(), false)
+        .unwrap();
+    assert!(
+        test.fs
+            .unlink_record_with_open_handles(ino, &backup)
+            .unwrap()
+    );
+    assert_eq!(test.fs.read_open_handle(read, 17, 1).unwrap(), [0x23]);
+    test.fs
+        .change_handle_bytes(writer, 17, Some(&[0x99]))
+        .unwrap();
+    assert_eq!(test.fs.read_open_handle(read, 17, 1).unwrap(), [0x99]);
+    test.fs.queue_upload_handle(writer).unwrap();
+    test.fs.write_handles.remove(&writer);
+    test.fs.release_read_handle(read).unwrap();
+    test.fs.cleanup_unlinked_cache(&cache).unwrap();
+    assert!(!cache.exists());
     let final_record = test.fs.db.get_by_path("/lesson.pptx").unwrap().unwrap();
     assert_eq!(final_record.metadata.remote_id, old.metadata.remote_id);
     assert!(test.fs.db.pending_deletes().unwrap().is_empty());
