@@ -49,11 +49,14 @@ to apply it. Remove that file and remount to return to the regular Linux mount.
 The mount will need an active GNOME session bus. On Debian-based desktops the
 relevant packages include `gvfs-backends`, `gvfs-fuse` and `python3-gi`.
 
-With GNOME recent files enabled, opening an iCloud file in Nautilus adds an
-**已打开** entry under **下载**. The saved cloud path resolves through the current
-mount after restart. A green check means the current mount has the complete
-file in its temporary cache. Eviction and remounting clear that badge while
-preserving the opening history.
+With GNOME recent files enabled, the engine retains iCloud files opened in
+Nautilus and reports them separately as `opened_files`. The saved cloud path
+resolves through the current mount after restart. The **下载** tab displays
+downloads and files viewed from the TwoDrive client.
+
+In Nautilus, a green check means the current mount has the complete file in
+its temporary cache. Eviction and remounting clear that badge while preserving
+the opening history.
 
 ## Build and install
 
