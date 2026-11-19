@@ -15,9 +15,10 @@ use std::path::{Path, PathBuf};
 const ROOT: &str = ".twodrive-office";
 const LITERAL: usize = 128 * 1024;
 const LIVE: i64 = 0;
+const CHECKPOINT_BYTES: u32 = 256 * 1024;
 
 const SCHEMA:&str="
-PRAGMA application_id=1413762895; PRAGMA auto_vacuum=FULL; PRAGMA journal_mode=WAL;
+PRAGMA page_size=1024; PRAGMA application_id=1413762895; PRAGMA auto_vacuum=FULL; PRAGMA journal_mode=WAL;
 CREATE TABLE carrier(dev INTEGER NOT NULL,ino INTEGER NOT NULL);
 CREATE TABLE merge_state(pos INTEGER NOT NULL); INSERT INTO merge_state VALUES(0);
 CREATE TABLE views(id INTEGER PRIMARY KEY,size INTEGER NOT NULL);
@@ -45,9 +46,13 @@ fn dir(path: &Path) -> PathBuf {
 fn conn(path: &Path) -> Result<Connection> {
     let c = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
-    // A transaction contains one FUSE request. Keep its crash journal local
-    // and bounded; frozen views use explicit ranges, never a long WAL reader.
-    c.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=32; PRAGMA journal_size_limit=262144; PRAGMA cache_size=-1024;")?;
+    // Impress commonly writes 4 KiB at a time. Compact pages let many small
+    // range updates commit before a checkpoint. Existing maps keep their page
+    // size, so compute the WAL threshold in pages for this connection.
+    let page_size: u32 = c.pragma_query_value(None, "page_size", |row| row.get(0))?;
+    c.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA cache_size=-1024;")?;
+    c.pragma_update(None, "wal_autocheckpoint", CHECKPOINT_BYTES / page_size)?;
+    c.pragma_update(None, "journal_size_limit", CHECKPOINT_BYTES)?;
     Ok(c)
 }
 pub(crate) struct Office {
