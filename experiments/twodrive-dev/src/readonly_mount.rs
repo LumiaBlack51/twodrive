@@ -23,7 +23,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Condvar, Mutex, Weak,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -154,6 +154,7 @@ struct Inner {
     backend: Backend,
     writer: Option<Arc<crate::mount_write::Writer>>,
     cache: Mutex<VecDeque<Arc<Cached>>>,
+    content_generation: AtomicU64,
     downloads: Mutex<DownloadGates>,
     quota: Mutex<QuotaCache>,
     quota_refresh: mpsc::SyncSender<()>,
@@ -281,8 +282,16 @@ impl RemoteFs {
             .0
             .backend
             .get_metadata_by_path(path)
-            .map_err(|_| FsError::GeneralFailure)?
-            .ok_or(FsError::NotFound)?;
+            .map_err(|_| FsError::GeneralFailure)?;
+        if let Ok(mut cache) = self.0.cache.lock() {
+            cache.retain(|item| {
+                item.meta.path != path
+                    || entry
+                        .as_ref()
+                        .is_some_and(|current| same(&item.meta, current))
+            });
+        }
+        let entry = entry.ok_or(FsError::NotFound)?;
         if let Some(writer) = &self.0.writer {
             writer
                 .observe(&entry)
@@ -451,6 +460,21 @@ impl RemoteFs {
             self.0.directory_ready.notify_all();
         }
     }
+    fn invalidate_content(&self, paths: &[String]) {
+        if let Ok(mut cache) = self.0.cache.lock() {
+            self.0.content_generation.fetch_add(1, Ordering::Relaxed);
+            cache.retain(|item| {
+                !paths.iter().any(|path| {
+                    item.meta.path == *path
+                        || item
+                            .meta
+                            .path
+                            .strip_prefix(path.trim_end_matches('/'))
+                            .is_some_and(|tail| tail.starts_with('/'))
+                })
+            });
+        }
+    }
     fn forget_editor_lock(&self, path: &str, id: &str, etag: &str) -> anyhow::Result<()> {
         let mut cache = self
             .0
@@ -495,6 +519,15 @@ impl RemoteFs {
                 writer.observe_many(&entries.values().cloned().collect::<Vec<_>>())
             });
             if observed.is_ok() {
+                if let Ok(mut contents) = self.0.cache.lock() {
+                    contents.retain(|item| {
+                        let parent = item.meta.path.rsplit_once('/').map(|(p, _)| p);
+                        parent != Some(path.trim_end_matches('/'))
+                            || entries
+                                .get(&item.meta.path)
+                                .is_some_and(|entry| same(&item.meta, entry))
+                    });
+                }
                 Self::remember(&mut cache, path.into(), entries);
             } else {
                 result = Err(FsError::GeneralFailure);
@@ -604,6 +637,7 @@ impl RemoteFs {
             .lock()
             .map_err(|_| anyhow::anyhow!("cache unavailable"))?;
         self.check()?;
+        let generation = self.0.content_generation.load(Ordering::Relaxed);
         if let Some(i) = cache.iter().position(|item| same(&item.meta, &entry)) {
             let item = cache.remove(i).unwrap();
             cache.push_front(item.clone());
@@ -658,6 +692,11 @@ impl RemoteFs {
             .cache
             .lock()
             .map_err(|_| anyhow::anyhow!("cache unavailable"))?;
+        if generation != self.0.content_generation.load(Ordering::Relaxed) {
+            // The reader can finish using its verified copy; a concurrent
+            // mutation may have made that version unsuitable for reuse.
+            return Ok(item);
+        }
         cache.push_front(item.clone());
         // Retain at most eight versions / 2 GiB, except one larger currently
         // requested file. Active readers keep their own Arc and file handle.
@@ -898,12 +937,26 @@ pub struct Bridge {
     thread: Option<thread::JoinHandle<()>>,
     refresh_thread: Option<thread::JoinHandle<()>>,
     quota_thread: Option<thread::JoinHandle<()>>,
-    #[cfg(test)]
+    #[cfg(any(test, target_os = "linux"))]
     fs: RemoteFs,
 }
 impl Bridge {
+    #[cfg(target_os = "linux")]
+    pub fn cached_paths(&self) -> anyhow::Result<Vec<String>> {
+        let cache = self
+            .fs
+            .0
+            .cache
+            .lock()
+            .map_err(|_| anyhow::anyhow!("content cache unavailable"))?;
+        let mut paths: Vec<_> = cache.iter().map(|item| item.meta.path.clone()).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        Ok(paths)
+    }
+
     pub fn start(backend: Backend, cache_parent: &Path) -> anyhow::Result<Self> {
-        Self::start_inner(backend, cache_parent, None, false)
+        Self::start_inner(backend, cache_parent, None, false, None)
     }
     pub fn start_writable(
         backend: Backend,
@@ -911,7 +964,7 @@ impl Bridge {
         spool: &Path,
     ) -> anyhow::Result<Self> {
         let writer = crate::mount_write::Writer::new(backend.clone(), spool)?;
-        Self::start_inner(backend, cache_parent, Some(writer), false)
+        Self::start_inner(backend, cache_parent, Some(writer), false, None)
     }
     /// Opt in for the slow iCloud adapter; ordinary files keep the original
     /// synchronous version/recovery contract. Other providers are unchanged.
@@ -922,7 +975,7 @@ impl Bridge {
     ) -> anyhow::Result<Self> {
         let writer =
             crate::mount_write::Writer::new_with_editor_locks(backend.clone(), spool, true)?;
-        Self::start_inner(backend, cache_parent, Some(writer), false)
+        Self::start_inner(backend, cache_parent, Some(writer), false, None)
     }
     /// Compatibility entry point for the indexed iCloud mount with local
     /// advisory-lock acknowledgement. See start_indexed for directory policy.
@@ -951,13 +1004,28 @@ impl Bridge {
                 )
             })
             .transpose()?;
-        Self::start_inner(backend, cache_parent, writer, true)
+        Self::start_inner(backend, cache_parent, writer, true, None)
+    }
+    #[cfg(target_os = "linux")]
+    pub fn start_gvfs(
+        backend: Backend,
+        cache_parent: &Path,
+        spool: Option<&Path>,
+        username: &str,
+    ) -> anyhow::Result<Self> {
+        let writer = spool
+            .map(|path| {
+                crate::mount_write::Writer::new_with_editor_locks(backend.clone(), path, true)
+            })
+            .transpose()?;
+        Self::start_inner(backend, cache_parent, writer, true, Some(username))
     }
     fn start_inner(
         backend: Backend,
         cache_parent: &Path,
         writer: Option<Arc<crate::mount_write::Writer>>,
         retain_directories: bool,
+        basic_user: Option<&str>,
     ) -> anyhow::Result<Self> {
         let directory = tempfile::Builder::new()
             .prefix("readonly-mount-")
@@ -986,6 +1054,7 @@ impl Bridge {
             backend,
             writer: writer.clone(),
             cache: Mutex::default(),
+            content_generation: AtomicU64::new(0),
             downloads: Mutex::default(),
             quota: Mutex::default(),
             quota_refresh: quota_send,
@@ -1011,7 +1080,15 @@ impl Bridge {
         let address = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let token = random_secret();
-        let auth = format!("Bearer {token}");
+        let basic = basic_user.is_some();
+        let auth = if let Some(user) = basic_user {
+            use base64::Engine;
+            let credentials =
+                base64::engine::general_purpose::STANDARD.encode(format!("{user}:{token}"));
+            format!("Basic {credentials}")
+        } else {
+            format!("Bearer {token}")
+        };
         let thread_stop = stop.clone();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1039,8 +1116,8 @@ impl Bridge {
         // Warm asynchronously so the usual first native Statfs can report
         // capacity, while a slow/unavailable provider never delays mounting.
         let _ = fs.quota_snapshot();
-        #[cfg(test)]
-        let test_fs = fs.clone();
+        #[cfg(any(test, target_os = "linux"))]
+        let bridge_fs = fs.clone();
         let thread = thread::spawn(move || {
             runtime.block_on(async move {
                 let Ok(listener) = TcpListener::from_std(listener) else {
@@ -1102,15 +1179,40 @@ impl Bridge {
                                     None
                                 };
                                 let response = if let Some(status) = denied {
-                                    Response::builder()
-                                        .status(status)
-                                        .body(Body::empty())
-                                        .unwrap()
+                                    let mut response = Response::builder().status(status);
+                                    if basic && status == StatusCode::UNAUTHORIZED {
+                                        response = response.header(
+                                            "WWW-Authenticate",
+                                            r#"Basic realm="TwoDrive iCloud""#,
+                                        );
+                                    }
+                                    response.body(Body::empty()).unwrap()
                                 } else {
                                     if matches!(
                                         request.method().as_str(),
                                         "PUT" | "MKCOL" | "DELETE" | "MOVE"
                                     ) {
+                                        let affected: Vec<_> =
+                                            std::iter::once(Some(request.uri().path().to_owned()))
+                                                .chain(std::iter::once(
+                                                    request
+                                                        .headers()
+                                                        .get("Destination")
+                                                        .and_then(|value| {
+                                                            url::Url::parse(value.to_str().ok()?)
+                                                                .ok()
+                                                        })
+                                                        .filter(|url| {
+                                                            url.origin().ascii_serialization()
+                                                                == format!("http://{address}")
+                                                        })
+                                                        .map(|url| url.path().to_owned()),
+                                                ))
+                                                .flatten()
+                                                .filter_map(|path| {
+                                                    resource(&DavPath::new(&path).ok()?).ok()
+                                                })
+                                                .collect();
                                         let (response, invalidate) = crate::mount_write::handle(
                                             writer.unwrap(),
                                             request,
@@ -1121,6 +1223,7 @@ impl Bridge {
                                         // have completed before its acknowledgement failed.
                                         if invalidate {
                                             fs.invalidate_display();
+                                            fs.invalidate_content(&affected);
                                         }
                                         return Ok::<_, Infallible>(response);
                                     }
@@ -1158,8 +1261,8 @@ impl Bridge {
             thread: Some(thread),
             refresh_thread: Some(refresh_thread),
             quota_thread: Some(quota_thread),
-            #[cfg(test)]
-            fs: test_fs,
+            #[cfg(any(test, target_os = "linux"))]
+            fs: bridge_fs,
         })
     }
 }

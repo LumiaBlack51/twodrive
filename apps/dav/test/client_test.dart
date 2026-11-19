@@ -378,4 +378,32 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
+
+  test('mounted file locations resolve against the current iCloud export', () {
+    final client = StorageClient()
+      ..profiles = [
+        {'id': 'icloud', 'revision': 'r-icloud', 'name': 'iCloud Drive'},
+      ];
+    addTearDown(client.dispose);
+    const name = '文档 #%.docx';
+    final mount = <String, dynamic>{
+      'profile': 'icloud',
+      'revision': 'r-icloud',
+      'path': 'dav://iCloud-abcdefgh@127.0.0.1:31000/',
+    };
+    client.status = {
+      'mounts': [mount],
+    };
+    mount['path'] = 'dav://iCloud-ijklmnop@127.0.0.1:31001/';
+    final uri = Uri.parse(
+      client.mountedTransferPath({
+        'profile': 'icloud',
+        'revision': 'r-icloud',
+        'path': '/目录/$name',
+      })!,
+    );
+    expect(uri.port, 31001);
+    expect(uri.userInfo, 'iCloud-ijklmnop');
+    expect(uri.pathSegments, ['目录', name]);
+  });
 }

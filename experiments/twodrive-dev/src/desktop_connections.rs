@@ -34,15 +34,17 @@ pub(super) fn aggregate_accounts(accounts: &[Value]) -> Value {
     for account in accounts {
         let owner = |mut item: Value| {
             item["profile"] = account["profile"].clone();
-            item["revision"] = account["revision"].clone();
+            if item["source"] != "backup" || !item["revision"].is_string() {
+                item["revision"] = account["revision"].clone();
+            }
             item["account"] = account["name"].clone();
             item
         };
-        for (source, kind) in [
-            (&account["backup"]["active"], 0),
-            (&account["mount_activity"]["active"], 0),
-            (&account["cache"]["waiting"], 1),
-            (&account["backup"]["recent"], 2),
+        for (source, kind, is_backup) in [
+            (&account["backup"]["active"], 0, true),
+            (&account["mount_activity"]["active"], 0, false),
+            (&account["cache"]["waiting"], 1, false),
+            (&account["backup"]["recent"], 2, true),
         ] {
             if let Some(items) = source.as_array() {
                 let destination = match kind {
@@ -50,7 +52,14 @@ pub(super) fn aggregate_accounts(accounts: &[Value]) -> Value {
                     1 => &mut waiting,
                     _ => &mut recent,
                 };
-                destination.extend(items.iter().filter(|v| v.is_object()).cloned().map(owner));
+                destination.extend(items.iter().filter(|v| v.is_object()).cloned().map(
+                    |mut item| {
+                        if is_backup {
+                            item["source"] = json!("backup");
+                        }
+                        owner(item)
+                    },
+                ));
             }
         }
         let count = account["cache"]["pending"].as_u64().unwrap_or(0);
@@ -349,6 +358,18 @@ impl App {
         }
         result
     }
+    #[cfg(target_os = "linux")]
+    pub(super) fn mounted_profiles(&self) -> impl Iterator<Item = &Profile> {
+        self.connected
+            .iter()
+            .filter(|_| self.mounted.is_some())
+            .chain(
+                self.inactive
+                    .values()
+                    .filter_map(|parked| parked.mounted.as_ref().map(|_| &parked.profile)),
+            )
+    }
+
     pub(super) fn disconnect_all(&mut self) -> anyhow::Result<()> {
         self.finish_quota_jobs(None);
         ensure!(

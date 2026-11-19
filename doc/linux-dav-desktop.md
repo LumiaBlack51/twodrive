@@ -33,6 +33,28 @@ connection or synchronization failures keep the error icon.
 - Settings contains mount/unmount, clean-cache release and login autostart.
   **Autostart defaults off and installation never enables it.**
 
+### Transfer history and GNOME iCloud mounts
+
+**传输** groups uploads, folder backups and downloads into separate tabs.
+Manual upload, download and view records are saved in the desktop state
+directory. The folder button reveals the file in the desktop file manager.
+The details dialog also offers the mounted cloud location when its original
+connection and configuration are available.
+
+On GNOME with Nautilus, GVfs WebDAV support, its POSIX export and Python GObject
+bindings installed, opt in to the iCloud GVfs mount by creating the empty
+`icloud-gnome-webdav` file under the desktop state directory (normally
+`~/.local/share/twodrive-dav/state`). Unmount and remount the iCloud connection
+to apply it. Remove that file and remount to return to the regular Linux mount.
+The mount will need an active GNOME session bus. On Debian-based desktops the
+relevant packages include `gvfs-backends`, `gvfs-fuse` and `python3-gi`.
+
+With GNOME recent files enabled, opening an iCloud file in Nautilus adds an
+**已打开** entry under **下载**. The saved cloud path resolves through the current
+mount after restart. A green check means the current mount has the complete
+file in its temporary cache. Eviction and remounting clear that badge while
+preserving the opening history.
+
 ## Build and install
 
 Requirements: Flutter 3.41.8, Rust 1.96, GTK 3 development files, clang, CMake,
