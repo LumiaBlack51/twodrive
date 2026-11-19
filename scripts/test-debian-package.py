@@ -7,6 +7,7 @@ import tarfile
 import io
 import hashlib
 import gzip
+import json
 import re
 
 
@@ -71,7 +72,61 @@ def verify(package):
     verify_manifests(package.parent)
 
 
+def verify_dav(package, bundle):
+    def field(name):
+        return subprocess.check_output(['dpkg-deb', '-f', str(package), name], text=True).strip()
+
+    assert field('Package') == 'twodrive-dav'
+    assert field('Architecture') == 'amd64'
+    dependencies = field('Depends')
+    for dependency in ('libc6', 'libgtk-3-0', 'fuse3'):
+        assert dependency in dependencies, f'missing DAV dependency: {dependency}'
+
+    runtime = 'usr/lib/twodrive-dav/'
+    bundle_files = ('twodrive_dav', 'twodrive-dav-engine', 'twodrive-dev',
+                    'twodrive-provider-login', 'rclone', 'rclone-component.json',
+                    'lib/libapp.so', 'lib/libflutter_linux_gtk.so', 'data/icudtl.dat')
+    remaining = {runtime + name: bundle / name for name in bundle_files}
+    required = {'usr/bin/twodrive-dav', 'usr/share/icons/hicolor/scalable/apps/twodrive-dav.svg',
+                'usr/share/applications/app.twodrive.twodrive_dav_packaged.desktop',
+                'usr/share/gnome-shell/extensions/twodrive-tray-anchor@twodrive/extension.js'}
+    with subprocess.Popen(['dpkg-deb', '--fsys-tarfile', str(package)], stdout=subprocess.PIPE) as process:
+        with tarfile.open(fileobj=process.stdout, mode='r|') as stream:
+            for member in stream:
+                name = member.name.removeprefix('./')
+                assert (member.uid, member.gid) == (0, 0), f'non-root package ownership: {name}'
+                assert not name.startswith(('home/', 'root/', 'usr/local/', 'etc/xdg/autostart/',
+                                            'usr/lib/systemd/user/')), f'unexpected package entry: {name}'
+                assert not name.endswith(('tokens.json', 'profiles.json', '.sqlite3')), f'runtime state: {name}'
+                required.discard(name)
+                if name == 'usr/bin/twodrive-dav':
+                    assert member.mode & 0o111, 'launcher is not executable'
+                if source := remaining.pop(name, None):
+                    assert member.isfile(), f'not a regular file: {name}'
+                    with source.open('rb') as original, stream.extractfile(member) as installed:
+                        assert hashlib.file_digest(original, 'sha256').digest() == hashlib.file_digest(
+                            installed, 'sha256').digest(), f'payload differs from bundle: {name}'
+        assert process.wait() == 0, 'cannot read DAV package payload'
+    assert not (required or remaining), f'missing DAV payload: {sorted(required | remaining.keys())}'
+
+    component = json.loads((bundle / 'rclone-component.json').read_text())
+    with (bundle / 'rclone').open('rb') as stream:
+        assert component['platform'] == 'linux-amd64'
+        assert component['executable_sha256'] == hashlib.file_digest(stream, 'sha256').hexdigest()
+    control = subprocess.check_output(['dpkg-deb', '--ctrl-tarfile', str(package)])
+    with tarfile.open(fileobj=io.BytesIO(control)) as stream:
+        assert not {'preinst', 'postinst', 'prerm', 'postrm', 'conffiles'} & {
+            Path(member.name).name for member in stream}, 'unexpected DAV installation hooks'
+    verify_manifests(package.parent)
+    print(f'Verified DAV dependencies and original portable payload: {package.name}')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('package', type=Path)
-    verify(parser.parse_args().package)
+    parser.add_argument('--dav-bundle', type=Path)
+    args = parser.parse_args()
+    if args.dav_bundle:
+        verify_dav(args.package, args.dav_bundle)
+    else:
+        verify(args.package)

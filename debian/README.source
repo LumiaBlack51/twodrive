@@ -39,3 +39,22 @@ sponsorship and official distribution validation remain separate work.
 
 The mandatory release policy is documented in doc/debian-packaging.md and applies
 to both main and dev. Do not restore the manual dpkg-deb packaging path.
+
+DAV desktop test package
+------------------------
+
+Use an amd64 Linux desktop bundle assembled from the same Git checkout, with
+the Flutter runtime, native executables and pinned rclone component present.
+With debhelper 13 and dpkg-dev installed, run:
+
+    bash scripts/build-dav-deb.sh /path/to/bundle
+
+The wrapper runs dpkg-buildpackage with the pkg.twodrive.dav profile and
+verifies the binary package against its bundle and checksum manifest. It
+writes the .deb, .buildinfo and .changes to dist/dav-debian. The package is
+for development testing. The normal full source build above produces the
+release artifacts.
+
+The packaged menu entry is TwoDrive DAV. It uses the existing DAV account and
+backup state when launched. Package installation adds system files and leaves
+user state, autostart and running mounts alone.

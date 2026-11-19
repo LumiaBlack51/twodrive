@@ -2,8 +2,10 @@ Source: twodrive
 Section: utils
 Priority: optional
 Maintainer: Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>
-Build-Depends: debhelper-compat (= 13), dh-sequence-python3,
- cargo (>= 1.91), rustc (>= 1.91), pkgconf, libsqlite3-dev, python3, python3-gi, gir1.2-gtk-4.0
+Build-Depends: debhelper-compat (= 13), dh-sequence-python3 <!pkg.twodrive.dav>,
+ cargo (>= 1.91) <!pkg.twodrive.dav>, rustc (>= 1.91) <!pkg.twodrive.dav>,
+ pkgconf <!pkg.twodrive.dav>, libsqlite3-dev <!pkg.twodrive.dav>,
+ python3 <!pkg.twodrive.dav>, python3-gi <!pkg.twodrive.dav>, gir1.2-gtk-4.0 <!pkg.twodrive.dav>
 Standards-Version: 4.7.4
 Rules-Requires-Root: no
 Homepage: https://github.com/LumiaBlack51/twodrive
@@ -12,6 +14,7 @@ Vcs-Browser: https://github.com/LumiaBlack51/twodrive/tree/dev
 
 Package: twodrive
 Architecture: linux-any
+Build-Profiles: <!pkg.twodrive.dav>
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${python3:Depends},
  fuse3, python3-gi, gir1.2-gtk-3.0, gir1.2-gtk-4.0, python3-nautilus
 Recommends: gir1.2-ayatanaappindicator3-0.1 | gir1.2-appindicator3-0.1
@@ -19,3 +22,12 @@ Description: OneDrive Files-On-Demand client for GNOME
  TwoDrive provides a local-cache-first OneDrive filesystem with on-demand
  downloads, durable local writes, inherited always-keep policies, and GNOME
  desktop integration.
+
+Package: twodrive-dav
+Architecture: amd64
+Build-Profiles: <pkg.twodrive.dav>
+Depends: ${shlibs:Depends}, ${misc:Depends}, fuse3, xdg-utils
+Recommends: gvfs-backends, gvfs-fuse, xwayland
+Description: TwoDrive DAV desktop client (development test build)
+ Browse cloud files, manage backups and connect to WebDAV or TwoDrive peers.
+ This package contains the portable Linux desktop and its native engine.
