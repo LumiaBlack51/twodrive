@@ -3761,7 +3761,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "twodrive-backend"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3780,13 +3780,14 @@ dependencies = [
 
 [[package]]
 name = "twodrive-core"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "anyhow",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "toml",
@@ -3832,7 +3833,7 @@ dependencies = [
 
 [[package]]
 name = "twodrive-fs"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "anyhow",
  "fuser",

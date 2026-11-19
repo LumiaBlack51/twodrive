@@ -37,6 +37,16 @@ Cancellation is returned internally as ECANCELED. Linux buffered FUSE reads may 
 reading application. The error is intentional; reporting a successful short file would be unsafe.
 The user can close and explicitly reopen the file to download again.
 
+## Pin during an on-demand read (0.2.29)
+
+Closing the application window leaves an already dispatched full-file read running. Pinning
+the same file persists the offline policy immediately. The CLI and mount serialize downloads
+using an OS file lock for that item next to the database, then recheck the generation and
+published cache. A waiting pin reuses a successful download and can retry a failed one.
+An explicit Release still invalidates older read handles. Metadata refresh preserves the
+syncing emblem while an unpinned download owns the lock. The OS releases the lock if its
+owner exits, so a later refresh can clear abandoned download state.
+
 ## Verification
 
 ```sh

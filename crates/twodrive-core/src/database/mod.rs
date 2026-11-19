@@ -9,6 +9,7 @@ use crate::{FileRecord, FileState, MetadataEntry, NameExclusions};
 mod cache;
 pub mod cloud;
 mod delete_retry;
+mod hydration_lock;
 mod metadata;
 mod mutations;
 mod periodic;

@@ -1,3 +1,10 @@
+twodrive (0.2.29-1) unstable; urgency=medium
+
+  * Share on-demand downloads between the mount and explicit pin requests.
+  * Preserve the active download emblem across metadata refreshes.
+
+ -- Bai Lujia <198035981+LumiaBlack51@users.noreply.github.com>  Thu, 19 Nov 2026 11:29:00 +0800
+
 twodrive (0.2.28-1) unstable; urgency=medium
 
   * Adapt open-file upload deadlines to measured transfer times.

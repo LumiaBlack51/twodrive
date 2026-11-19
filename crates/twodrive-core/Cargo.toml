@@ -1,10 +1,11 @@
 [package]
 name = "twodrive-core"
-version = "0.2.28"
+version = "0.2.29"
 edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+sha2.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

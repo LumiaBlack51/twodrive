@@ -74,11 +74,13 @@ jobs:
       - run: python3 scripts/check-local-package-locks.py
       - run: python3 -m unittest discover -s scripts -p 'test_local_package_locks.py'
       - run: cargo test --workspace --locked
-      - name: Untouched writable handles on a disposable FUSE mount
+      - name: Concurrent reads, pins and writes on disposable FUSE mounts
         run: |
           sudo apt-get update
           sudo apt-get install -y fuse3
           sudo modprobe fuse
+          cargo build -p twodrive-cli --locked
+          TWODRIVE_TEST_CLI="$PWD/target/debug/twodrive" cargo test -p twodrive-fs --locked mounted_read_and_cli_pin -- --ignored
           cargo test -p twodrive-fs --locked mounted_untouched_writable_close -- --ignored --nocapture
           cargo test -p twodrive-fs --locked mounted_office_owner_and_regex -- --ignored --nocapture
           cargo test -p twodrive-fs --locked mounted_truncate_open -- --ignored --nocapture
