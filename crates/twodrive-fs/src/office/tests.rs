@@ -231,3 +231,123 @@ fn small_office_writes_checkpoint_within_budget_and_sync_on_both_page_layouts() 
         writer.thaw().unwrap();
     }
 }
+
+#[test]
+fn changed_media_appends_preserve_sparse_bytes_and_the_frozen_view() {
+    let f = Fixture::new();
+    let target = f.root.join("temp");
+    File::create(&target).unwrap();
+    let _basis = Office::enroll(&f.original, &f.original, true)
+        .unwrap()
+        .unwrap();
+    let mut writer = Office::enroll(&target, &f.original, false)
+        .unwrap()
+        .unwrap();
+    let mut expected = vec![0; 17];
+    for i in 0..64 {
+        let bytes = [i; 4096];
+        writer.write(expected.len() as u64, &bytes).unwrap();
+        expected.extend_from_slice(&bytes);
+    }
+    let pages: u32 = writer
+        .db
+        .pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))
+        .unwrap();
+    assert_eq!(pages * 1024, 4 * 1024 * 1024);
+    writer.freeze().unwrap();
+    writer.write(24, b"changed").unwrap();
+    writer.sync().unwrap();
+    drop(writer);
+    let reopened = Office::open(&target).unwrap().unwrap();
+    let mut got = vec![0; expected.len()];
+    assert_eq!(reopened.read(1, 0, &mut got).unwrap(), expected.len());
+    assert_eq!(got, expected);
+    expected[24..31].copy_from_slice(b"changed");
+    assert_eq!(reopened.read(LIVE, 0, &mut got).unwrap(), expected.len());
+    assert_eq!(got, expected);
+}
+
+#[test]
+#[ignore = "isolated Office write-path timing"]
+fn time_small_writes_to_replacement_package() {
+    use std::time::Instant;
+    let f = Fixture::new();
+    let old = fs::read(&f.original).unwrap();
+    let mut base = Office::enroll(&f.original, &f.original, true)
+        .unwrap()
+        .unwrap();
+    base.freeze().unwrap();
+    for changed in [false, true] {
+        let target = f.root.join(format!("replacement-{changed}"));
+        File::create(&target).unwrap();
+        let mut writer = Office::enroll(&target, &f.original, false)
+            .unwrap()
+            .unwrap();
+        let mut next = old.clone();
+        if changed {
+            for b in &mut next[30 + NAME.len()..30 + NAME.len() + PAYLOAD] {
+                *b ^= 0xff;
+            }
+        }
+        let start = Instant::now();
+        for (i, chunk) in next.chunks(4096).enumerate() {
+            writer.write((i * 4096) as u64, chunk).unwrap();
+        }
+        writer.sync().unwrap();
+        eprintln!(
+            "changed={changed} bytes={} foreground={:?}",
+            next.len(),
+            start.elapsed()
+        );
+        let mut actual = vec![0; next.len()];
+        writer.read(LIVE, 0, &mut actual).unwrap();
+        assert_eq!(actual, next);
+        base.read(1, 0, &mut actual).unwrap();
+        assert_eq!(actual, old);
+    }
+}
+
+#[test]
+fn background_checkpoint_can_flush_references_while_the_writer_stays_open() {
+    use std::time::{Duration, Instant};
+    let f = Fixture::new();
+    let mut writer = Office::enroll(&f.original, &f.original, true)
+        .unwrap()
+        .unwrap();
+    writer.truncate(0).unwrap();
+    writer.sync().unwrap();
+    // Prevent both SQLite's automatic checkpoint and a last-connection-close
+    // checkpoint from satisfying the assertion on behalf of the worker.
+    writer
+        .db
+        .pragma_update(None, "wal_autocheckpoint", 0)
+        .unwrap();
+    let source = fs::read(&f.original).unwrap();
+    let directory = dir(&f.original);
+    let copied = f.root.join("checkpoint-copy");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut end = 0;
+    loop {
+        // The single process-wide worker can drop a hint if another file is busy.
+        for _ in 0..checkpoint::HINT_WRITES {
+            writer.write(end as u64, &source[end..end + 4096]).unwrap();
+            end += 4096;
+        }
+        std::thread::sleep(Duration::from_millis(15));
+        let guard = File::open(&directory).unwrap();
+        guard.lock().unwrap();
+        fs::copy(directory.join("map"), &copied).unwrap();
+        let main_db = Connection::open(&copied).unwrap();
+        let checkpointed: usize = main_db
+            .query_row("SELECT size FROM views WHERE id=0", [], |r| r.get(0))
+            .unwrap();
+        if checkpointed > 0 {
+            assert!(checkpointed <= end);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline
+                && end + checkpoint::HINT_WRITES as usize * 4096 <= source.len()
+        );
+    }
+}

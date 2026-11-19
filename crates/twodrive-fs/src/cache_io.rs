@@ -1,5 +1,9 @@
-use std::fs::{self, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::fs;
+#[cfg(test)]
+use std::fs::OpenOptions;
+#[cfg(test)]
+use std::io::Write;
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use twodrive_core::{Database, FileRecord, FileState};
@@ -27,6 +31,7 @@ pub(crate) fn read_slice(path: &Path, offset: u64, size: u32) -> anyhow::Result<
     Ok(data)
 }
 
+#[cfg(test)]
 pub(crate) fn write_slice(path: &Path, offset: u64, data: &[u8]) -> anyhow::Result<()> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
     file.seek(SeekFrom::Start(offset))?;

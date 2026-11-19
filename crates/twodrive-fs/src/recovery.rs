@@ -153,27 +153,38 @@ pub fn recover_dirty_record<B: CloudBackend>(
     }
 
     let gate = crate::snapshot::CacheGate::acquire(&cache_path)?;
-    if record.state == FileState::Writing {
-        let Some(since) = db.first_open_write(&record.metadata.remote_id)? else {
+    let open_checkpoint = if record.state == FileState::Writing {
+        let Some((since, last_upload_secs)) = db.open_write_timing(&record.metadata.remote_id)?
+        else {
             return Ok(false);
         };
         let size = crate::cache_io::logical_size(&cache_path)?;
         let policy = twodrive_core::PeriodicUpload::load(db)?;
-        if !checkpoint_due(&policy, size, since, twodrive_core::now_unix()) {
+        if !policy.due(size, since, twodrive_core::now_unix(), last_upload_secs) {
             return Ok(false);
         }
-        cache_guard.sync_all()?;
-        if !db.publish_open_write(&record, since, size)? {
-            return Ok(false);
-        }
-        record = db
-            .get_by_remote_id(&record.metadata.remote_id)?
-            .ok_or_else(|| anyhow::anyhow!("checkpoint target disappeared"))?;
-    }
+        Some((since, size))
+    } else {
+        None
+    };
+    // Another process can own the previous upload. Keep the edit clock intact
+    // until we actually own a snapshot and can publish the next revision.
     let Some(mut snapshot) = gate.capture_named(&cache_path, &record.metadata.name)? else {
         return Ok(false);
     };
-    let claimed = db.begin_upload(&record);
+    // Release the gate before dropping the snapshot, including on error.
+    let claimed = (|| -> anyhow::Result<bool> {
+        if let Some((since, size)) = open_checkpoint {
+            cache_guard.sync_all()?;
+            if !db.publish_open_write(&record, since, size)? {
+                return Ok(false);
+            }
+            record = db
+                .get_by_remote_id(&record.metadata.remote_id)?
+                .ok_or_else(|| anyhow::anyhow!("checkpoint target disappeared"))?;
+        }
+        db.begin_upload(&record)
+    })();
     drop(gate);
     if !claimed? {
         return Ok(false);
@@ -185,6 +196,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
         &record.metadata.name,
         Some(record.metadata.size),
     );
+    let started = std::time::Instant::now();
     let uploaded_result = backend.upload_snapshot_with_version(
         &record.metadata.path,
         &mut snapshot,
@@ -195,7 +207,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
             on_progress(done, total)
         },
     );
-    drop(snapshot);
+    let elapsed = started.elapsed();
     drop(activity);
     match uploaded_result {
         Ok(uploaded) => {
@@ -205,11 +217,12 @@ pub fn recover_dirty_record<B: CloudBackend>(
             if db.complete_deleted_upload(&record.metadata.remote_id, &uploaded)? {
                 return Ok(true);
             }
-            let committed = match db.commit_uploaded(
+            let committed = match db.commit_timed_upload(
                 &record.metadata.remote_id,
                 &record.metadata.path,
                 &uploaded,
                 &cache_path,
+                Some(elapsed),
             ) {
                 Ok(committed) => committed,
                 Err(err) => {
@@ -222,6 +235,8 @@ pub fn recover_dirty_record<B: CloudBackend>(
             if committed.cloud_remote_id.as_deref() != Some(uploaded.remote_id.as_str()) {
                 db.queue_remote_delete(&uploaded.remote_id, &record.metadata.path)?;
             }
+            drop(_commit_guard);
+            drop(snapshot);
             drop(cache_guard);
             if let Err(err) = db.finish_pending_releases() {
                 eprintln!("twodrive: deferred release remains queued: {err:#}");
@@ -229,6 +244,7 @@ pub fn recover_dirty_record<B: CloudBackend>(
             Ok(true)
         }
         Err(err) => {
+            drop(snapshot);
             db.retire_failed_known_upload_claim(&record)?;
             if db
                 .pending_delete_for_local_id(&record.metadata.remote_id)?
@@ -565,17 +581,6 @@ pub(crate) fn enqueue_recovery(db: &Database, sender: &UploadQueue) -> anyhow::R
     Ok(())
 }
 
-pub(crate) fn checkpoint_due(
-    policy: &twodrive_core::PeriodicUpload,
-    size: u64,
-    since: i64,
-    now: i64,
-) -> bool {
-    policy
-        .interval(size)
-        .is_some_and(|interval| now.saturating_sub(since) >= interval.as_secs() as i64)
-}
-
 #[cfg(unix)]
 pub(crate) fn enqueue_due_checkpoints(db: &Database, sender: &UploadQueue) -> anyhow::Result<()> {
     let policy = twodrive_core::PeriodicUpload::load(db)?;
@@ -583,9 +588,9 @@ pub(crate) fn enqueue_due_checkpoints(db: &Database, sender: &UploadQueue) -> an
         return Ok(());
     }
     let now = twodrive_core::now_unix();
-    for (id, cache, since) in db.pending_open_writes()? {
+    for (id, cache, since, last_upload_secs) in db.pending_open_write_timers()? {
         if let Ok(size) = crate::cache_io::logical_size(&cache)
-            && checkpoint_due(&policy, size, since, now)
+            && policy.due(size, since, now, last_upload_secs)
         {
             sender.send(UploadCommand::Upload(id))?;
         }

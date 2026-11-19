@@ -194,6 +194,11 @@ class SettingsApp(Gtk.Application):
         enabled = Gtk.CheckButton(label="Upload changed files while they are still open")
         enabled.set_active(policy["enabled"])
         box.append(enabled)
+        adaptive = Gtk.CheckButton(label="Adaptive interval (at least 125% of the last upload time)")
+        adaptive.set_active(policy["adaptive"])
+        adaptive.set_sensitive(enabled.get_active())
+        enabled.connect("toggled", lambda button: adaptive.set_sensitive(button.get_active()))
+        box.append(adaptive)
         grid = Gtk.Grid(column_spacing=12, row_spacing=6)
         box.append(grid)
         grid.attach(Gtk.Label(label="File size upper limit (MiB)", xalign=0), 0, 0, 1, 1)
@@ -219,16 +224,18 @@ class SettingsApp(Gtk.Application):
                 else:
                     saved = periodic_command("set", {
                         "enabled": enabled.get_active(),
+                        "adaptive": adaptive.get_active(),
                         "small_mib": int(limits[0].get_value()),
                         "medium_mib": int(limits[1].get_value()),
                         "minutes": [int(widget.get_value()) for widget in intervals],
                     })
                 enabled.set_active(saved["enabled"])
+                adaptive.set_active(saved["adaptive"])
                 for widget, value in zip(limits + intervals, [
                     saved["small_mib"], saved["medium_mib"], *saved["minutes"]
                 ]):
                     widget.set_value(value)
-                notice.set_text("Saved. The running mount uses these intervals automatically.")
+                notice.set_text("Saved. The running mount uses these settings automatically.")
             except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
                 notice.set_text(str(exc))
 

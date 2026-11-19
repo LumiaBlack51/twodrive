@@ -195,6 +195,12 @@ impl Database {
         ensure_column(
             &conn,
             "files",
+            "last_upload_secs",
+            "ALTER TABLE files ADD COLUMN last_upload_secs INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &conn,
+            "files",
             "periodic_open",
             "ALTER TABLE files ADD COLUMN periodic_open INTEGER NOT NULL DEFAULT 0",
         )?;

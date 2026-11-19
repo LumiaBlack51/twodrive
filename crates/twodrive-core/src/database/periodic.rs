@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 
 impl Database {
     pub fn open_write_clock(&self) -> anyhow::Result<OpenWriteClock> {
-        Ok(OpenWriteClock(self.connect()?))
+        Ok(OpenWriteClock {
+            db: self.connect()?,
+            last: Default::default(),
+        })
     }
     pub fn note_open_write(
         &self,
@@ -17,12 +20,25 @@ impl Database {
     }
 
     pub fn pending_open_writes(&self) -> anyhow::Result<Vec<(String, PathBuf, i64)>> {
+        Ok(self
+            .pending_open_write_timers()?
+            .into_iter()
+            .map(|(id, cache, since, _)| (id, cache, since))
+            .collect())
+    }
+
+    pub fn pending_open_write_timers(&self) -> anyhow::Result<Vec<(String, PathBuf, i64, u64)>> {
         let conn = self.connect()?;
-        let mut stmt=conn.prepare("SELECT remote_id,cache_path,first_unpublished_write FROM files
+        let mut stmt=conn.prepare("SELECT remote_id,cache_path,first_unpublished_write,last_upload_secs FROM files
             WHERE state='writing' AND first_unpublished_write IS NOT NULL AND cache_path IS NOT NULL")?;
         Ok(stmt
             .query_map([], |r| {
-                Ok((r.get(0)?, PathBuf::from(r.get::<_, String>(1)?), r.get(2)?))
+                Ok((
+                    r.get(0)?,
+                    PathBuf::from(r.get::<_, String>(1)?),
+                    r.get(2)?,
+                    r.get(3)?,
+                ))
             })?
             .collect::<Result<_, _>>()?)
     }
@@ -41,15 +57,19 @@ impl Database {
     }
 
     pub fn first_open_write(&self, id: &str) -> anyhow::Result<Option<i64>> {
+        Ok(self.open_write_timing(id)?.map(|(since, _)| since))
+    }
+
+    pub fn open_write_timing(&self, id: &str) -> anyhow::Result<Option<(i64, u64)>> {
         Ok(self
             .connect()?
             .query_row(
-                "SELECT first_unpublished_write FROM files WHERE remote_id=?1 AND state='writing'",
+                "SELECT first_unpublished_write,last_upload_secs FROM files
+             WHERE remote_id=?1 AND state='writing' AND first_unpublished_write IS NOT NULL",
                 [id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .optional()?
-            .flatten())
+            .optional()?)
     }
 
     /// Called under the byte-write gate. Make this exact open revision eligible
@@ -98,10 +118,28 @@ impl Database {
     }
 }
 /// Reuse the conditional statement across successive FUSE writes.
-pub struct OpenWriteClock(rusqlite::Connection);
+pub struct OpenWriteClock {
+    db: rusqlite::Connection,
+    last: std::cell::RefCell<Option<(String, PathBuf, i64)>>,
+}
 impl OpenWriteClock {
     pub fn note(&self, id: &str, cache: &Path, first_write_time: i64) -> anyhow::Result<()> {
-        self.0
+        // The snapshot publisher, conflict handler and rename paths all use
+        // other SQLite connections. Any commit there invalidates this hint.
+        // Sample before the update so an intervening commit cannot be missed.
+        let version: i64 = self
+            .db
+            .prepare_cached("PRAGMA data_version")?
+            .query_row([], |r| r.get(0))?;
+        if self
+            .last
+            .borrow()
+            .as_ref()
+            .is_some_and(|(item, path, epoch)| item == id && path == cache && *epoch == version)
+        {
+            return Ok(());
+        }
+        self.db
             .prepare_cached(
                 "UPDATE files SET first_unpublished_write=COALESCE(first_unpublished_write,?3),
                 state='writing' WHERE remote_id=?1 AND cache_path=?2
@@ -109,6 +147,8 @@ impl OpenWriteClock {
                 AND (first_unpublished_write IS NULL OR state<>'writing')",
             )?
             .execute(params![id, cache.to_string_lossy(), first_write_time])?;
+        self.last
+            .replace(Some((id.to_owned(), cache.to_owned(), version)));
         Ok(())
     }
 }

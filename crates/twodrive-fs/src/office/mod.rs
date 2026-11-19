@@ -1,6 +1,7 @@
 //! Durable byte ranges for edits to an Office package while its upload is reading.
 //! A range points into an immutable ZIP or into one bounded literal in SQLite.
 //! Gaps read as zero. Both the current map and at most one frozen map share data.
+mod checkpoint;
 mod merge;
 pub(crate) use merge::maintain;
 mod package;
@@ -16,6 +17,9 @@ const ROOT: &str = ".twodrive-office";
 const LITERAL: usize = 128 * 1024;
 const LIVE: i64 = 0;
 const CHECKPOINT_BYTES: u32 = 256 * 1024;
+
+// Repeated changed media writes fill the WAL much faster than references.
+const LITERAL_CHECKPOINT_BYTES: u32 = 4 * 1024 * 1024;
 
 const SCHEMA:&str="
 PRAGMA page_size=1024; PRAGMA application_id=1413762895; PRAGMA auto_vacuum=FULL; PRAGMA journal_mode=WAL;
@@ -56,12 +60,14 @@ fn conn(path: &Path) -> Result<Connection> {
     Ok(c)
 }
 pub(crate) struct Office {
+    checkpoints: checkpoint::Checkpoints,
     db: Connection,
     base: File,
     index: Option<Package>,
     indexed: bool,
     buffer: Vec<u8>,
     scan: Scan,
+    literal_bytes: usize,
 }
 impl Office {
     pub fn open(path: &Path) -> Result<Option<Self>> {
@@ -89,12 +95,14 @@ impl Office {
     }
     fn at(d: &Path) -> Result<Self> {
         Ok(Self {
+            checkpoints: Default::default(),
             db: conn(&d.join("map"))?,
             base: File::open(d.join("base"))?,
             index: None,
             indexed: false,
             buffer: Vec::new(),
             scan: Scan::default(),
+            literal_bytes: 0,
         })
     }
     // Caller holds the source cache gate. New temp targets are not visible yet.
@@ -187,6 +195,13 @@ impl Office {
         Ok(())
     }
     pub fn sync(&self) -> Result<()> {
+        let path = self
+            .db
+            .path()
+            .and_then(|p| Path::new(p).parent())
+            .context("missing Office map directory")?;
+        let checkpoint_guard = File::open(path)?;
+        checkpoint_guard.lock()?;
         let (busy, log, done): (i64, i64, i64) =
             self.db.query_row("PRAGMA wal_checkpoint(FULL)", [], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -256,6 +271,25 @@ impl Office {
         self.scan = Scan::default();
         Ok(())
     }
+    fn note_literal_bytes(&mut self, count: usize) -> Result<()> {
+        if self.literal_bytes >= LITERAL {
+            return Ok(());
+        }
+        let total = self.literal_bytes.saturating_add(count);
+        if total >= LITERAL {
+            let page_size: u32 = self
+                .db
+                .pragma_query_value(None, "page_size", |r| r.get(0))?;
+            self.db.pragma_update(
+                None,
+                "wal_autocheckpoint",
+                LITERAL_CHECKPOINT_BYTES / page_size,
+            )?;
+        }
+        self.literal_bytes = total;
+        Ok(())
+    }
+
     pub fn write(&mut self, off: u64, bytes: &[u8]) -> Result<()> {
         if bytes.is_empty() {
             return Ok(());
@@ -268,13 +302,14 @@ impl Office {
             self.index = Package::open(&self.base)?;
             self.indexed = true;
         }
-        let hints = self
+        let mut hints = self
             .index
             .as_ref()
             .map(|idx| self.scan.candidates(idx, off, bytes))
             .unwrap_or_default();
         // Most bytes in a presentation are sequential pieces of a known
         // image. One comparison and two prepared updates extend its run.
+        let mut whole_literal = hints.is_empty();
         if let [(0, stop, source)] = hints.as_slice()
             && *stop == bytes.len()
             && bytes.len() <= LITERAL
@@ -290,11 +325,31 @@ impl Office {
                     tx.prepare_cached("UPDATE views SET size=?1 WHERE id=0")?
                         .execute([end])?;
                     tx.commit()?;
+                    self.checkpoints.note(&self.db);
                     return Ok(());
                 }
+            } else {
+                whole_literal = true;
             }
         }
+        if whole_literal {
+            self.note_literal_bytes(bytes.len())?;
+            hints.clear();
+        }
         let tx = self.db.transaction()?;
+        // Past EOF there are no ranges to split or merge progress to rewind.
+        // Read and update the size in this transaction in case another handle wrote.
+        if whole_literal
+            && tx
+                .prepare_cached("UPDATE views SET size=?2 WHERE id=0 AND size<=?1")?
+                .execute(params![off, end])?
+                == 1
+        {
+            literal(&tx, off, bytes)?;
+            tx.commit()?;
+            self.checkpoints.note(&self.db);
+            return Ok(());
+        }
         tx.execute("UPDATE merge_state SET pos=?1 WHERE pos>?1", [off])?;
         discard(&tx, off, end)?;
         let mut next = 0;
@@ -319,6 +374,7 @@ impl Office {
         literal(&tx, off + next as u64, &bytes[next..])?;
         tx.execute("UPDATE views SET size=max(size,?1) WHERE id=0", [end])?;
         tx.commit()?;
+        self.checkpoints.note(&self.db);
         Ok(())
     }
 }
@@ -331,11 +387,10 @@ fn reference(tx: &Transaction<'_>, start: u64, len: u64, src: u64) -> Result<()>
 fn literal(tx: &Transaction<'_>, mut start: u64, bytes: &[u8]) -> Result<()> {
     for piece in bytes.chunks(LITERAL) {
         let end = start + piece.len() as u64;
-        tx.execute("INSERT INTO literals(data) VALUES(?1)", [piece])?;
-        tx.execute(
-            "INSERT INTO ranges VALUES(0,?1,?2,?3,0)",
-            params![start, end, tx.last_insert_rowid()],
-        )?;
+        tx.prepare_cached("INSERT INTO literals(data) VALUES(?1)")?
+            .execute([piece])?;
+        tx.prepare_cached("INSERT INTO ranges VALUES(0,?1,?2,?3,0)")?
+            .execute(params![start, end, tx.last_insert_rowid()])?;
         start = end;
     }
     Ok(())

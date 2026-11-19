@@ -57,7 +57,7 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(settings.cache_size(temp), source.stat().st_blocks * 512)
 
     def test_periodic_policy_round_trip_and_validation_error(self):
-        policy = {"enabled": False, "small_mib": 8, "medium_mib": 64, "minutes": [2, 4, 9]}
+        policy = {"enabled": False, "adaptive": True, "small_mib": 8, "medium_mib": 64, "minutes": [2, 4, 9]}
         result = subprocess.CompletedProcess([], 0, json.dumps(policy), "")
         with patch.object(settings, "twodrive_bin", return_value="/test/twodrive"), patch.object(
                 settings.subprocess, "run", return_value=result) as run:
@@ -69,6 +69,30 @@ class SettingsTests(unittest.TestCase):
                 [], 1, "", "limits must be increasing")):
             with self.assertRaisesRegex(RuntimeError, "limits must be increasing"):
                 settings.periodic_command("set", policy)
+
+    def test_upload_checkboxes_apply_and_restore(self):
+        from gi.repository import Gdk
+        if not settings.Gtk.init_check() or Gdk.Display.get_default() is None:
+            self.skipTest("requires a display")
+        policy = dict(enabled=True, adaptive=True,
+                      small_mib=10, medium_mib=100, minutes=[1, 3, 5])
+        gtk = settings.Gtk
+        panel = gtk.Box()
+        with patch.object(settings, "periodic_command") as command:
+            command.side_effect = lambda op, value=None: value if op == "set" else policy
+            settings.SettingsApp.periodic_settings(None, panel)
+            toggles = [w for w in panel if isinstance(w, gtk.CheckButton)]
+            enabled, adaptive = toggles
+            self.assertTrue(adaptive.get_active())
+            adaptive.set_active(False)
+            enabled.set_active(False)
+            self.assertFalse(adaptive.get_sensitive())
+            buttons = next(w for w in panel if isinstance(w, gtk.Box))
+            apply, reset = buttons
+            apply.emit("clicked")
+            command.assert_called_with("set", dict(policy, enabled=False, adaptive=False))
+            reset.emit("clicked")
+            self.assertTrue(enabled.get_active() and adaptive.get_sensitive() and adaptive.get_active())
 
     def test_status_errors_are_displayable_instead_of_claiming_no_errors(self):
         for result in [subprocess.CompletedProcess([], 1, "", "cannot read config"),
