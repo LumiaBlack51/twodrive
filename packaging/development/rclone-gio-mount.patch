@@ -46,3 +46,14 @@ index 0000000..995ac07
 +)
 +
 +func main() { cmd.Main() }
+diff --git a/vfs/vfscache/item.go b/vfs/vfscache/item.go
+--- a/vfs/vfscache/item.go
++++ b/vfs/vfscache/item.go
+@@ -1515,0 +1516,7 @@ func (item *Item) WriteAtNoOverwrite(b []byte, off int64) (n int, skipped int, er
++	// TwoDrive reads this metadata while applications still have files open.
++	// Publish full coverage once the downloader fills the last missing bytes.
++	if err == nil && n > skipped && !item.info.Dirty && item._present() {
++		if saveErr := item._save(); saveErr != nil {
++			fs.Errorf(item.name, "vfs cache: failed to record completed download: %v", saveErr)
++		}
++	}

@@ -18,7 +18,12 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 UNKNOWN = "unclassified.twodrive-fixture-524"
 DOCUMENT = "document.txt"
-FILES = {UNKNOWN: b"synthetic unknown format\n" * 1000, DOCUMENT: b"synthetic text\n"}
+CACHED_DOCUMENT = "cache-status.txt"
+FILES = {
+    UNKNOWN: b"synthetic unknown format\n" * 1000,
+    DOCUMENT: b"synthetic text\n",
+    CACHED_DOCUMENT: b"synthetic document stays open\n" * 1000,
+}
 
 
 def check_mount(binary, guarded):
@@ -149,6 +154,25 @@ def check_mount(binary, guarded):
             if guarded:
                 assert not gets, "Directory enumeration triggered a cloud GET"
                 allow_get.set()
+                with (target / CACHED_DOCUMENT).open("rb") as opened:
+                    assert opened.read() == FILES[CACHED_DOCUMENT]
+                    metadata, = (Path(work) / "cache" / "vfsMeta").glob(f"*/{CACHED_DOCUMENT}")
+                    expected = [{"Pos": 0, "Size": len(FILES[CACHED_DOCUMENT])}]
+                    completed = monotonic()
+                    while True:
+                        try:
+                            record = json.loads(metadata.read_text())
+                        except json.JSONDecodeError:  # Rclone may be writing the record.
+                            record = {}
+                        if record.get("Rs") == expected:
+                            assert record.get("Dirty") is False and record.get("Fingerprint")
+                            transfers = rc("core/stats").get("transferring", [])
+                            if not any(transfer.get("name") == CACHED_DOCUMENT for transfer in transfers):
+                                break
+                        assert monotonic() - completed < 2, "Complete read was not reported while the file was open"
+                        sleep(0.025)
+                    print(f"Patched FUSE: complete cache reported {monotonic() - completed:.3f}s after reading, "
+                          "file still open")
                 destination = Path(work) / "copy"
                 subprocess.run(["gio", "copy", str(target / UNKNOWN), str(destination)],
                                check=True, timeout=5)
