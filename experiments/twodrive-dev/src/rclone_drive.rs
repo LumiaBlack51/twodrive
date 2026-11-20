@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashSet, VecDeque},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -399,6 +399,21 @@ impl Snapshot {
 }
 
 impl RcloneDrive {
+    fn download_snapshot_bytes(
+        &self,
+        snapshot: &Snapshot,
+        writer: &mut dyn Write,
+        progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
+    ) -> anyhow::Result<u64> {
+        let _lock = wait_for_operation(&self.state, Duration::from_secs(45), || {
+            ensure!(!self.cancel.load(Ordering::Relaxed), "连接已取消");
+            progress(0)
+        })?;
+        let mut cmd = command(&self.exe, &self.state, &self.pass, &self.route);
+        cmd.args(["cat", &format!("twodrive:{}", &snapshot.path[1..])]);
+        stream(cmd, writer, progress, snapshot.size, &self.cancel)
+    }
+
     pub fn connect(state: State, route: &str, cancel: &AtomicBool) -> anyhow::Result<Self> {
         ensure!(matches!(route, "system" | "direct"), "unsupported route");
         let account_lock = private_lock(&state, "auth.lock")?;
@@ -606,6 +621,46 @@ impl RcloneDrive {
 }
 
 impl Provider for RcloneDrive {
+    fn download_mount_snapshot(
+        &self,
+        entry: &MetadataEntry,
+        destination: &mut File,
+        progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<u64>> {
+        let snapshot = Snapshot::decode(&entry.remote_id, &self.binding)?;
+        ensure!(
+            !snapshot.directory
+                && !entry.is_dir
+                && snapshot.path == entry.path
+                && snapshot.version == entry.etag
+                && snapshot.size == entry.size,
+            "挂载文件版本无效"
+        );
+        // The bridge already resolved this exact snapshot from live metadata.
+        let done = match self.download_snapshot_bytes(&snapshot, destination, progress) {
+            Err(error)
+                if error
+                    .downcast_ref::<RemoteError>()
+                    .is_some_and(|e| e.code == 5) =>
+            {
+                progress(0)?;
+                ensure!(
+                    self.get_metadata(&entry.remote_id)?.is_some(),
+                    "文件已不存在"
+                );
+                destination.set_len(0)?;
+                destination.rewind()?;
+                self.download_snapshot_bytes(&snapshot, destination, progress)?
+            }
+            result => result?,
+        };
+        ensure!(
+            done == snapshot.size && self.get_metadata(&entry.remote_id)?.is_some(),
+            "下载期间文件变化，未发布下载"
+        );
+        Ok(Some(done))
+    }
+
     fn initial_directory_listing(&self) -> Option<(Instant, Vec<MetadataEntry>)> {
         Some((self.root_checked, self.initial_root.clone()))
     }
@@ -732,15 +787,7 @@ impl CloudBackend for RcloneDrive {
             !snapshot.directory && self.get_metadata(id)?.is_some(),
             "文件已不存在或是目录"
         );
-        let done = {
-            let _lock = wait_for_operation(&self.state, Duration::from_secs(45), || {
-                ensure!(!self.cancel.load(Ordering::Relaxed), "连接已取消");
-                progress(0)
-            })?;
-            let mut cmd = command(&self.exe, &self.state, &self.pass, &self.route);
-            cmd.args(["cat", &format!("twodrive:{}", &snapshot.path[1..])]);
-            stream(cmd, writer, progress, snapshot.size, &self.cancel)?
-        };
+        let done = self.download_snapshot_bytes(&snapshot, writer, progress)?;
         ensure!(
             done == snapshot.size && self.get_metadata(id)?.is_some(),
             "下载期间文件变化，未发布下载"

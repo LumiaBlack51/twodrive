@@ -151,6 +151,75 @@ mod tests {
         backend.exe = exe;
         (root, backend, before)
     }
+
+    #[test]
+    fn mounted_reads_reuse_the_live_snapshot_and_retry_only_temporary_failures() {
+        for (mode, expected) in [
+            ("normal", "lsjson\ncat\nlsjson\n"),
+            ("temporary", "lsjson\ncat\nlsjson\ncat\nlsjson\n"),
+            ("persistent", "lsjson\ncat\nlsjson\ncat\n"),
+            ("permanent", "lsjson\ncat\n"),
+            ("changed", "lsjson\ncat\nlsjson\n"),
+            ("changed_before_retry", "lsjson\ncat\nlsjson\n"),
+        ] {
+            let (root, backend, _) = prepared();
+            let script = r#"#!/usr/bin/python3
+import json
+from pathlib import Path
+import sys
+
+if sys.argv[-2:] == ['config', 'dump']:
+    print('{"twodrive":{"type":"iclouddrive","apple_id":"synthetic-account"}}')
+    sys.exit(0)
+root = Path(__file__).parent
+mode = (root / 'mode').read_text()
+command = next(arg for arg in sys.argv if arg in ('lsjson', 'cat'))
+first_read = not (root / 'read').exists()
+with (root / 'operations').open('a') as log:
+    print(command, file=log)
+if command == 'lsjson':
+    changed = not first_read and mode.startswith('changed')
+    print(json.dumps([{'ID': 'new-id' if changed else 'old-id', 'Name': 'fixture.xlsx',
+                       'Path': 'fixture.xlsx', 'IsDir': False, 'Size': 8,
+                       'ModTime': '2026-11-19T00:00:00Z'}]))
+elif mode == 'permanent':
+    sys.exit(7)
+else:
+    (root / 'read').touch()
+    if mode == 'persistent' or first_read and mode in ('temporary', 'changed_before_retry'):
+        sys.stdout.buffer.write(b'bad')
+        sys.exit(5)
+    sys.stdout.buffer.write(b'workbook')
+"#;
+            fs::write(root.path().join("mode"), mode).unwrap();
+            fs::write(&backend.exe, script).unwrap();
+            let bridge = crate::readonly_mount::Bridge::start(
+                crate::provider::Backend::new(backend),
+                root.path(),
+            )
+            .unwrap();
+            let reply = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{}/fixture.xlsx", bridge.address))
+                .bearer_auth(&bridge.token)
+                .send()
+                .unwrap();
+            if matches!(mode, "normal" | "temporary") {
+                assert_eq!(reply.status(), 200, "{mode}");
+                assert_eq!(&reply.bytes().unwrap()[..], b"workbook", "{mode}");
+            } else {
+                assert_eq!(reply.status(), 500, "{mode}");
+                assert_ne!(&reply.bytes().unwrap()[..], b"workbook", "{mode}");
+            }
+            assert_eq!(
+                fs::read_to_string(root.path().join("operations")).unwrap(),
+                expected,
+                "{mode}"
+            );
+        }
+    }
     #[test]
     fn canonical_config_rename_gap_retries_without_loading_a_backup() {
         let (_root, backend, before) = prepared();
