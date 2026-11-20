@@ -39,6 +39,7 @@ struct Writes {
     cloud: Arc<Mutex<Cloud>>,
     posts: Arc<AtomicUsize>,
     fail: Arc<AtomicBool>,
+    collide_before_create: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -79,6 +80,8 @@ impl Writes {
         let stopped = stop.clone();
         let fail = Arc::new(AtomicBool::new(false));
         let failure = fail.clone();
+        let collide_before_create = Arc::new(AtomicBool::new(false));
+        let collision = collide_before_create.clone();
         let server = Server::http("127.0.0.1:0").unwrap();
         let origin = format!("http://{}", server.server_addr());
         let base = origin.clone();
@@ -128,6 +131,21 @@ impl Writes {
                                     json_reply(json!({"errno":31023}))
                                 } else {
                                     let path = &form["path"];
+                                    if collision.swap(false, Ordering::Relaxed) {
+                                        cloud.files.insert(
+                                            path.clone(),
+                                            Item {
+                                                id: 99,
+                                                data: b"competing cloud file".to_vec(),
+                                                dir: false,
+                                            },
+                                        );
+                                    }
+                                    if form["rtype"] == "0" && cloud.files.contains_key(path) {
+                                        drop(cloud);
+                                        request.respond(json_reply(json!({"errno": -8}))).unwrap();
+                                        continue;
+                                    }
                                     let dir = form["isdir"] == "1";
                                     let data = if dir {
                                         vec![]
@@ -212,6 +230,7 @@ impl Writes {
             cloud,
             posts,
             fail,
+            collide_before_create,
             stop,
             thread: Some(thread),
         }
@@ -232,6 +251,31 @@ impl Writes {
             Arc::new(|_, _| Ok(())),
         )
     }
+}
+#[test]
+fn backup_baidu_create_leaves_a_same_name_file_committed_during_upload() {
+    let f = Writes::new();
+    let input = f.root.path().join("input");
+    std::fs::write(&input, b"backup bytes").unwrap();
+    f.collide_before_create.store(true, Ordering::Relaxed);
+    let progress: crate::provider::Progress = Arc::new(|_, _| Ok(()));
+    let path = "/file.twodrive-random.bin";
+    assert!(
+        f.backend
+            .upload_backup_version(path, &input, progress.clone())
+            .is_err()
+    );
+    assert_eq!(
+        f.cloud.lock().unwrap().files[path].data,
+        b"competing cloud file"
+    );
+    f.backend
+        .upload_backup_version("/file.twodrive-fresh.bin", &input, progress)
+        .unwrap();
+    assert_eq!(
+        f.cloud.lock().unwrap().files["/file.twodrive-fresh.bin"].data,
+        b"backup bytes"
+    );
 }
 impl Drop for Writes {
     fn drop(&mut self) {

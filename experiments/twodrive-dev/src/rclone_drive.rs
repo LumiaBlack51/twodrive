@@ -685,6 +685,17 @@ impl Provider for RcloneDrive {
     fn manual_upload_supported(&self) -> bool {
         self.writable
     }
+    fn versioned_backup(&self) -> bool {
+        self.writable
+    }
+    fn upload_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        self.put_backup_version(path, source, progress)
+    }
     fn manual_upload(
         &self,
         path: &str,

@@ -17,22 +17,26 @@ type Files = BTreeMap<String, (MetadataEntry, Vec<u8>)>;
 pub struct OpaqueProvider {
     files: Arc<Mutex<Files>>,
     pub caps: Capabilities,
+    pub versioned: bool,
     pub download_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub metadata_lookups: Arc<Mutex<Vec<String>>>,
     pub directory_lookups: Arc<Mutex<Vec<String>>>,
     pub upload_delay: std::time::Duration,
     pub delete_delay: std::time::Duration,
+    pub before_mutation: Option<Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>>,
     pub parent_browsing: bool,
 }
 impl Default for OpaqueProvider {
     fn default() -> Self {
         Self {
             files: Arc::default(),
+            versioned: false,
             download_gate: None,
             metadata_lookups: Arc::default(),
             directory_lookups: Arc::default(),
             upload_delay: std::time::Duration::ZERO,
             delete_delay: std::time::Duration::ZERO,
+            before_mutation: None,
             parent_browsing: false,
             caps: Capabilities {
                 upload: true,
@@ -213,6 +217,19 @@ impl Provider for OpaqueProvider {
     fn capabilities(&self) -> Capabilities {
         self.caps
     }
+    fn versioned_backup(&self) -> bool {
+        self.versioned
+    }
+    fn upload_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        ensure!(self.versioned, "versioned backup not enabled");
+        self.upload_controlled(path, source, None, None, progress)?;
+        Ok(())
+    }
     fn list_directory(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
         self.directory_lookups.lock().unwrap().push(path.to_owned());
         Ok(self
@@ -229,6 +246,9 @@ impl Provider for OpaqueProvider {
         version: Option<&str>,
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
+        if let Some(before_mutation) = &self.before_mutation {
+            before_mutation()?;
+        }
         std::thread::sleep(self.upload_delay);
         self.upload_file_with_version(path, source, id, version, &mut |done, total| {
             progress(done, total)

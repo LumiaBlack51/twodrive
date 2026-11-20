@@ -1,6 +1,6 @@
 //! Provider-independent desktop storage contract. Paths select entries; opaque
-//! remote IDs select objects. A provider must advertise conditional writes before
-//! uploads/backups are offered; CloudBackend's legacy defaults do not promise them.
+//! remote IDs select objects. In-place backup updates require conditional writes.
+//! Providers can also save independent versions through the backup-only API.
 use crate::model::{CloudBackend, DeltaResult, MetadataEntry};
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};
@@ -112,6 +112,19 @@ pub trait Provider: CloudBackend {
         Ok(None)
     }
     fn capabilities(&self) -> Capabilities;
+    fn versioned_backup(&self) -> bool {
+        false
+    }
+    /// Publish at a freshly allocated path. The worker never submits an
+    /// existing version path again, including after an uncertain response.
+    fn upload_backup_version(
+        &self,
+        _path: &str,
+        _source: &Path,
+        _progress: Progress,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("此连接不支持保留备份版本")
+    }
     /// The backup journal has already verified the source against its saved
     /// intent digest. Resume only the original owned create-only session;
     /// returning None must not mutate or adopt an existing remote object.
@@ -329,6 +342,37 @@ impl Backend {
         } else {
             Capabilities::default()
         }
+    }
+    pub fn versioned_backup(&self) -> bool {
+        let caps = self.capabilities();
+        caps.upload && caps.mkdir && self.inner.versioned_backup()
+    }
+    pub fn backup_supported(&self) -> bool {
+        self.capabilities().backup() || self.versioned_backup()
+    }
+    pub fn upload_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        valid_path(path)?;
+        self.check_pause()?;
+        self.check_write()?;
+        ensure!(
+            path != "/" && self.versioned_backup(),
+            "此连接不支持保留备份版本"
+        );
+        let owner = self.clone();
+        self.inner.upload_backup_version(
+            path,
+            source,
+            Arc::new(move |done, total| {
+                owner.check_pause()?;
+                owner.check_write()?;
+                progress(done, total)
+            }),
+        )
     }
     pub fn storage_usage(
         &self,

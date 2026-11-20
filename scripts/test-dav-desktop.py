@@ -224,15 +224,18 @@ def run(args):
                 while True:
                     status = engine.call('status')
                     assert not status.get('backup_failed'), 'backup child exited'
-                    if status.get('backup', {}).get('state') == 'error':
-                        raise AssertionError(status['backup'].get('error'))
+                    backup = status.get('backup', {})
+                    if backup.get('state') == 'error':
+                        raise AssertionError(backup.get('error'))
                     listing = engine.call('list', {'path':remote})
                     if any(e['name']=='backup' for e in listing['entries']):
                         listing = engine.call('list', {'path':remote+'/backup'})
                         if any(e['name']=='sample.txt' for e in listing['entries']):
                             output.unlink(missing_ok=True)
                             engine.call('download', {'path':remote+'/backup/sample.txt','output':str(output)})
-                            if output.read_bytes()==content:
+                            if (output.read_bytes() == content and backup.get('confirmed_files') == 1
+                                    and any(row['path'] == remote+'/backup/sample.txt'
+                                            for row in backup.get('recent', []))):
                                 assert not any(e['name']=='skip-link' for e in listing['entries'])
                                 break
                     assert time.monotonic()<deadline, 'backup deadline exceeded'
@@ -253,6 +256,7 @@ def run(args):
                 if record.get('intent') is None and record['hash']==hashlib.sha256(b'first backup version').hexdigest(): break
                 assert time.monotonic()<deadline, 'ambiguous upload was not reconciled'
                 time.sleep(.5)
+            wait_backup(b'first backup version')
             report['checks']['backup_committed_upload_recovery_by_hash'] = True
             (backup_source/'sample.txt').write_bytes(b'updated backup version')
             wait_backup(b'updated backup version')
@@ -269,14 +273,20 @@ def run(args):
             engine.call('upload', {'path':remote+'/backup/sample.txt','source':str(foreign),'etag':current['etag']})
             (backup_source/'sample.txt').write_bytes(b'conflicting local edit')
             deadline=time.monotonic()+45
-            while engine.call('status')['backup']['state'] != 'error':
+            while True:
+                backup = engine.call('status')['backup']
+                if backup['state'] == 'error':
+                    break
                 assert time.monotonic()<deadline, 'conflict was not reported'
                 time.sleep(1)
+            assert backup['confirmed_files'] == 0
+            assert not any(row['path'] == remote+'/backup/sample.txt' for row in backup['recent'])
             check=root/'conflict-check.txt'
             engine.call('download', {'path':remote+'/backup/sample.txt','output':str(check)})
             assert check.read_bytes()==b'external remote edit'
             engine.call('save_backups', {'id':profile['id'], 'folders':[]})
             report['checks']['backup_conflict_preserves_remote'] = True
+            report['checks']['backup_confirmation_matches_recent_history'] = True
             engine.call('save_backups', {'id':profile['id'], 'folders':[{'local':str(Path.home()),'remote':remote+'/bad','enabled':True}]}, failure=True)
             report['checks']['folder_backup_create_update_pause_resume_symlink_guard'] = True
             engine.call('delete', {'path':remote})
