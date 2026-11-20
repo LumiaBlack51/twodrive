@@ -35,6 +35,7 @@ PATH_READ_IN_PROGRESS = False
 PATH_READ_QUEUED = False
 STATE_LOCK = threading.Lock()
 LOG_PATH = os.path.expanduser("~/.local/state/twodrive/nautilus.log")
+PROC_ROOT = Path("/proc")
 
 
 def twodrive_bin():
@@ -466,13 +467,48 @@ def rc_read(env, operation):
     return json.loads(data)
 
 
+def running_dav_engine_directory(state):
+    # An update can move the runtime directory before the old engine exits.
+    # The process holding this state's exclusive lock identifies that runtime.
+    try:
+        info = (state / "run.lock").lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            return None
+        lock_id = (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino)
+        for line in (PROC_ROOT / "locks").read_text().splitlines():
+            fields = line.split()
+            if len(fields) < 6 or fields[1:4] != ["FLOCK", "ADVISORY", "WRITE"]:
+                continue
+            major, minor, inode = fields[5].split(":")
+            if (int(major, 16), int(minor, 16), int(inode)) != lock_id:
+                continue
+            if not fields[4].isdigit():
+                return None
+            owner = PROC_ROOT / fields[4]
+            if owner.stat().st_uid != os.getuid():
+                return None
+            executable = Path(os.readlink(owner / "exe"))
+            if not executable.is_absolute() or executable.name != "twodrive-dav-engine":
+                return None
+            args = (owner / "cmdline").read_bytes().split(b"\0")
+            if any(flag == b"--state" and value == os.fsencode(state)
+                   for flag, value in zip(args, args[1:])):
+                return executable.parent
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def bridge_candidates(cache_root):
-    executable = str(dav_state_dir().parent / "runtime/rclone")
-    for process in Path("/proc").iterdir():
+    state = dav_state_dir()
+    directories = (state.parent / "runtime", running_dav_engine_directory(state))
+    executables = {str(directory / name) for directory in directories if directory is not None
+                   for name in ("rclone", "rclone-mount")}
+    for process in PROC_ROOT.iterdir():
         if not process.name.isdigit():
             continue
         try:
-            if process.stat().st_uid != os.getuid() or os.readlink(process / "exe") != executable:
+            if process.stat().st_uid != os.getuid() or os.readlink(process / "exe") not in executables:
                 continue
             env = dict(item.decode().split("=", 1) for item in
                        (process / "environ").read_bytes().split(b"\0") if b"=" in item)

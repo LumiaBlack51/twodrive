@@ -232,6 +232,14 @@ fn start_component(
         password: random_secret(),
     };
     let mut command = Command::new(exe);
+    #[cfg(target_os = "linux")]
+    {
+        let mount_component = exe.with_file_name("rclone-mount");
+        if mount_component.is_file() {
+            command = Command::new(mount_component);
+            command.env("TWODRIVE_RCLONE_DEFER_GIO_PROBES", "1");
+        }
+    }
     for (key, _) in std::env::vars_os() {
         if key
             .to_string_lossy()

@@ -148,6 +148,12 @@ def run(args):
                     if b'rcd' in Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0'):components.append(pid)
                 except OSError:pass
             assert len(components)==1
+            official = os.environ.get('TWODRIVE_RCLONE_BIN')
+            if official and (helper := Path(official).with_name('rclone-mount')).is_file():
+                component = Path(f'/proc/{components[0]}')
+                assert (component / 'exe').resolve(strict=True) == helper.resolve(strict=True)
+                assert b'TWODRIVE_RCLONE_DEFER_GIO_PROBES=1' in (component / 'environ').read_bytes().split(b'\0')
+                checks['guarded_linux_mount_component_selected']=True
             os.kill(components[0],signal.SIGKILL)
             wait_unmounted(mounts[0])
             assert engine.process.poll() is None
