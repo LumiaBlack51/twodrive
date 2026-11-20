@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import fcntl
 import json
 import sys
 import base64
@@ -77,11 +78,43 @@ def dav_key(profile, path):
                                profile["mount_path"], path], separators=(",", ":"))
 
 
+def gvfs_export(profile, session=None):
+    if profile["kind"] != "icloud":
+        return None
+    try:
+        state = dav_state_dir()
+        ident = profile["id"]
+        owner = local_json(state / f"mount-{ident}/linux-readonly/gnome-webdav.json")
+        if session is None:
+            session = local_json(state / f"session-{ident}.json")
+        export = owner["export"]
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if (runtime and isinstance(export, str)
+                and os.path.dirname(export) == os.path.join(runtime, "gvfs")
+                and os.path.normpath(export) == export
+                and owner["revision"] == session["revision"] == profile["revision"]
+                and owner["binding"] == session["binding"]
+                and session["kind"] == "icloud"
+                and owner["path"] == profile["mount_path"]
+                and os.readlink(profile["mount_path"]) == export):
+            return export
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return None
+
+
 def dav_path(path, profiles):
     for profile in sorted(profiles, key=lambda p: len(p["mount_path"]), reverse=True):
         root = profile["mount_path"]
         if path == root or path.startswith(root + "/"):
             return dav_key(profile, path[len(root):] or "/")
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime or not path.startswith(os.path.join(runtime, "gvfs") + "/"):
+        return None
+    for profile in profiles:
+        export = gvfs_export(profile)
+        if export and (path == export or path.startswith(export + "/")):
+            return dav_key(profile, path[len(export):] or "/")
     return None
 
 
@@ -614,7 +647,11 @@ def dav_states_for(keys):
                 continue
             mount = dav_state_dir() / f"mount-{ident}"
             kind, source = mounts.get(p["mount_path"], (None, None))
-            if kind == "fuse" and source == "twodrive":
+            if export := gvfs_export(p, session):
+                cached = gvfs_cached_paths(mount / "linux-readonly", export)
+                states.update({key: "cached" if path in cached else "online_only"
+                               for key, path in paths})
+            elif kind == "fuse" and source == "twodrive":
                 if local_json(mount / "binding.json")["provider"] == session["binding"]:
                     states.update(native_states(mount, paths))
             elif kind == "fuse.rclone" and source.startswith("twodrive-ro-"):
@@ -626,6 +663,23 @@ def dav_states_for(keys):
             # Missing or mismatched local state never means safely downloaded.
             pass
     return states
+
+
+def gvfs_cached_paths(state, export):
+    try:
+        snapshot = local_json(state / "gnome-cache.json", 65536)
+        if snapshot["export"] != export or not isinstance(snapshot["paths"], list):
+            return set()
+        # The snapshot belongs to the live mount worker. A stale export alias
+        # left by a crash must not keep showing the cached emblem.
+        with (state / "run.lock").open("rb") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {path for path in snapshot["paths"] if isinstance(path, str)}
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return set()
 
 
 def read_states_async(paths, callback):

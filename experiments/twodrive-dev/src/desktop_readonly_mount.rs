@@ -5,6 +5,10 @@ use std::path::Component;
 use std::path::Prefix;
 use twodrive_dev::{rclone_drive, readonly_mount::Bridge, state::random_secret};
 
+#[cfg(target_os = "linux")]
+#[path = "desktop_icloud_gvfs.rs"]
+pub(super) mod gvfs;
+
 fn lifecycle(stage: &str) {
     if std::env::var_os("TWODRIVE_MOUNT_TRACE").is_some() {
         eprintln!("mount-lifecycle pid={} {stage}", std::process::id());
@@ -111,6 +115,13 @@ fn validate_target(path: &Path, private: &Path, protected: &[PathBuf]) -> anyhow
 }
 pub(super) fn start(app: &App, p: &Profile, cancel: &AtomicBool) -> anyhow::Result<Process> {
     ensure!(installed(), "{}", missing_driver());
+    #[cfg(target_os = "linux")]
+    gvfs::recover(app, p)?;
+    #[cfg(target_os = "linux")]
+    if !gvfs::selected(app, p) {
+        rclone_drive::binary()?;
+    }
+    #[cfg(windows)]
     rclone_drive::binary()?;
     validate_target(
         &p.mount_path,
@@ -330,15 +341,27 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     } else {
         "linux-readonly"
     }))?;
-    #[cfg(target_os = "linux")]
-    let _target = LinuxTarget::prepare(&p.mount_path)?;
     let _lock = cache.run_lock()?;
     let writable = backend.manual_upload_supported();
     let persistent = State::new(account_cache(app, p, &binding).join("vfs"))?;
     let recovery = account_cache(app, p, &binding).join("write-recovery");
-    if writable && dirty_cache(&persistent.dir)? == 0 && recovery.join("observed.json").exists() {
+    let legacy_dirty = dirty_cache(&persistent.dir)?;
+    if writable && legacy_dirty == 0 && recovery.join("observed.json").exists() {
         fs::remove_file(recovery.join("observed.json"))?;
     }
+    #[cfg(target_os = "linux")]
+    if gvfs::selected(app, p) && legacy_dirty == 0 {
+        persistent.save("status.json", &json!({"pending":0,"error":false}))?;
+        return gvfs::run(
+            p,
+            backend,
+            &cache,
+            writable.then_some(recovery.as_path()),
+            &binding,
+        );
+    }
+    #[cfg(target_os = "linux")]
+    let _target = LinuxTarget::prepare(&p.mount_path)?;
     let bridge = if matches!(p.kind.as_str(), "icloud" | "baidu") {
         Bridge::start_indexed(
             backend,
@@ -382,16 +405,7 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     );
     std::io::stdout().flush()?;
     lifecycle("worker-ready");
-    let (send, receive) = mpsc::channel();
-    thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
-            lifecycle("worker-input-line");
-            if line.is_ok_and(|line| line == "unmount") && send.send(()).is_err() {
-                return;
-            }
-        }
-        let _ = send.send(()); // Parent pipe closed: never leave a native mount.
-    });
+    let receive = unmount_requests();
     let mut unmount_requested = false;
     let mut sample = Instant::now() - Duration::from_secs(2);
     let mut last_write_status = (0, false);
@@ -468,6 +482,20 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     drop(bridge);
     lifecycle("worker-bridge-dropped");
     Ok(())
+}
+
+fn unmount_requests() -> mpsc::Receiver<()> {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            lifecycle("worker-input-line");
+            if line.is_ok_and(|line| line == "unmount") && send.send(()).is_err() {
+                return;
+            }
+        }
+        let _ = send.send(()); // Parent pipe closed.
+    });
+    receive
 }
 
 #[cfg(target_os = "linux")]

@@ -1907,3 +1907,64 @@ fn repeated_head_metadata_queries_share_parent_listing_without_downloading() {
     assert_eq!(fixture.metadata_reads.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.downloads.load(Ordering::SeqCst), 0);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn gnome_webdav_lists_content_types_without_reading_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let provider = Fixture::new(b"file contents");
+    let downloads = provider.downloads.clone();
+    let bridge =
+        Bridge::start_gvfs(Backend::new(provider), temp.path(), None, "iCloud-test").unwrap();
+    let client = client();
+    let list =
+        || {
+            client
+            .request("PROPFIND".parse().unwrap(), format!("http://{}/", bridge.address))
+            .header("Depth", "1")
+            .body(r#"<D:propfind xmlns:D="DAV:"><D:prop><D:getcontenttype/></D:prop></D:propfind>"#)
+        };
+    let denied = list().send().unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        denied.headers()["www-authenticate"]
+            .to_str()
+            .unwrap()
+            .starts_with("Basic ")
+    );
+    let response = list()
+        .basic_auth("iCloud-test", Some(&bridge.token))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::MULTI_STATUS);
+    assert!(response.text().unwrap().contains("text/plain"));
+    assert_eq!(downloads.load(Ordering::Relaxed), 0);
+    assert!(bridge.cached_paths().unwrap().is_empty());
+    let file = file_url(&bridge);
+    assert_eq!(
+        client
+            .head(&file)
+            .basic_auth("iCloud-test", Some(&bridge.token))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert!(bridge.cached_paths().unwrap().is_empty());
+    let bytes = client
+        .get(&file)
+        .basic_auth("iCloud-test", Some(&bridge.token))
+        .send()
+        .unwrap()
+        .bytes()
+        .unwrap();
+    assert_eq!(bytes.as_ref(), b"file contents");
+    let path = format!("/{NAME}");
+    assert_eq!(bridge.cached_paths().unwrap(), std::slice::from_ref(&path));
+    bridge
+        .fs
+        .invalidate_content(&["/unrelated-office-lock".into()]);
+    assert_eq!(bridge.cached_paths().unwrap(), std::slice::from_ref(&path));
+    bridge.fs.invalidate_content(&[path]);
+    assert!(bridge.cached_paths().unwrap().is_empty());
+}

@@ -68,7 +68,7 @@ void main() {
 
       c.setView(visible: true, files: true);
       await c.refreshView(forceDirectory: true);
-      expect(c.calls, ['status', 'list']);
+      expect(c.calls, ['list', 'status']);
     },
     skip: Platform.isWindows,
   );
@@ -78,8 +78,7 @@ void main() {
     () async {
       final c = DelayedClient()
         ..available = true
-        ..selected = 'p'
-        ..status = {'connected': true, 'profile': 'p'};
+        ..selected = 'p';
       c.setView(visible: true, files: true);
       final skipped = c.refreshView(forceDirectory: true);
       c.setView(visible: false);

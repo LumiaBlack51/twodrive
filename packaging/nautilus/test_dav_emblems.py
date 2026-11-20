@@ -145,6 +145,36 @@ class DavEmblemTests(unittest.TestCase):
             results.append((ext.dav_key(p, "/same.mp3"), state))
         self.assertEqual(ext.db_states_for([key for key, _ in results]), dict(results))
 
+    def test_gnome_webdav_exports_badges_without_touching_the_remote_file(self):
+        p = self.profile("icloud", "icloud")
+        export = self.root / "gvfs/dav:fixture"
+        Path(p["mount_path"]).symlink_to(export, target_is_directory=True)
+        owner = self.state / "mount-icloud/linux-readonly/gnome-webdav.json"
+        owner.parent.mkdir(parents=True)
+        owner.write_text(json.dumps({
+            "revision": p["revision"], "binding": "binding-icloud",
+            "path": p["mount_path"], "export": str(export),
+        }))
+        with patch.dict(ext.os.environ, {"XDG_RUNTIME_DIR": str(self.root)}):
+            key = ext.dav_key(p, "/document.txt")
+            self.assertEqual(ext.dav_path(str(export / "document.txt"), [p]), key)
+            self.assertEqual(ext.dav_states_for([key])[key], "online_only")
+            cache = owner.parent / "gnome-cache.json"
+            with (owner.parent / "run.lock").open("wb") as lock:
+                ext.fcntl.flock(lock, ext.fcntl.LOCK_EX)
+                cache.write_text(json.dumps({"export": str(export), "paths": ["/document.txt"]}))
+                self.assertEqual(ext.emblems_for_state(ext.dav_states_for([key])[key]),
+                                 ["emblem-twodrive-synced"])
+                cache.write_text(json.dumps({"export": str(export) + "-old", "paths": ["/document.txt"]}))
+                self.assertEqual(ext.dav_states_for([key])[key], "online_only")
+                cache.write_text(json.dumps({"export": str(export), "paths": ["/document.txt"]}))
+            self.assertEqual(ext.dav_states_for([key])[key], "online_only")
+            with patch.object(ext, "gvfs_export", side_effect=AssertionError("unexpected iCloud probe")):
+                self.assertIsNone(ext.dav_path("/unrelated/document.txt", [p]))
+            Path(p["mount_path"]).unlink()
+            self.assertIsNone(ext.dav_path(str(export / "document.txt"), [p]))
+            self.assertEqual(ext.dav_states_for([key])[key], "unknown")
+
     def test_bridge_complete_sparse_partial_empty_dirty_and_active_download(self):
         p = self.profile("baidu", "baidu")
         cache = self.bridge_cache(p)

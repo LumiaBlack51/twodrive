@@ -13,3 +13,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/check-debian-policy.py
+      - run: python3 -m unittest discover -s scripts -p 'test_dav_debian_package.py'
