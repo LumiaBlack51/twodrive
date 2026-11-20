@@ -1882,6 +1882,31 @@ Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项�
 
 - [TD-20261119-01](incidents/TD-20261119-01.md) 记录上游 DAV 传输历史、目录读取、Linux 挂载退出和 Debian CI 打包的迁移与回归。
 
+## TD-20261120-01：DAV Debian 包遗漏可选挂载 helper 和许可证
+
+- 日期：2026-11-20；状态：已验证（合成暂存/归档回归及隔离容器内标准 Debian 构建）。
+- 影响与关联：上游 PR #72 的 `c0b46ac9` 与 PR #74 的 `2734a2b5` 集成时；关联 [TD-20261119-01](incidents/TD-20261119-01.md) 的 DAV 打包入口。两条 PR 仍保持独立。
+
+### 症状、触发与根因
+
+#74 的便携 bundle 包含 `rclone-mount` 与 `RCLONE-MOUNT-LICENSE.txt`，但 #72 的固定 Debian 清单与 `verify_dav` 不认识二者。成品可同时漏掉 helper 和许可证而通过校验，引擎找不到与 rclone 相邻的 helper 时会回退官方组件。本次证实的是打包遗漏机制，不是实际安装后的 Nautilus 内容读取行为。
+
+### 修复与恢复操作
+
+`build-dav-deb.sh` 在源 bundle 存在任一成员时检查完整配对、普通文件及 helper 可执行性，然后仅在临时 Debian 清单加入二者；旧 bundle 无二者时沿用原清单。校验脚本以源 bundle 为期望，检查 helper 相邻位置、可执行权限和 SHA-256，以及许可证原文（支持 debhelper gzip 压缩）；拒绝缺一、全漏、错误字节或源不存在却意外打包。未修改 #74 历史，也未安装包、访问真实账号或改动现用系统。
+
+### 验证结果与边界
+
+`test_dav_debian_package.py` 的 9 个合成暂存/归档测试在旧代码出现 14 个失败断言，修复后全部通过；含源有完整配对但成品全漏的负例。暂存测试在 dpkg-buildpackage 边界捕获清单，归档测试使用模拟 dpkg tar 输出，均不冒充实际 `.deb` 构建。
+
+在一次性 Debian 13 容器内安装 build-essential、debhelper、Python、Git 与 GTK 开发依赖，`dpkg-checkbuilddeps -Ppkg.twodrive.dav` 通过，未跳过依赖检查。以最小合成 GTK ELF/共享库和文本数据作为 bundle，实际运行仓库 `scripts/build-dav-deb.sh` → `dpkg-buildpackage --build=any --build-profiles=pkg.twodrive.dav` → debhelper：无 helper、有完整配对两种输入均构建并通过产物校验，保留各自 `.deb`、`.buildinfo`、`.changes` 并核对清单。完整配对包内 helper 位于 `/usr/lib/twodrive-dav/rclone-mount`、权限 0755，许可证在文档目录由 debhelper 压缩，解压字节一致。该既有 DAV 路径是二进制测试包构建，不产生源码包，不冒充 Release 或真实应用构建。
+
+同一容器内，旧 `c0b46ac9` 使用完整 helper 输入实际构建，旧校验通过，但新校验以 `missing DAV payload` 同时报缺 helper 和许可证（退出 1）。另在 detached 临时工作树无冲突组合 #72/#74，再应用本修复，9 项回归与完整配对的标准构建通过；未提交或推送组合历史。Python 编译、shell 语法、Debian policy 和 diff 检查通过。所有包只做归档检查，未安装；合成 ELF 不执行客户端或连接云端。
+
+### 防复发与交付
+
+Debian policy CI 运行此回归。未进行 Rust/Flutter 重建、真实挂载与 Nautilus 验收。修复提交与该 head CI 待推送后核实；不合并、批准、评论或部署。
+
 ## 记录模板
 
 复制以下模板填写。未知项明确写“未确认”或“未执行”，不要省略验证边界。

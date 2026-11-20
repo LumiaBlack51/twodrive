@@ -15,6 +15,19 @@ trap 'rm -rf -- "$work"' EXIT
 tree="$work/source"
 mkdir -p "$tree/debian" "$tree/dav-assets"
 cp "$project_root/debian/"{control,copyright,rules,twodrive-dav.install,twodrive-dav.docs} "$tree/debian/"
+# The mount helper is optional for older portable bundles, but its license
+# and executable must travel together when present. Keep the static allowlists
+# compatible with bundles built independently of the mount-helper change.
+helper="$bundle/rclone-mount"
+license="$bundle/RCLONE-MOUNT-LICENSE.txt"
+if [[ -e "$helper" || -L "$helper" || -e "$license" || -L "$license" ]]; then
+    if [[ ! -f "$helper" || -L "$helper" || ! -x "$helper" || ! -f "$license" || -L "$license" ]]; then
+        printf 'DAV mount helper requires an executable regular rclone-mount and its regular RCLONE-MOUNT-LICENSE.txt\n' >&2
+        exit 1
+    fi
+    printf 'bundle/rclone-mount usr/lib/twodrive-dav\n' >> "$tree/debian/twodrive-dav.install"
+    printf 'bundle/RCLONE-MOUNT-LICENSE.txt\n' >> "$tree/debian/twodrive-dav.docs"
+fi
 cp -r "$project_root/debian/source" "$tree/debian/"
 cp -r "$project_root/packaging/gnome-tray-anchor" "$tree/"
 install -m 0755 "$project_root/packaging/development/twodrive-dav" "$tree/dav-assets/"

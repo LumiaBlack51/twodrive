@@ -87,6 +87,16 @@ def verify_dav(package, bundle):
                     'twodrive-provider-login', 'rclone', 'rclone-component.json',
                     'lib/libapp.so', 'lib/libflutter_linux_gtk.so', 'data/icudtl.dat')
     remaining = {runtime + name: bundle / name for name in bundle_files}
+    helper = bundle / 'rclone-mount'
+    license_file = bundle / 'RCLONE-MOUNT-LICENSE.txt'
+    has_helper = any(path.exists() or path.is_symlink() for path in (helper, license_file))
+    helper_name = runtime + helper.name
+    license_name = 'usr/share/doc/twodrive-dav/' + license_file.name
+    if has_helper:
+        assert all(path.is_file() and not path.is_symlink() for path in (helper, license_file)), 'incomplete DAV mount helper source pair'
+        assert helper.stat().st_mode & 0o111, 'source DAV mount helper is not executable'
+        remaining.update({helper_name: helper, license_name: license_file})
+
     required = {'usr/bin/twodrive-dav', 'usr/share/icons/hicolor/scalable/apps/twodrive-dav.svg',
                 'usr/share/applications/app.twodrive.twodrive_dav_packaged.desktop',
                 'usr/share/gnome-shell/extensions/twodrive-tray-anchor@twodrive/extension.js'}
@@ -98,14 +108,23 @@ def verify_dav(package, bundle):
                 assert not name.startswith(('home/', 'root/', 'usr/local/', 'etc/xdg/autostart/',
                                             'usr/lib/systemd/user/')), f'unexpected package entry: {name}'
                 assert not name.endswith(('tokens.json', 'profiles.json', '.sqlite3')), f'runtime state: {name}'
+                compressed_license = name == license_name + '.gz'
+                if compressed_license:
+                    name = license_name
+                if name in (helper_name, license_name):
+                    assert has_helper, 'unexpected DAV mount helper payload without source pair'
+                    assert name in remaining, f'duplicate DAV mount helper payload: {name}'
+                    if name == helper_name:
+                        assert member.mode & 0o111, 'DAV mount helper is not executable'
                 required.discard(name)
                 if name == 'usr/bin/twodrive-dav':
                     assert member.mode & 0o111, 'launcher is not executable'
                 if source := remaining.pop(name, None):
                     assert member.isfile(), f'not a regular file: {name}'
                     with source.open('rb') as original, stream.extractfile(member) as installed:
+                        payload = gzip.GzipFile(fileobj=installed) if compressed_license else installed
                         assert hashlib.file_digest(original, 'sha256').digest() == hashlib.file_digest(
-                            installed, 'sha256').digest(), f'payload differs from bundle: {name}'
+                            payload, 'sha256').digest(), f'payload differs from bundle: {name}'
         assert process.wait() == 0, 'cannot read DAV package payload'
     assert not (required or remaining), f'missing DAV payload: {sorted(required | remaining.keys())}'
 
