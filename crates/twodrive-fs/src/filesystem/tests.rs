@@ -692,6 +692,30 @@ impl CloudBackend for StreamingBackend {
 }
 
 #[test]
+fn queued_pin_cannot_claim_the_new_generation_after_release() {
+    let test = TestFs::new("release-before-pin-claim");
+    let db = &test.fs.db;
+    db.set_explicit_pin("file-readme", true).unwrap();
+    let selected = db.get_by_remote_id("file-readme").unwrap().unwrap();
+    assert!(selected.effective_pinned());
+    let before = db.download_generation("file-readme").unwrap();
+    db.release_path(&selected.metadata.path).unwrap();
+    assert!(db.download_generation("file-readme").unwrap() > before);
+    assert!(
+        crate::hydration::hydrate_pinned_record(
+            db,
+            &test.fs.cache_dir,
+            test.fs.backend.as_ref(),
+            &selected
+        )
+        .is_err()
+    );
+    let after = db.get_by_remote_id("file-readme").unwrap().unwrap();
+    assert_eq!(after.state, FileState::OnlineOnly);
+    assert!(after.cache_path.is_none());
+}
+
+#[test]
 fn release_stops_streaming_download_cleans_partial_and_allows_new_open() {
     check_release_stops_streaming_download(false);
 }

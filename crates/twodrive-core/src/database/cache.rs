@@ -493,19 +493,20 @@ impl Database {
     }
 
     pub fn release_record(&self, record: &FileRecord) -> anyhow::Result<bool> {
-        self.release_cached_record(record, None)
+        self.release_cached_record(record, None, false)
     }
 
     fn release_cached_record(
         &self,
         record: &FileRecord,
         cutoff: Option<i64>,
+        pending_only: bool,
     ) -> anyhow::Result<bool> {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = self.query_record(&tx,
-            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1",
-            params![record.metadata.remote_id])?;
+            "SELECT remote_id, path, parent_path, name, is_dir, size, modified_unix, etag, state, cache_path, cache_accessed_unix, pin_explicit, pin_origin_remote_id, pin_inheritance_blocked, cloud_remote_id, local_mode FROM files WHERE remote_id = ?1 AND (?2 = 0 OR release_pending = 1)",
+            params![record.metadata.remote_id, pending_only])?;
         let Some(record) = current else {
             return Ok(false);
         };
@@ -575,7 +576,7 @@ impl Database {
         let mut count = 0;
         for id in ids {
             if let Some(record) = self.get_by_remote_id(&id)? {
-                count += usize::from(self.release_record(&record)?);
+                count += usize::from(self.release_cached_record(&record, None, true)?);
             }
         }
         Ok(count)
@@ -644,7 +645,7 @@ impl Database {
         };
         let mut released = cancelled;
         for record in records {
-            released += usize::from(self.release_record(&record)?);
+            released += usize::from(self.release_cached_record(&record, None, true)?);
         }
         Ok(released)
     }
@@ -668,7 +669,7 @@ impl Database {
 
         let mut pruned = 0;
         for record in records {
-            if self.release_cached_record(&record, Some(cutoff))? {
+            if self.release_cached_record(&record, Some(cutoff), false)? {
                 pruned += 1;
             }
         }
@@ -882,7 +883,7 @@ mod retention_tests {
         db.move_subtree_and_queue("file", "/.Trash-1000/files/report")
             .unwrap();
         assert!(
-            !db.release_cached_record(&scanned, Some(now_unix() - 60))
+            !db.release_cached_record(&scanned, Some(now_unix() - 60), false)
                 .unwrap()
         );
         assert_eq!(fs::read(&cache).unwrap(), b"data");
@@ -940,7 +941,7 @@ mod retention_tests {
         let stale = db.get_by_path("/file").unwrap().unwrap();
         db.mark_cache_accessed("file").unwrap();
         assert!(
-            !db.release_cached_record(&stale, Some(now_unix() - 60))
+            !db.release_cached_record(&stale, Some(now_unix() - 60), false)
                 .unwrap()
         );
         db.connect()

@@ -113,7 +113,7 @@ fn mount_backend_with_retention<B: CloudBackend>(
     let recovery = thread::spawn(move || {
         loop {
             // Replay via the normal workers so recovery and new saves share item locks.
-            if let Err(err) = enqueue_recovery(&recovery_db, &sender) {
+            if let Err(err) = enqueue_recovery(&recovery_db, &sender, !desktop_controls) {
                 eprintln!("twodrive: recovery scan failed: {err:#}");
             }
             if let Err(err) = sync_delta_metadata(&recovery_db, recovery_backend.as_ref()) {

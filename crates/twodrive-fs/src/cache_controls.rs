@@ -1,4 +1,5 @@
-use crate::hydration::hydrate_version;
+use crate::cache_io::has_existing_cache;
+use crate::hydration::hydrate_pinned_record;
 use fuser::ReplyEmpty;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,26 +37,15 @@ impl CacheControls {
                 if stop.load(Ordering::Acquire) {
                     break;
                 }
-                if let Ok(ids) = reader.pending_pin_downloads() {
-                    for id in ids {
+                if let Ok(records) = reader.pin_download_candidates() {
+                    for record in records {
                         if stop.load(Ordering::Acquire) {
                             return;
                         }
-                        let result = (|| -> anyhow::Result<()> {
-                            let generation = reader.download_generation(&id)?;
-                            if let Some(record) = reader.get_by_remote_id(&id)? {
-                                hydrate_version(
-                                    &reader,
-                                    &cache,
-                                    backend.as_ref(),
-                                    &record,
-                                    generation,
-                                    true,
-                                )?;
-                            }
-                            Ok(())
-                        })();
-                        if result.is_err() {
+                        if !has_existing_cache(&record)
+                            && hydrate_pinned_record(&reader, &cache, backend.as_ref(), &record)
+                                .is_err()
+                        {
                             eprintln!("twodrive: pending pin deferred");
                         }
                     }
