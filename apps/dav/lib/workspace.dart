@@ -55,6 +55,7 @@ class _WorkspaceState extends State<Workspace>
   final tray = StatusTray();
   bool panel = false;
   bool nativeTrayVisible = false;
+  bool dashboardFocused = false;
   DialogRoute<void>? foregroundPanel;
   bool presenting = false;
   int page = WorkspacePage.overview.index;
@@ -69,14 +70,11 @@ class _WorkspaceState extends State<Workspace>
     if (widget.desktop) {
       WidgetsBinding.instance.addObserver(this);
       windowManager.addListener(this);
+      dashboardFocused = c.viewVisible;
       tray.onVisibility = (visible) {
         nativeTrayVisible = visible;
-        if (visible) {
-          c.setView(visible: true, quota: true);
-          unawaited(c.refreshView());
-        } else {
-          unawaited(updateViewAfterTrayClose());
-        }
+        updateViewInterests();
+        if (visible) unawaited(c.refreshView());
       };
       tray.onQuit = () => unawaited(quit());
       tray.onActivate = (position) => unawaited(showPanel(position));
@@ -87,16 +85,6 @@ class _WorkspaceState extends State<Workspace>
   @override
   void didChangeMetrics() {
     if (mounted && Platform.isLinux) setState(() {});
-  }
-
-  Future<void> updateViewAfterTrayClose() async {
-    final focused = await windowManager.isFocused();
-    if (!mounted || nativeTrayVisible) return;
-    if (focused) {
-      refreshWorkspace();
-    } else {
-      c.setView(visible: false);
-    }
   }
 
   Future<void> initTray() async {
@@ -131,15 +119,21 @@ class _WorkspaceState extends State<Workspace>
     await tray.icon(icon, title: c.trayTitle);
   }
 
-  void refreshWorkspace({bool forceDirectory = false}) {
+  void updateViewInterests() {
     c.setView(
-      visible: true,
-      files: !panel && page == WorkspacePage.files.index,
+      visible: dashboardFocused || nativeTrayVisible,
+      files: dashboardFocused && !panel && page == WorkspacePage.files.index,
       quota:
-          panel ||
-          page == WorkspacePage.connections.index ||
-          page == WorkspacePage.overview.index,
+          nativeTrayVisible ||
+          (dashboardFocused &&
+              (panel ||
+                  page == WorkspacePage.connections.index ||
+                  page == WorkspacePage.overview.index)),
     );
+  }
+
+  void refreshWorkspace({bool forceDirectory = false}) {
+    updateViewInterests();
     unawaited(c.refreshView(forceDirectory: forceDirectory));
   }
 
@@ -150,22 +144,26 @@ class _WorkspaceState extends State<Workspace>
 
   @override
   void onWindowFocus() {
+    dashboardFocused = true;
     if (!presenting) refreshWorkspace(forceDirectory: true);
   }
 
   @override
-  void onWindowMinimize() => c.setView(visible: false);
+  void onWindowMinimize() {
+    dashboardFocused = false;
+    updateViewInterests();
+  }
 
   @override
   void onWindowClose() {
     if (c.quitting) return;
-    c.setView(visible: false);
+    onWindowMinimize();
     unawaited(windowManager.hide());
   }
 
   @override
   void onWindowBlur() {
-    if (!nativeTrayVisible) c.setView(visible: false);
+    onWindowMinimize();
     if (!Platform.isLinux && !Platform.isWindows && panel && !presenting) {
       unawaited(windowManager.hide());
     }

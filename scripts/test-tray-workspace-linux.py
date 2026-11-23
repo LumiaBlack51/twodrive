@@ -84,6 +84,15 @@ def exercise(bundle, engines, home):
         output("xdotool", "key", "Down", "Return")
         until(lambda: "Normal" in output("xprop", "-id", primary, "WM_STATE"), "explicit dashboard action")
         assert "IsUnMapped" in output("xwininfo", "-id", panel)
+        time.sleep(0.35)
+        click_tray()
+        until(lambda: "IsViewable" in output("xwininfo", "-id", panel), "tray before Quit")
+        # The disconnected fixture offers Dashboard and Quit in the tray menu.
+        time.sleep(0.4)
+        output("xdotool", "mousemove", "--window", panel, "360", "38", "click", "1")
+        time.sleep(0.25)
+        output("xdotool", "key", "Down", "Down", "Return")
+        assert app.wait(timeout=15) == 0, "Quit must cleanly exit with the tray mapped"
         print("Tray preserved dashboard pixels and minimization; Dashboard explicitly restored it.")
     finally:
         if app:

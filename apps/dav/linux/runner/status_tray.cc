@@ -19,6 +19,7 @@ struct Tray {
   FlMethodChannel* channel = nullptr;
   GtkWindow* popup = nullptr;
   FlView* primary = nullptr;
+  GtkWindow* dashboard = nullptr;
   FlView* content = nullptr;
   GDBusConnection* bus = nullptr;
   GDBusNodeInfo* info = nullptr;
@@ -279,6 +280,17 @@ void watcher_appeared(GDBusConnection* bus, const gchar*, const gchar*, gpointer
       3000, nullptr, nullptr, nullptr);
 }
 void stop(Tray* tray) {
+  if (tray->dashboard) {
+    g_signal_handlers_disconnect_by_data(tray->dashboard, tray);
+    g_object_remove_weak_pointer(G_OBJECT(tray->dashboard), reinterpret_cast<gpointer*>(&tray->dashboard));
+    tray->dashboard = nullptr;
+  }
+  if (tray->popup) {
+    g_signal_handlers_disconnect_by_data(tray->popup, tray);
+    gtk_widget_destroy(GTK_WIDGET(tray->popup));
+    tray->popup = nullptr;
+    tray->content = nullptr;
+  }
   if (tray->reposition) { g_source_remove(tray->reposition); tray->reposition = 0; }
   if (tray->legacy) { gtk_status_icon_set_visible(tray->legacy, FALSE); g_clear_object(&tray->legacy); }
   if (tray->watcher) { g_bus_unwatch_name(tray->watcher); tray->watcher = 0; }
@@ -355,9 +367,6 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
 void dispose(gpointer data) {
   auto* tray = static_cast<Tray*>(data);
   stop(tray);
-  g_signal_handlers_disconnect_by_data(gtk_widget_get_toplevel(GTK_WIDGET(tray->primary)), tray);
-  g_signal_handlers_disconnect_by_data(tray->popup, tray);
-  gtk_widget_destroy(GTK_WIDGET(tray->popup));
   if (tray->info) g_dbus_node_info_unref(tray->info);
   g_clear_object(&tray->bus);
   delete tray;
@@ -374,6 +383,8 @@ void register_status_tray(FlView* view) {
       "twodrive/status_tray", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(tray->channel, call, tray, dispose);
   auto* window = GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  tray->dashboard = window;
+  g_object_add_weak_pointer(G_OBJECT(window), reinterpret_cast<gpointer*>(&tray->dashboard));
   tray->primary = view;
   tray->popup = GTK_WINDOW(gtk_window_new(GTK_WINDOW_TOPLEVEL));
   gtk_window_set_title(tray->popup, "TwoDrive Tray");
