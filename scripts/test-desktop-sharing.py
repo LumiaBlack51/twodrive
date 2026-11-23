@@ -35,7 +35,7 @@ def run(args):
             assert 'sharing' not in same.call('status')
             duplicate = subprocess.run([args.engine, '--state', str(root / 'host' / 'client'),
                                         '--peer-bin', args.peer, '--launcher', args.peer, '--tdlink-server'],
-                                       input='', capture_output=True, text=True, timeout=8)
+                                       input='', capture_output=True, encoding='utf-8', timeout=8)
             assert duplicate.returncode != 0 and 'already running' in duplicate.stderr
             checks['shared_state_with_distinct_roles_and_exclusive_server_lock'] = True
             settings = dict(name='Disposable shared PC', root=str(shared), writable=True,
