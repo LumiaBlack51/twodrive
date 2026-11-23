@@ -9,6 +9,12 @@ import 'file_manager.dart';
 
 typedef Json = Map<String, dynamic>;
 
+class AuthorizationExpired extends StateError {
+  AuthorizationExpired(super.message);
+}
+
+enum TransferPhase { running, completed, failed }
+
 class Transfer {
   Transfer(this.id, this.operation, this.args);
   final int id;
@@ -16,7 +22,12 @@ class Transfer {
   final Json args;
   int done = 0;
   int total = 0;
-  String state = tr('传输中');
+  TransferPhase phase = TransferPhase.running;
+  String get state => switch (phase) {
+    TransferPhase.running => tr('传输中'),
+    TransferPhase.completed => tr('已完成'),
+    TransferPhase.failed => tr('未完成'),
+  };
   String? error;
   String get name => (args['path'] as String).split('/').last;
 }
@@ -81,6 +92,17 @@ class StorageClient extends ChangeNotifier {
   String? selected;
   String path = '/';
   final Map<String, String> connectionErrors = {};
+  final Set<String> needsAuthorization = {};
+
+  void _recordConnectionError(String id, Object error) {
+    connectionErrors[id] = error.toString().replaceFirst('Bad state: ', '');
+    if (error is AuthorizationExpired) {
+      needsAuthorization.add(id);
+    } else {
+      needsAuthorization.remove(id);
+    }
+  }
+
   String? _error;
   String? _pollError;
   String? get error => _error ?? _pollError;
@@ -149,7 +171,7 @@ class StorageClient extends ChangeNotifier {
   List<Json> get connectedProfiles =>
       profiles.where((p) => isProfileConnected(p['id'] as String)).toList();
   Iterable<Transfer> get runningTransfers =>
-      transfers.where((t) => t.state == tr('传输中'));
+      transfers.where((t) => t.phase == TransferPhase.running);
   Json get sharing => (status['sharing'] as Json?) ?? {};
   bool get hosting => sharing['running'] == true;
   bool get syncError =>
@@ -302,8 +324,8 @@ class StorageClient extends ChangeNotifier {
       : profile?['capabilities']?['backup'] == true;
   bool get writable => canUpload || canMkdir || canRename || canDelete;
   String get providerLabel =>
-      profile?['provider_label'] as String? ?? 'TwoDrive';
-  String get accountLabel => profile?['account_label'] as String? ?? tr('账号');
+      tr(profile?['provider_label'] as String? ?? 'TwoDrive');
+  String get accountLabel => tr(profile?['account_label'] as String? ?? '账号');
   String get account => connected
       ? (status['account_name'] as String? ??
             profile?['account_name'] as String? ??
@@ -481,7 +503,12 @@ class StorageClient extends ChangeNotifier {
     if (message['ok'] == true) {
       reply.complete(Map<String, dynamic>.from(message['result'] as Map));
     } else {
-      reply.completeError(StateError(message['error'] as String));
+      final text = message['error'] as String;
+      reply.completeError(
+        message['code'] == 'reauthorize'
+            ? AuthorizationExpired(text)
+            : StateError(text),
+      );
     }
   }
 
@@ -544,6 +571,9 @@ class StorageClient extends ChangeNotifier {
         _quotaVersions.remove(id);
       }
     }
+    connectionErrors.removeWhere(
+      (id, _) => !profiles.any((p) => p['id'] == id),
+    );
     selected = connected
         ? status['profile'] as String?
         : result['selected'] as String?;
@@ -736,21 +766,8 @@ class StorageClient extends ChangeNotifier {
 
   // Optional maintenance restart: restore exactly the previously online IDs,
   // serially through this GUI-owned engine, then restore the selected account.
-  Future<void> restoreConnectionsAtStartup(Iterable<String> ids) async {
-    final original = selected;
-    final known = profiles.map((p) => p['id'] as String).toSet();
-    final order = ids.where(known.contains).toSet()..remove(original);
-    if (original != null && known.contains(original)) order.add(original);
-    final failed = <String>[];
-    for (final id in order) {
-      await connect(id);
-      if (error != null) failed.add(id);
-    }
-    if (failed.isNotEmpty) {
-      error = tr('部分连接未能恢复，请在连接页重试。');
-      notifyListeners();
-    }
-  }
+  Future<void> restoreConnectionsAtStartup(Iterable<String> ids) =>
+      _restoreProfiles(ids.toSet());
 
   Future<void> connect([String? profileId]) {
     final id = profileId ?? selected;
@@ -772,8 +789,9 @@ class StorageClient extends ChangeNotifier {
         try {
           result = await request('connect', {'id': id}, activeId);
           connectionErrors.remove(id);
+          needsAuthorization.remove(id);
         } catch (e) {
-          connectionErrors[id] = e.toString().replaceFirst('Bad state: ', '');
+          _recordConnectionError(id, e);
           return;
         }
         await refreshStatus();
@@ -848,14 +866,20 @@ class StorageClient extends ChangeNotifier {
   /// When enabled, restore every authenticated account once per app process.
   /// Disconnect is session-only; startup restoration is a separate preference.
   /// The engine refuses browser login here and validates revision and binding.
-  Future<void> restoreOnStartup() =>
-      _startupRestore ??= action(tr('正在恢复网盘连接和挂载'), () async {
-        if (!restoreConnectionsOnStartup) return;
+  Future<void> restoreOnStartup() => _startupRestore ??=
+      restoreConnectionsOnStartup ? _restoreProfiles(null) : Future.value();
+
+  Future<void> _restoreProfiles(Set<String>? requested) =>
+      action(tr('正在恢复网盘连接和挂载'), () async {
         _restoringStartup = true;
         try {
           final preferred = selected;
           final candidates = profiles
-              .where((p) => p['startup_ready'] == true)
+              .where(
+                (p) =>
+                    p['startup_ready'] == true &&
+                    (requested == null || requested.contains(p['id'])),
+              )
               .map((p) => Map<String, dynamic>.from(p))
               .toList();
           // Restore the previous browsing account last, retaining all others.
@@ -875,14 +899,12 @@ class StorageClient extends ChangeNotifier {
                 'revision': p['revision'],
               }, activeId);
               connectionErrors.remove(id);
+              needsAuthorization.remove(id);
               if (quitting || _disposed) break;
               await refreshStatus();
             } catch (e) {
               if (!quitting) {
-                connectionErrors[id] = e.toString().replaceFirst(
-                  'Bad state: ',
-                  '',
-                );
+                _recordConnectionError(id, e);
               }
               continue;
             }
@@ -989,18 +1011,18 @@ class StorageClient extends ChangeNotifier {
     transfers.insert(0, task);
     if (transfers.length > 100) {
       final old = transfers.last;
-      if (old.state != tr('传输中')) transfers.removeLast();
+      if (old.phase != TransferPhase.running) transfers.removeLast();
     }
     notifyListeners();
     try {
       await request(op, args, id);
-      task.state = tr('已完成');
+      task.phase = TransferPhase.completed;
       task.done = task.total;
       if (op == 'upload' && selected == args['profile'] && connected) {
         await readDirectory(path);
       }
     } catch (e) {
-      task.state = tr('未完成');
+      task.phase = TransferPhase.failed;
       task.error = '$e'.replaceFirst('Bad state: ', '');
       if (selected == args['profile']) error = task.error;
     } finally {

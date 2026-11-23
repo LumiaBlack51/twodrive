@@ -88,19 +88,12 @@ fn open(
         })
     };
     let connect = || GoogleDrive::connect(state.clone(), route, p.writable);
-    let backend = if Tokens::load(&state, &config).is_err() {
-        ensure!(interactive, "Google 登录已失效，请手动重新授权");
-        authorize()?;
-        connect()?
-    } else {
-        match connect() {
-            Err(error) if interactive && error.is::<auth::ReauthorizationRequired>() => {
-                authorize()?;
-                connect()?
-            }
-            result => result?,
-        }
-    };
+    let backend = connect_with_consent(
+        Tokens::load(&state, &config).is_ok(),
+        interactive,
+        connect,
+        authorize,
+    )?;
     let binding = format!("google:{}", backend.account_id);
     ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
     network.record(&format!("network: Google Drive route={route}"));
@@ -113,6 +106,26 @@ fn open(
         gateway: None,
     })
 }
+fn connect_with_consent<T>(
+    has_tokens: bool,
+    interactive: bool,
+    mut connect: impl FnMut() -> anyhow::Result<T>,
+    authorize: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<T> {
+    if !has_tokens {
+        ensure!(interactive, "Google 登录已失效，请手动重新授权");
+        authorize()?;
+        connect()
+    } else {
+        match connect() {
+            Err(error) if interactive && error.is::<auth::ReauthorizationRequired>() => {
+                authorize()?;
+                connect()
+            }
+            result => result,
+        }
+    }
+}
 pub fn restore(p: &Profile, recipe: &Value) -> anyhow::Result<Backend> {
     let route = recipe["route"].as_str().context("missing Google route")?;
     let backend = GoogleDrive::connect(state(p)?, route, p.writable)?;
@@ -124,4 +137,55 @@ pub fn restore(p: &Profile, recipe: &Value) -> anyhow::Result<Backend> {
 }
 pub fn sign_out(p: &Profile) -> anyhow::Result<()> {
     auth::logout(&state(p)?)
+}
+
+#[cfg(test)]
+mod consent_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn a_rejected_grant_prompts_only_on_explicit_connect_and_retries_once() {
+        for interactive in [true, false] {
+            let calls = Cell::new(0);
+            let prompts = Cell::new(0);
+            let result = connect_with_consent(
+                true,
+                interactive,
+                || {
+                    let n = calls.replace(calls.get() + 1);
+                    if n == 0 {
+                        Err(auth::ReauthorizationRequired.into())
+                    } else {
+                        Ok("original account")
+                    }
+                },
+                || {
+                    prompts.set(prompts.get() + 1);
+                    Ok(())
+                },
+            );
+            assert_eq!(result.is_ok(), interactive);
+            assert_eq!(calls.get(), if interactive { 2 } else { 1 });
+            assert_eq!(prompts.get(), u32::from(interactive));
+        }
+    }
+
+    #[test]
+    fn cancellation_or_transport_failure_never_loops_into_consent() {
+        let result = connect_with_consent::<()>(
+            true,
+            true,
+            || Err(anyhow::anyhow!("network")),
+            || panic!("unexpected consent"),
+        );
+        assert_eq!(result.unwrap_err().to_string(), "network");
+        let result = connect_with_consent::<()>(
+            false,
+            true,
+            || panic!("unexpected connect"),
+            || anyhow::bail!("cancel"),
+        );
+        assert_eq!(result.unwrap_err().to_string(), "cancel");
+    }
 }

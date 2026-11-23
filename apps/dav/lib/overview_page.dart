@@ -480,6 +480,8 @@ class _OverviewPageState extends State<OverviewPage> {
         total.isFinite &&
         total > 0;
     final (icon, color) = switch (profile['kind']) {
+      'peer' => (Icons.devices, blue),
+      'smb' => (Icons.storage, blue),
       'icloud' => (Icons.apple, const Color(0xff68768d)),
       'baidu' => (Icons.pets, const Color(0xffef7185)),
       'google_drive' ||

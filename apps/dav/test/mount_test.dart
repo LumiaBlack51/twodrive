@@ -273,7 +273,7 @@ void main() {
       c.dispose();
     },
   );
-  testWidgets('mount card explains editing and disables absent driver', (
+  testWidgets('mount card offers recovery without technical prose and disables absent driver', (
     tester,
   ) async {
     final c = MountClient(installed: false);
@@ -291,8 +291,8 @@ void main() {
       find.widgetWithText(FilledButton, '挂载'),
     );
     expect(button.onPressed, isNull);
-    expect(find.textContaining('网盘回收站'), findsOneWidget);
-    expect(find.textContaining('待上传完成'), findsOneWidget);
+    expect(find.text('打开写入恢复目录'), findsOneWidget);
+    expect(find.textContaining('待上传完成'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });

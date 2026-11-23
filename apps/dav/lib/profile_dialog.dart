@@ -100,7 +100,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
     };
     flags = {for (final key in keys) key: p[key] == true};
     if (fields['name']!.text.isEmpty) {
-      fields['name']!.text = provider?['label'] as String? ?? '';
+      fields['name']!.text = tr(provider?['label'] as String? ?? '');
     }
     normalizeRoute();
     if (widget.initialAction != null) {
@@ -359,7 +359,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
         authenticated = result['authenticated'] == true;
         selectionMessage = result['selection_message'] as String?;
         if (result['options'] is Map) {
-          final previousLabel = provider?['label'];
+          final previousLabel = tr(provider?['label'] as String? ?? '');
           final keepName =
               widget.original != null || fields['name']!.text != previousLabel;
           if (kind != targetKind) {
@@ -445,7 +445,9 @@ class _ProfileDialogState extends State<ProfileDialog> {
                 onChanged: runningAction
                     ? null
                     : (value) => setState(() {
-                        final previousLabel = provider?['label'];
+                        final previousLabel = tr(
+                          provider?['label'] as String? ?? '',
+                        );
                         for (final f in providerFields.where(
                           (f) => f['secret'] == true,
                         )) {
@@ -457,8 +459,9 @@ class _ProfileDialogState extends State<ProfileDialog> {
                         actionItems = [];
                         pickedItem = null;
                         if (fields['name']!.text == previousLabel) {
-                          fields['name']!.text =
-                              provider?['label'] as String? ?? '';
+                          fields['name']!.text = tr(
+                            provider?['label'] as String? ?? '',
+                          );
                         }
                       }),
               ),

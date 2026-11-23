@@ -150,62 +150,65 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       existing.navigator?.removeRoute(existing);
       return;
     }
-    if (!panel &&
-        await windowManager.isVisible() &&
-        !await windowManager.isMinimized()) {
-      if (!mounted || foregroundPanel != null) return;
-      final popup = DialogRoute<void>(
-        context: context,
-        builder: (context) => Dialog(
-          alignment: Alignment.bottomRight,
-          child: SizedBox(
-            width: 390,
-            height: 570,
-            child: ListenableBuilder(
-              listenable: c,
-              builder: (_, _) => buildTray(),
+    presenting = true;
+    try {
+      if (!panel &&
+          await windowManager.isVisible() &&
+          !await windowManager.isMinimized()) {
+        if (!mounted || foregroundPanel != null) return;
+        final popup = DialogRoute<void>(
+          context: context,
+          builder: (context) => Dialog(
+            alignment: Alignment.bottomRight,
+            child: SizedBox(
+              width: 390,
+              height: 570,
+              child: ListenableBuilder(
+                listenable: c,
+                builder: (_, _) => buildTray(),
+              ),
             ),
           ),
-        ),
-      );
-      foregroundPanel = popup;
-      await windowManager.focus();
-      if (mounted) {
-        unawaited(
-          Navigator.of(context).push(popup).whenComplete(() {
-            if (identical(foregroundPanel, popup)) foregroundPanel = null;
-          }),
         );
+        await windowManager.focus();
+        if (mounted) {
+          foregroundPanel = popup;
+          unawaited(
+            Navigator.of(context).push(popup).whenComplete(() {
+              if (identical(foregroundPanel, popup)) foregroundPanel = null;
+            }),
+          );
+        }
+        return;
       }
-      return;
-    }
-    if (panel && await windowManager.isVisible()) {
+      if (panel && await windowManager.isVisible()) {
+        c.setView(visible: false);
+        await windowManager.hide();
+        return;
+      }
       c.setView(visible: false);
       await windowManager.hide();
-      return;
+      setState(() => panel = true);
+      await windowManager.setFullScreen(false);
+      await windowManager.unmaximize();
+      for (var i = 0; i < 20 && await windowManager.isMaximized(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      await windowManager.setSkipTaskbar(true);
+      await windowManager.setAlwaysOnTop(true);
+      if (Platform.isWindows) {
+        await windowManager.setMinimumSize(const Size(390, 570));
+      }
+      await tray.panel(true);
+      if (!Platform.isLinux && !Platform.isWindows) {
+        await windowManager.show();
+        await windowManager.focus();
+      }
+      if (mounted) refreshWorkspace();
+    } finally {
+      presenting = false;
     }
-    presenting = true;
-    c.setView(visible: false);
-    await windowManager.hide();
-    setState(() => panel = true);
-    await windowManager.setFullScreen(false);
-    await windowManager.unmaximize();
-    for (var i = 0; i < 20 && await windowManager.isMaximized(); i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-    }
-    await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
-    await windowManager.setSkipTaskbar(true);
-    await windowManager.setAlwaysOnTop(true);
-    if (Platform.isWindows) {
-      await windowManager.setMinimumSize(const Size(390, 570));
-    }
-    await tray.panel(true);
-    if (!Platform.isLinux && !Platform.isWindows) {
-      await windowManager.show();
-      await windowManager.focus();
-    }
-    presenting = false;
-    if (mounted) refreshWorkspace();
   }
 
   Future<void> showManagement([int? destination]) async {
@@ -953,13 +956,13 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                         const SizedBox(width: 12),
                         Expanded(child: Text(task.name)),
                         Text(task.state),
-                        if (task.state == tr('传输中'))
+                        if (task.phase == TransferPhase.running)
                           IconButton(
                             tooltip: tr('取消传输'),
                             onPressed: () => c.cancelTransfer(task.id),
                             icon: const Icon(Icons.close),
                           ),
-                        if (task.state == tr('未完成'))
+                        if (task.phase == TransferPhase.failed)
                           TextButton(
                             onPressed:
                                 c.busy ||
@@ -974,7 +977,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                     ),
                     const SizedBox(height: 10),
                     LinearProgressIndicator(
-                      value: task.state == tr('已完成')
+                      value: task.phase == TransferPhase.completed
                           ? 1
                           : task.total == 0
                           ? null
@@ -1074,8 +1077,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           online: c.isProfileConnected(p['id'] as String),
           selected: c.connected && c.status['profile'] == p['id'],
           issue: c.connectionErrors[p['id']],
-          connectLabel:
-              c.connectionErrors[p['id']]?.contains('Google 授权已失效') == true
+          connectLabel: c.needsAuthorization.contains(p['id'])
               ? tr('重新授权')
               : c.isProfileConnected(p['id'] as String)
               ? tr('查看文件')

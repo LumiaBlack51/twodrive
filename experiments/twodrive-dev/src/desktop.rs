@@ -1171,7 +1171,13 @@ pub fn run() -> anyhow::Result<()> {
             let quit = req.op == "quit" && result.is_ok();
             let value = match result {
                 Ok(value) => json!({"id":req.id,"ok":true,"result":value}),
-                Err(error) => json!({"id":req.id,"ok":false,"error":error.to_string()}),
+                Err(error) => {
+                    let mut reply = json!({"id":req.id,"ok":false,"error":error.to_string()});
+                    if error.is::<twodrive_dev::google::auth::ReauthorizationRequired>() {
+                        reply["code"] = json!("reauthorize");
+                    }
+                    reply
+                }
             };
             emit(&worker_out, value);
             worker_cancel.lock().unwrap().remove(&req.id);

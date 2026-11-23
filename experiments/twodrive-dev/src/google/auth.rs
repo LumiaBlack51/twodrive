@@ -173,7 +173,7 @@ pub struct ReauthorizationRequired;
 fn token_error(status: u16, body: &[u8], refreshing: bool) -> anyhow::Error {
     let error = serde_json::from_slice::<Value>(body).unwrap_or_default();
     match error["error"].as_str() {
-        Some("invalid_grant") if refreshing => ReauthorizationRequired.into(),
+        Some("invalid_grant") if status == 400 && refreshing => ReauthorizationRequired.into(),
         Some("invalid_client" | "unauthorized_client") => {
             anyhow::anyhow!("Google 应用凭据无效，请检查连接设置")
         }

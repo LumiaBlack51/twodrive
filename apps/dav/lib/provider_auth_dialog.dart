@@ -32,7 +32,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
   Widget build(BuildContext context) {
     final question = widget.question;
     return AlertDialog(
-      title: Text(tr(question['title'] as String? ?? tr('账号登录'))),
+      title: Text(tr(question['title'] as String? ?? '账号登录')),
       content: SizedBox(
         width: 400,
         child: Form(
@@ -43,7 +43,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (question['help'] is String) ...[
-                  Text(question['help'] as String),
+                  Text(tr(question['help'] as String)),
                   const SizedBox(height: 16),
                 ],
                 if ((question['message'] as String? ?? '').isNotEmpty) ...[
@@ -80,7 +80,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
                     enableSuggestions: false,
                     maxLength: 4096,
                     decoration: InputDecoration(
-                      labelText: tr(question['label'] as String? ?? tr('输入信息')),
+                      labelText: tr(question['label'] as String? ?? '输入信息'),
                       counterText: '',
                     ),
                     validator: (value) =>
@@ -117,7 +117,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
               Navigator.pop(context, answer.text);
             }
           },
-          child: Text(tr(question['submit_label'] as String? ?? tr('下一步'))),
+          child: Text(tr(question['submit_label'] as String? ?? '下一步')),
         ),
       ],
     );
