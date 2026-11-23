@@ -287,7 +287,18 @@ void stop(Tray* tray) {
   }
   if (tray->popup) {
     g_signal_handlers_disconnect_by_data(tray->popup, tray);
+    // On X11 the Flutter 3.41 embedder can release a secondary framebuffer
+    // on the GTK thread while its EGL rendering context is busy elsewhere.
+    // Keep a GDK context current until the popup has released its GL objects.
+    GdkGLContext* previous = gdk_gl_context_get_current();
+    g_autoptr(GdkGLContext) cleanup = nullptr;
+    if (!previous && tray->content && g_strcmp0(g_getenv("FLUTTER_LINUX_RENDERER"), "software") != 0) {
+      auto* surface = gtk_widget_get_window(GTK_WIDGET(tray->content));
+      if (surface) cleanup = gdk_window_create_gl_context(surface, nullptr);
+      if (cleanup && gdk_gl_context_realize(cleanup, nullptr)) gdk_gl_context_make_current(cleanup);
+    }
     gtk_widget_destroy(GTK_WIDGET(tray->popup));
+    if (cleanup) gdk_gl_context_clear_current();
     tray->popup = nullptr;
     tray->content = nullptr;
   }

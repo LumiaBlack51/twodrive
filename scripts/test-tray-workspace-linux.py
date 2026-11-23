@@ -27,11 +27,15 @@ def until(probe, label):
     raise AssertionError(f"Timed out waiting for {label}")
 
 
-def exercise(bundle, engines, home):
-    wm = subprocess.Popen(["openbox"])
+def exercise(bundle, engines, home, gnome):
+    wm = subprocess.Popen(["gnome-shell", "--x11", "--sm-disable"] if gnome else ["openbox"])
     app = None
     try:
-        until(lambda: "Openbox" in output("wmctrl", "-m"), "window manager")
+        wm_name = "GNOME Shell" if gnome else "Openbox"
+        until(lambda: wm_name in output("wmctrl", "-m"), "window manager")
+        if gnome:
+            time.sleep(1)
+            output("xdotool", "key", "Escape")
         app = subprocess.Popen([
             bundle / "twodrive_dav", "--window-title", "Dashboard fixture",
             "--engine", engines / "twodrive-dav-engine", "--peer-bin", engines / "twodrive-dev",
@@ -52,8 +56,9 @@ def exercise(bundle, engines, home):
 
         primary = until(lambda: named("Dashboard fixture"), "dashboard")
         until(lambda: (home / "state/run.lock").exists(), "fixture engine")
-        time.sleep(1)
-        region = (100, 140, 650, 590)
+        time.sleep(3 if gnome else 1)
+        # Compare the Flutter content. GTK repaints its title bar on focus changes.
+        region = (240, 260, 680, 590)
         before = ImageGrab.grab(bbox=region).tobytes()
         click_tray()
         panel = until(lambda: named("TwoDrive Tray"), "separate tray surface")
@@ -99,13 +104,18 @@ def exercise(bundle, engines, home):
             app.terminate()
             app.wait(timeout=10)
         wm.terminate()
-        wm.wait(timeout=10)
+        try:
+            wm.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            wm.kill()
+            wm.wait()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--engines", type=Path)
+    parser.add_argument("--gnome", action="store_true", help="use GNOME Shell X11 in the private display")
     parser.add_argument("--private-session", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     bundle = args.bundle.resolve()
@@ -115,7 +125,7 @@ if __name__ == "__main__":
         home = Path.home()
         if home.parent != Path(tempfile.gettempdir()) or not home.name.startswith("twodrive-tray-test-") or not (home / "fixture").is_file():
             raise SystemExit("Use the outer test entry point to create an isolated desktop")
-        exercise(bundle, engines, home)
+        exercise(bundle, engines, home, args.gnome)
     else:
         with tempfile.TemporaryDirectory(prefix="twodrive-tray-test-") as directory:
             home = Path(directory)
@@ -127,6 +137,9 @@ if __name__ == "__main__":
                        XDG_CACHE_HOME=str(home / "cache"), GDK_BACKEND="x11", GDK_SCALE="1",
                        TWODRIVE_TRAY_BACKEND="sni")
             env.pop("WAYLAND_DISPLAY", None)
+            if args.gnome:
+                env.update(GSETTINGS_BACKEND="memory", LP_NUM_THREADS="2")
+                (home / "Desktop").mkdir()
             subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x1024x24", "dbus-run-session",
                             "--", "python3", __file__, str(bundle), "--engines", str(engines),
-                            "--private-session"], env=env, check=True)
+                            "--private-session", *(["--gnome"] if args.gnome else [])], env=env, check=True)

@@ -1977,6 +1977,12 @@ Dot 指出指定排除目录的别名、TDLink 停止说明和设备列表刷新
 
 Linux 正式桌面包通过前台托盘、英文界面及独立服务端窗口验证。本机确认写入队列和活动列表为空后正常退出旧客户端，按原用户安装方式覆盖 Development。登录配置、队列数据库和缓存就地保留，未留旧 runtime。重新启动后的 GUI 和引擎摘要与正式包一致，原 Google 账号静默连接并成功返回实际空间用量。Windows 11 使用同一发布提交的 MSIX 实际安装、激活两个应用、关闭服务端并验证客户端继续运行，包内配对、传输、撤权和卸载验证通过。本轮真实 Google 验证覆盖身份与容量读取，文件传输在隔离数据上验证。
 
+## TD-20261123-09：独立托盘窗口在 GNOME X11 退出时缺少 OpenGL 上下文
+
+- 日期与环境：2026-11-23，Development 0.2.26 候选构建，真实 GNOME Shell 窗口管理器运行于隔离 Xvfb，SNI、Flutter 3.41.8。关联 TD-20261123-06 及 TD-20261013-05。本次具体发生在新增第二视图的 framebuffer 析构。
+- 触发与证据：前台及最小化托盘切换与显式恢复成功，从已打开的托盘菜单退出时，客户端收到 SIGABRT。GDB 回溯为 fl_view_dispose → fl_compositor_opengl_dispose → fl_framebuffer_dispose → libepoxy；GTK 线程当时没有可用的当前 GLX/EGL 上下文。Openbox 测试单独运行没有检出此错误。
+- 修复与验证：销毁托盘视图期间，如果 GTK 线程没有当前绘图上下文，为其已实现的 GDK 表面建立清理上下文。软件渲染不需要该步骤。隔离 GNOME X11 两轮确认内容区域逐像素一致、最小化保留、正常恢复且从面板退出码为 0。GNOME 使非活动窗口的原生标题栏改变外观，测试仅比较仪表盘内容。目前验证不覆盖所有显卡或原生 Wayland。
+
 ## TD-20261123-08：Windows 卸载管道测试等待合成子进程退出超时
 
 - 环境与证据：2026-11-23，Development 0.2.26 [Windows CI](https://github.com/LumiaBlack51/twodrive/actions/runs/45145959021/job/137595187539)。生产 stop 发出 unmount 后的十二秒时间包含启动 PowerShell；测试的合成进程在期限内没有退出。该作业没有记录 shell 就绪时间，未确认时间花在哪一阶段。未使用真实挂载。
