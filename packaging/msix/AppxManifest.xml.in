@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-         IgnorableNamespaces="uap rescap">
+         IgnorableNamespaces="uap uap10 rescap">
   <Identity Name="@IDENTITY@" Publisher="@PUBLISHER@" Version="@VERSION@" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>TwoDrive Development</DisplayName>
@@ -10,8 +11,7 @@
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>Connect cloud storage and encrypted TwoDrive device shares.</Description>
   </Properties>
-  <!-- The current Flutter UI is Chinese. Add languages only with matching UI localization. -->
-  <Resources><Resource Language="zh-cn" /></Resources>
+  <Resources><Resource Language="zh-cn" /><Resource Language="en-us" /></Resources>
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
     <PackageDependency Name="Microsoft.VCLibs.140.00.UWPDesktop" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" MinVersion="14.0.30704.0" />
@@ -19,6 +19,11 @@
   <Applications>
     <Application Id="TwoDrive" Executable="twodrive_dav.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements DisplayName="TwoDrive Development" Description="Cloud storage and encrypted device sharing"
+          BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+    <Application Id="TDLinkServer" Executable="twodrive_dav.exe" EntryPoint="Windows.FullTrustApplication"
+                 uap10:Parameters="--tdlink-server">
+      <uap:VisualElements DisplayName="TDLink Server" Description="Share a folder with paired devices"
           BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
     </Application>
   </Applications>

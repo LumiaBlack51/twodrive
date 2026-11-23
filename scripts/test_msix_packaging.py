@@ -110,7 +110,11 @@ class MsixPackagingTests(unittest.TestCase):
                     self.assertRegex(identity.get('Version'), r'^[1-9]\d*\.\d+\.\d+\.0$')
                     self.assertEqual(identity.get('ProcessorArchitecture'), 'x64')
                     languages = [r.get('Language') for r in manifest.find(FOUNDATION + 'Resources')]
-                    self.assertEqual(languages, ['zh-cn'])
+                    self.assertEqual(languages, ['zh-cn', 'en-us'])
+                    apps = {app.get('Id'): app for app in manifest.find(FOUNDATION + 'Applications')}
+                    parameters = '{http://schemas.microsoft.com/appx/manifest/uap/windows10/10}Parameters'
+                    self.assertIsNone(apps['TwoDrive'].get(parameters))
+                    self.assertEqual(apps['TDLinkServer'].get(parameters), '--tdlink-server')
                     self.assertIn('distribution-msix', names)
                     self.assertIn('LICENSE', names)
                     self.assertNotIn('AppxSignature.p7x', names)

@@ -347,19 +347,18 @@ const _english = <String, String>{
   '语言': 'Language',
   '简体中文': '简体中文',
   '软件更新': 'Software updates',
-  '此 MSIX 安装包通过其分发渠道更新。商店安装请在 Microsoft Store 中检查更新。':
+  '请通过安装渠道检查更新。':
       'Check the Microsoft Store or your distribution channel for updates.',
   '自动检查更新': 'Check for updates automatically',
-  '每 24 小时向 GitHub 检查 Development 新版本，不自动下载或安装。':
-      'Check GitHub for a new Development release every 24 hours.',
+  '每天检查一次': 'Check once a day',
   '发现新版本 {arg0}': 'Version {arg0} available',
   '本次检查未发现更新版本': 'Up to date',
   '检查中…': 'Checking…',
   '立即检查': 'Check now',
   '打开发布页面': 'Open release page',
   '登录后自动启动': 'Start at sign-in',
-  'MSIX 自启动尚待适配；请从开始菜单启动。': 'Start TwoDrive from the Start menu.',
-  '默认关闭。开启后在托盘中运行；连接和挂载遵循下方设置。': 'Start in the system tray.',
+  '请从开始菜单启动。': 'Start TwoDrive from the Start menu.',
+  '启动时显示托盘图标': 'Start in the system tray.',
   '启动时恢复已登录账号': 'Restore accounts at startup',
   '连接后自动挂载': 'Mount after connecting',
   '尚未挂载网盘，请在“连接”页点击对应网盘的“挂载”。': 'No mounted drives',

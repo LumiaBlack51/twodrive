@@ -551,6 +551,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           ),
                           child: ListTile(
                             dense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                            ),
+                            minLeadingWidth: 24,
+                            horizontalTitleGap: 10,
                             selected: page == destination.index,
                             selectedTileColor: const Color(0xffd2dbef),
                             selectedColor: const Color(0xff2472df),
@@ -560,6 +565,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                             leading: Icon(destination.icon),
                             title: Text(
                               destination.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: page == destination.index
@@ -1167,14 +1174,12 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   ),
                 ),
                 if (c.updates.managed)
-                  Text(tr('此 MSIX 安装包通过其分发渠道更新。商店安装请在 Microsoft Store 中检查更新。'))
+                  Text(tr('请通过安装渠道检查更新。'))
                 else ...[
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(tr('自动检查更新')),
-                    subtitle: Text(
-                      tr('每 24 小时向 GitHub 检查 Development 新版本，不自动下载或安装。'),
-                    ),
+                    subtitle: Text(tr('每天检查一次')),
                     value: c.updates.enabled,
                     onChanged: c.updates.checking ? null : c.updates.setEnabled,
                   ),
@@ -1217,9 +1222,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           child: SwitchListTile(
             title: Text(tr('登录后自动启动')),
             subtitle: Text(
-              c.updates.managed
-                  ? tr('MSIX 自启动尚待适配；请从开始菜单启动。')
-                  : tr('默认关闭。开启后在托盘中运行；连接和挂载遵循下方设置。'),
+              c.updates.managed ? tr('请从开始菜单启动。') : tr('启动时显示托盘图标'),
             ),
             value: c.status['autostart'] == true,
             onChanged: c.busy || !c.available || c.updates.managed
