@@ -1053,12 +1053,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn initial_root_discards_partial_json_before_retrying_component() {
-        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let state = State::new(temp.path().join("private")).unwrap();
-        let exe = temp.path().join("synthetic-component");
-        fs::write(&exe, b"#!/usr/bin/python3\nfrom pathlib import Path\nimport sys\nassert 'lsjson' in sys.argv\np=Path(__file__).with_suffix('.attempted')\nif not p.exists():\n p.write_text('1')\n print('[{partial')\n sys.exit(5)\nprint('[]')\n").unwrap();
-        fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+        let exe =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/partial-root-listing.py");
         let cancel = AtomicBool::new(false);
         let mut waits = 0;
         let value = initial_root_with_retry(
