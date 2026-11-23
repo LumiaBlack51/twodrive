@@ -1,3 +1,9 @@
+twodrive (0.2.24+dev0.2.25-1) unstable; urgency=medium
+
+  * Package the Development source alongside the 0.2.25 desktop bundles.
+
+ -- TwoDrive maintainers <maintainers@users.noreply.github.com>  Mon, 23 Nov 2026 14:40:00 +0800
+
 twodrive (0.2.24-1) unstable; urgency=medium
 
   * Keep Office owner and regex-excluded files durable and local in FUSE.

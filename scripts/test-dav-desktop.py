@@ -14,7 +14,7 @@ import uuid
 
 
 class Engine:
-    def __init__(self, engine, peer, root, *, state_path=None):
+    def __init__(self, engine, peer, root, *, state_path=None, tdlink=False):
         self.counter = 0
         self.events = queue.Queue()
         self.progress = 0
@@ -25,7 +25,7 @@ class Engine:
         self.log = (root / 'engine.stderr').open('w')
         try:
             self.process = subprocess.Popen([engine, '--state', str(state_path or root / 'client'),
-                '--peer-bin', peer, '--launcher', peer], stdin=subprocess.PIPE,
+                '--peer-bin', peer, '--launcher', peer, *(['--tdlink-server'] if tdlink else [])], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=self.log, text=True, encoding="utf-8", env=env)
         except BaseException:
             self.log.close()
@@ -211,6 +211,19 @@ def run(args):
             (backup_source/'sample.txt').write_bytes(b'first backup version')
             (backup_source/'skip-link').symlink_to(root/'source.bin')
             backup_map = [{'local':str(backup_source), 'remote':remote+'/backup', 'enabled':True}]
+            excluded_root = root / 'excluded-root'
+            excluded_root.mkdir()
+            nested = backup_source / 'excluded-child'
+            nested.mkdir()
+            for folder in [excluded_root, nested]:
+                (folder / 'never-upload.txt').write_text('private fixture')
+            alias = root
+            if os.name != 'nt':
+                alias = root / 'alias'
+                alias.symlink_to(root, target_is_directory=True)
+            engine.call('save_sync_policy', {'exclude_directory_paths':[
+                str(alias / excluded_root.name), str(alias / 'backup-source' / nested.name)]})
+            backup_map.append({'local':str(excluded_root),'remote':remote+'/excluded-root','enabled':True})
             engine.call('pause', {'paused':True})
             engine.call('save_backups', {'id':profile['id'], 'folders':backup_map})
             time.sleep(2)
@@ -237,7 +250,20 @@ def run(args):
                                 break
                     assert time.monotonic()<deadline, 'backup deadline exceeded'
                     time.sleep(1)
+            def wait_completed_scan():
+                deadline = time.monotonic()+45
+                while True:
+                    report = engine.call('status')['backup']
+                    if report.get('completed_scan') and report['state']=='idle':
+                        return report
+                    assert report['state'] != 'error', report.get('error')
+                    assert time.monotonic()<deadline, 'backup did not finish the scan'
+                    time.sleep(.2)
             wait_backup(b'first backup version')
+            wait_completed_scan()
+            assert all(e['name'] != 'excluded-root' for e in engine.call('list', {'path':remote})['entries'])
+            assert all(e['name'] != 'excluded-child' for e in engine.call('list', {'path':remote+'/backup'})['entries'])
+            report['checks']['picked_root_and_nested_directory_excluded'] = True
             engine.call('disconnect')
             manifest_file=root/'client/backup-verification/manifest.json'
             manifest=json.loads(manifest_file.read_text())
@@ -254,8 +280,17 @@ def run(args):
                 assert time.monotonic()<deadline, 'ambiguous upload was not reconciled'
                 time.sleep(.5)
             report['checks']['backup_committed_upload_recovery_by_hash'] = True
+            for occupied in [excluded_root, nested]:
+                (occupied/'never-upload.txt').unlink()
+                occupied.rmdir()
+                occupied.write_text('still excluded')
             (backup_source/'sample.txt').write_bytes(b'updated backup version')
             wait_backup(b'updated backup version')
+            stale = wait_completed_scan()['unavailable_exclusion_paths']
+            assert {Path(path).name for path in stale} == {nested.name, excluded_root.name}
+            assert all(e['name'] != 'excluded-root' for e in engine.call('list', {'path':remote})['entries'])
+            assert all(e['name'] != 'excluded-child' for e in engine.call('list', {'path':remote+'/backup'})['entries'])
+            report['checks']['replaced_exclusions_preserve_unrelated_backup'] = True
             etag_before_pause = next(e['etag'] for e in engine.call('list', {'path':remote+'/backup'})['entries'] if e['name']=='sample.txt')
             engine.call('pause', {'paused':True})
             (backup_source/'sample.txt').write_bytes(b'paused next version')

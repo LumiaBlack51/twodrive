@@ -186,7 +186,7 @@ GVariant* property(GDBusConnection*, const gchar*, const gchar*, const gchar*,
   if (g_str_equal(key, "Menu")) return g_variant_new_object_path("/");
   if (g_str_equal(key, "ToolTip")) return g_variant_new("(s@a(iiay)ss)",
       tray->icon.c_str(), g_variant_new_array(G_VARIANT_TYPE("(iiay)"), nullptr, 0),
-      tray->title.c_str(), "打开同步状态");
+      tray->title.c_str(), "");
   if (g_str_has_suffix(key, "Pixmap"))
     return g_variant_new_array(G_VARIANT_TYPE("(iiay)"), nullptr, 0);
   return g_variant_new_string("");

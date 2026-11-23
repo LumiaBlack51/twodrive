@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
@@ -99,7 +100,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
     };
     flags = {for (final key in keys) key: p[key] == true};
     if (fields['name']!.text.isEmpty) {
-      fields['name']!.text = provider?['label'] as String? ?? '';
+      fields['name']!.text = tr(provider?['label'] as String? ?? '');
     }
     normalizeRoute();
     if (widget.initialAction != null) {
@@ -186,7 +187,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
         labelText: label,
         suffixIcon: type == 'file' || type == 'directory'
             ? IconButton(
-                tooltip: '选择文件或文件夹',
+                tooltip: tr('选择文件或文件夹'),
                 icon: const Icon(Icons.folder_open),
                 onPressed: runningAction
                     ? null
@@ -194,9 +195,9 @@ class _ProfileDialogState extends State<ProfileDialog> {
                         final path = type == 'directory'
                             ? await getDirectoryPath()
                             : (await openFile(
-                                acceptedTypeGroups: const [
+                                acceptedTypeGroups: [
                                   XTypeGroup(
-                                    label: 'JSON 文件',
+                                    label: tr('JSON 文件'),
                                     extensions: ['json'],
                                   ),
                                 ],
@@ -208,8 +209,9 @@ class _ProfileDialogState extends State<ProfileDialog> {
               )
             : null,
       ),
-      validator: (text) =>
-          required && (text == null || text.trim().isEmpty) ? '请填写此项' : null,
+      validator: (text) => required && (text == null || text.trim().isEmpty)
+          ? tr('请填写此项')
+          : null,
     ),
   );
   Widget providerField(Json f) {
@@ -217,7 +219,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
     if (f['type'] == 'boolean') {
       return SwitchListTile(
         contentPadding: EdgeInsets.zero,
-        title: Text(f['label'] as String),
+        title: Text(tr(f['label'] as String)),
         value: flags[key] ?? false,
         onChanged: runningAction ? null : (v) => setState(() => flags[key] = v),
       );
@@ -226,8 +228,8 @@ class _ProfileDialogState extends State<ProfileDialog> {
         f['secret'] == true &&
             widget.original?['kind'] == kind &&
             widget.original?['${key}_saved'] == true
-        ? '${f['label']} · 留空保留已保存值'
-        : f['label'] as String;
+        ? tr('{arg0} · 留空保留已保存值', [tr(f['label'] as String)])
+        : tr(f['label'] as String);
     return field(
       key,
       label,
@@ -254,7 +256,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
     try {
       await widget.client!.request('cancel', {'id': id});
     } catch (_) {
-      if (mounted) setState(() => actionMessage = '取消未完成，请稍后重试。');
+      if (mounted) setState(() => actionMessage = tr('取消未完成，请稍后重试。'));
     }
   }
 
@@ -268,7 +270,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
         final label = providerFields.firstWhere(
           (f) => f['key'] == key,
         )['label'];
-        setState(() => actionMessage = '请先填写$label。');
+        setState(() => actionMessage = tr('请先填写{arg0}。', [label]));
         return;
       }
     }
@@ -282,8 +284,8 @@ class _ProfileDialogState extends State<ProfileDialog> {
       String? file;
       if (action['input'] == 'file') {
         file = (await openFile(
-          acceptedTypeGroups: const [
-            XTypeGroup(label: 'TwoDrive 连接文件', extensions: ['json']),
+          acceptedTypeGroups: [
+            XTypeGroup(label: tr('TwoDrive 连接文件'), extensions: ['json']),
           ],
         ))?.path;
         if (file == null || !mounted) return;
@@ -357,7 +359,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
         authenticated = result['authenticated'] == true;
         selectionMessage = result['selection_message'] as String?;
         if (result['options'] is Map) {
-          final previousLabel = provider?['label'];
+          final previousLabel = tr(provider?['label'] as String? ?? '');
           final keepName =
               widget.original != null || fields['name']!.text != previousLabel;
           if (kind != targetKind) {
@@ -394,7 +396,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.original == null ? '添加连接' : '编辑连接'),
+    title: Text(widget.original == null ? tr('添加连接') : tr('编辑连接')),
     content: SizedBox(
       width: 540,
       child: SingleChildScrollView(
@@ -424,26 +426,28 @@ class _ProfileDialogState extends State<ProfileDialog> {
                               'provider': 'peer',
                             }),
                       icon: const Icon(Icons.file_open),
-                      label: const Text('从 TwoDrive 连接文件添加'),
+                      label: Text(tr('从 TwoDrive 连接文件添加')),
                     ),
                   ),
                 ),
-              field('name', '连接名称', required: true),
+              field('name', tr('连接名称'), required: true),
               DropdownButtonFormField<String>(
                 key: ValueKey('provider-$kind'),
                 initialValue: kind,
-                decoration: const InputDecoration(labelText: '存储提供者'),
+                decoration: InputDecoration(labelText: tr('存储提供者')),
                 items: [
                   for (final d in widget.providers)
                     DropdownMenuItem(
                       value: d['id'] as String,
-                      child: Text(d['label'] as String),
+                      child: Text(tr(d['label'] as String)),
                     ),
                 ],
                 onChanged: runningAction
                     ? null
                     : (value) => setState(() {
-                        final previousLabel = provider?['label'];
+                        final previousLabel = tr(
+                          provider?['label'] as String? ?? '',
+                        );
                         for (final f in providerFields.where(
                           (f) => f['secret'] == true,
                         )) {
@@ -455,18 +459,14 @@ class _ProfileDialogState extends State<ProfileDialog> {
                         actionItems = [];
                         pickedItem = null;
                         if (fields['name']!.text == previousLabel) {
-                          fields['name']!.text =
-                              provider?['label'] as String? ?? '';
+                          fields['name']!.text = tr(
+                            provider?['label'] as String? ?? '',
+                          );
                         }
                       }),
               ),
               const SizedBox(height: 14),
-              if (provider == null) const Text('引擎没有可用的存储提供者，请检查引擎版本。'),
-              if (provider?['help'] is String)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 14),
-                  child: Text(provider!['help'] as String),
-                ),
+              if (provider == null) Text(tr('引擎没有可用的存储提供者，请检查引擎版本。')),
               if (inlineCredentials)
                 for (final f in providerFields.where(
                   (f) => f['advanced'] != true,
@@ -491,13 +491,13 @@ class _ProfileDialogState extends State<ProfileDialog> {
                                 ? Icons.file_open
                                 : Icons.radar,
                           ),
-                    label: Text(action['label'] as String),
+                    label: Text(tr(action['label'] as String)),
                   ),
                 ),
               if (actionMessage != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Text(actionMessage!),
+                  child: Text(tr(actionMessage!)),
                 ),
               for (final item in actionItems)
                 ListTile(
@@ -516,7 +516,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
                         fields[entry.key]!.text = entry.value as String;
                       }
                     }
-                    actionMessage = selectionMessage ?? '已选择。';
+                    actionMessage = selectionMessage ?? tr('已选择。');
                   }),
                 ),
               for (final f in providerFields.where(
@@ -528,17 +528,17 @@ class _ProfileDialogState extends State<ProfileDialog> {
               DropdownButtonFormField<String>(
                 key: ValueKey('route-$kind'),
                 initialValue: route,
-                decoration: const InputDecoration(labelText: '网络连接方式'),
+                decoration: InputDecoration(labelText: tr('网络连接方式')),
                 items: [
                   if (networkModes.contains('auto'))
-                    const DropdownMenuItem(
+                    DropdownMenuItem(
                       value: 'auto',
-                      child: Text('优先直连，失败时提示并允许代理兜底'),
+                      child: Text(tr('优先直连，失败时提示并允许代理兜底')),
                     ),
                   if (networkModes.contains('direct'))
-                    const DropdownMenuItem(
+                    DropdownMenuItem(
                       value: 'direct',
-                      child: Text('仅直连（绕过代理）'),
+                      child: Text(tr('仅直连（绕过代理）')),
                     ),
                   if (networkModes.contains('system'))
                     DropdownMenuItem(
@@ -546,7 +546,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
                       child: Text(
                         (provider?['network_labels'] as Map?)?['system']
                                 as String? ??
-                            '使用系统路由和代理',
+                            tr('使用系统路由和代理'),
                       ),
                     ),
                 ],
@@ -556,7 +556,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
               ),
               const SizedBox(height: 14),
               ExpansionTile(
-                title: const Text('高级设置'),
+                title: Text(tr('高级设置')),
                 tilePadding: EdgeInsets.zero,
                 children: [
                   for (final f in providerFields.where(
@@ -564,7 +564,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
                   ))
                     providerField(f),
                   if (Platform.isLinux || Platform.isWindows)
-                    field('mount_path', '挂载目录 · 留空自动创建独立目录'),
+                    field('mount_path', tr('挂载目录 · 留空自动创建独立目录')),
                 ],
               ),
             ],
@@ -577,7 +577,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
         onPressed: runningAction
             ? (activeActionRequest == null ? null : cancelProviderAction)
             : () => Navigator.pop(context),
-        child: Text(runningAction ? '取消当前操作' : '取消'),
+        child: Text(runningAction ? tr('取消当前操作') : tr('取消')),
       ),
       FilledButton(
         onPressed: provider == null || runningAction ? null : saveOrLogin,
@@ -586,8 +586,8 @@ class _ProfileDialogState extends State<ProfileDialog> {
                   (widget.original == null &&
                       kind == 'peer' &&
                       fields['invitation_file']?.text.isNotEmpty == true)
-              ? '保存并连接'
-              : '保存',
+              ? tr('保存并连接')
+              : tr('保存'),
         ),
       ),
     ],

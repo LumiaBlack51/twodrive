@@ -76,38 +76,43 @@ class ProgressClient extends Client {
 }
 
 void main() {
-  testWidgets('native page distinguishes a running batch and a stop request', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1200, 1000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final c = Client();
-    c.status['cfapi'] = {
-      'supported': true,
-      'configured': true,
-      'running': true,
-      'profile': 'one',
-      'root': r'C:\Native',
-      'progress': {
-        'phase': 'working',
-        'stage': 'local',
-        'summary': {'catalogue_files': 2048, 'durable_work_items': 0},
-      },
-    };
-    await tester.pumpWidget(DavApp(client: c));
-    await tester.tap(find.text('原生同步'));
-    await tester.pumpAndSettle();
-    expect(find.text('正在核对本地目录'), findsOneWidget);
-    expect(find.text('本轮尚未完成，统计来自最近一次检查。'), findsOneWidget);
-    c.status['cfapi']['progress']['stop_requested'] = true;
-    c.notifyListeners();
-    await tester.pump();
-    expect(find.text('正在安全停止原生同步'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-    c.dispose();
-  });
+  testWidgets(
+    'native page distinguishes a running batch and a stop request',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final c = Client();
+      c.status['cfapi'] = {
+        'supported': true,
+        'configured': true,
+        'running': true,
+        'profile': 'one',
+        'root': r'C:\Native',
+        'progress': {
+          'phase': 'working',
+          'stage': 'local',
+          'summary': {'catalogue_files': 2048, 'durable_work_items': 0},
+        },
+      };
+      await tester.pumpWidget(DavApp(client: c));
+      await tester.tap(find.text('连接').first);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('OneDrive 按需同步'));
+      await tester.tap(find.text('OneDrive 按需同步'));
+      await tester.pumpAndSettle();
+      expect(find.text('正在核对本地目录'), findsOneWidget);
+      expect(find.text('本轮尚未完成，统计来自最近一次检查。'), findsNothing);
+      c.status['cfapi']['progress']['stop_requested'] = true;
+      c.notifyListeners();
+      await tester.pump();
+      expect(find.text('正在安全停止原生同步'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
   for (final retry in [true, false]) {
     testWidgets(
       'interrupted native setup exposes ${retry ? 'retry before ownership' : 'resume sealed ownership'}',
@@ -126,9 +131,12 @@ void main() {
           'root': r'C:\Retained-Native',
         };
         await tester.pumpWidget(DavApp(client: c));
-        await tester.tap(find.text('原生同步'));
+        await tester.tap(find.text('连接').first);
         await tester.pumpAndSettle();
-        final button = find.text(retry ? '重试准备 CFAPI 原生目录' : '继续准备现有原生目录');
+        await tester.ensureVisible(find.text('OneDrive 按需同步'));
+        await tester.tap(find.text('OneDrive 按需同步'));
+        await tester.pumpAndSettle();
+        final button = find.text(retry ? '重试设置按需同步目录' : '继续准备现有原生目录');
         await tester.ensureVisible(button);
         await tester.tap(button);
         await tester.pumpAndSettle();
@@ -138,6 +146,7 @@ void main() {
         await tester.pumpWidget(const SizedBox());
         c.dispose();
       },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
     );
   }
   testWidgets(
@@ -156,7 +165,10 @@ void main() {
         'root': r'C:\Native',
       };
       await tester.pumpWidget(DavApp(client: c));
-      await tester.tap(find.text('原生同步'));
+      await tester.tap(find.text('连接').first);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('OneDrive 按需同步'));
+      await tester.tap(find.text('OneDrive 按需同步'));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 10));
       await tester.pump();
@@ -178,6 +190,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
   );
   testWidgets(
     'ordinary CFAPI scope shows excluded service objects explicitly',
@@ -205,6 +218,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
   );
 
   testWidgets(
@@ -223,10 +237,13 @@ void main() {
       });
       c.status.addAll({'connected': true, 'profile': 'other'});
       await tester.pumpWidget(DavApp(client: c));
-      await tester.tap(find.text('原生同步'));
+      await tester.tap(find.text('连接').first);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('OneDrive 按需同步'));
+      await tester.tap(find.text('OneDrive 按需同步'));
       await tester.pumpAndSettle();
       expect(find.text('断开'), findsNothing);
-      expect(find.text('OneDrive · Windows CFAPI'), findsOneWidget);
+      expect(find.text('OneDrive · Windows CFAPI'), findsNothing);
       await tester.enterText(
         find.byType(TextField),
         r'D:\TwoDrive\OneDrive-Native',
@@ -241,12 +258,13 @@ void main() {
         tester.widget<TextField>(find.byType(TextField)).controller!.text,
         r'D:\TwoDrive\OneDrive-Native',
       );
-      await tester.tap(find.text('准备 CFAPI 原生目录'));
+      await tester.tap(find.text('设置按需同步目录'));
       await tester.pumpAndSettle();
       expect(c.calls.last.$2['root'], r'D:\TwoDrive\OneDrive-Native');
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
   );
 
   testWidgets('CFAPI root lifecycle binds selected account and revision', (
@@ -266,7 +284,7 @@ void main() {
       find.byType(TextField),
       r'D:\TwoDrive\OneDrive-Native',
     );
-    await tester.tap(find.text('准备 CFAPI 原生目录'));
+    await tester.tap(find.text('设置按需同步目录'));
     await tester.pumpAndSettle();
     expect(c.calls.single.$1, 'native_prepare');
     expect(c.calls.single.$2, {
@@ -300,12 +318,22 @@ void main() {
           ),
         ),
       );
-      await tester.enterText(find.byType(TextField).first, r'(?i)\.bak$');
+      await tester.tap(find.text('添加排除项'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('扩展名'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'bak');
+      await tester.tap(find.text('添加'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('保存排除规则'));
       await tester.pumpAndSettle();
       expect(c.calls.single.$1, 'save_sync_policy');
       expect(c.calls.single.$2, {
-        'exclude_name_regexes': [r'(?i)\.bak$'],
+        'exclude_name_regexes': [],
+        'exclude_extensions': ['bak'],
+        'exclude_directory_paths': [],
+        'exclude_filenames': [],
+        'exclude_wildcards': [],
         'exclude_directory_names': ['node_modules'],
       });
       expect(c.profiles.single['revision'], 'r1');
@@ -314,5 +342,6 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
   );
 }

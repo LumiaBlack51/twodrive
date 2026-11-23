@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'client.dart';
@@ -33,7 +34,8 @@ class _BackupPageState extends State<BackupPage> {
       c.canBackup;
 
   String label(Json p) {
-    final name = p['name'] as String? ?? p['provider_label'] as String? ?? '网盘';
+    final name =
+        p['name'] as String? ?? p['provider_label'] as String? ?? tr('网盘');
     final account = p['account_name'] as String?;
     return account == null || account.isEmpty || account == name
         ? name
@@ -94,8 +96,8 @@ class _BackupPageState extends State<BackupPage> {
 
   Future<void> save(List<Json> next) async {
     if (!editable) return;
-    await c.action('保存备份文件夹', () async {
-      if (!currentOwner) throw StateError('备份目标已改变，请重新选择');
+    await c.action(tr('保存备份文件夹'), () async {
+      if (!currentOwner) throw StateError(tr('备份目标已改变，请重新选择'));
       final result = await c.request('save_backups', {
         'id': ownerId,
         'revision': ownerRevision,
@@ -113,7 +115,7 @@ class _BackupPageState extends State<BackupPage> {
     final target = label(c.profile!);
     setState(() => adding = true);
     try {
-      final local = await getDirectoryPath(confirmButtonText: '选择备份文件夹');
+      final local = await getDirectoryPath(confirmButtonText: tr('选择备份文件夹'));
       if (local == null || !mounted || !currentOwner) return;
       final remote = await showDialog<String>(
         context: context,
@@ -133,15 +135,15 @@ class _BackupPageState extends State<BackupPage> {
   @override
   Widget build(BuildContext context) => ListView(
     children: [
-      const Text(
-        '备份文件夹',
+      Text(
+        tr('备份文件夹'),
         style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
       ),
       const SizedBox(height: 10),
-      const Text('选择需要自动备份的本地文件夹。原文件保留在本机；服务器上的已有版本受到冲突保护。'),
+      Text(tr('选择需要自动备份的本地文件夹。原文件保留在本机；服务器上的已有版本受到冲突保护。')),
       const SizedBox(height: 20),
       InputDecorator(
-        decoration: const InputDecoration(labelText: '备份到'),
+        decoration: InputDecoration(labelText: tr('备份到')),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<String>(
             key: const ValueKey('backup-target'),
@@ -150,7 +152,7 @@ class _BackupPageState extends State<BackupPage> {
             value: c.profiles.any((p) => p['id'] == c.selected)
                 ? c.selected
                 : null,
-            hint: const Text('请选择备份网盘'),
+            hint: Text(tr('请选择备份网盘')),
             items: [
               for (final p in c.profiles)
                 DropdownMenuItem(
@@ -159,7 +161,7 @@ class _BackupPageState extends State<BackupPage> {
                   child: Text(
                     p['capabilities']?['backup'] == true
                         ? label(p)
-                        : '${label(p)}（暂不支持自动备份）',
+                        : tr('{arg0}（暂不支持自动备份）', [label(p)]),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -173,14 +175,10 @@ class _BackupPageState extends State<BackupPage> {
         ),
       ),
       const SizedBox(height: 8),
-      const Text(
-        '备份任务按网盘分别保存。切换网盘不会迁移已有任务。',
-        style: TextStyle(color: Colors.blueGrey, fontSize: 12),
-      ),
       if (c.profiles.isEmpty)
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(top: 12),
-          child: Text('请先在“连接”页面添加网盘。'),
+          child: Text(tr('请先在“连接”页面添加网盘。')),
         ),
       const SizedBox(height: 18),
       if (failure != null)
@@ -194,7 +192,7 @@ class _BackupPageState extends State<BackupPage> {
             ),
             TextButton(
               onPressed: c.available && !c.busy ? load : null,
-              child: const Text('重新加载'),
+              child: Text(tr('重新加载')),
             ),
           ],
         ),
@@ -221,7 +219,7 @@ class _BackupPageState extends State<BackupPage> {
                         ]),
                 ),
                 IconButton(
-                  tooltip: '停止备份，保留两端文件',
+                  tooltip: tr('停止备份，保留两端文件'),
                   onPressed: !editable || adding
                       ? null
                       : () => save([
@@ -240,19 +238,15 @@ class _BackupPageState extends State<BackupPage> {
         child: FilledButton.icon(
           onPressed: editable && !adding ? add : null,
           icon: const Icon(Icons.add),
-          label: const Text('选择备份文件夹'),
+          label: Text(tr('选择备份文件夹')),
         ),
       ),
       if (c.selected != null && !c.canBackup)
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(top: 12),
-          child: Text('当前网盘暂不支持自动备份，请选择其他网盘。'),
+          child: Text(tr('当前网盘暂不支持自动备份，请选择其他网盘。')),
         ),
       const SizedBox(height: 24),
-      const Text(
-        '符号链接不会上传。暂停同步会暂停文件夹备份与挂载的新网络请求。',
-        style: TextStyle(color: Colors.blueGrey, fontSize: 12),
-      ),
     ],
   );
 }
@@ -269,7 +263,7 @@ class _BackupDestinationDialog extends StatefulWidget {
 class _BackupDestinationDialogState extends State<_BackupDestinationDialog> {
   late final controller = TextEditingController(
     text:
-        '/Backups/${widget.local.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).lastOrNull ?? '备份文件夹'}',
+        '/Backups/${widget.local.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).lastOrNull ?? tr('备份文件夹')}',
   );
 
   @override
@@ -280,7 +274,7 @@ class _BackupDestinationDialogState extends State<_BackupDestinationDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('选择备份目标'),
+    title: Text(tr('选择备份目标')),
     content: SizedBox(
       width: 440,
       child: SingleChildScrollView(
@@ -289,7 +283,7 @@ class _BackupDestinationDialogState extends State<_BackupDestinationDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '备份到：${widget.target}',
+              tr('备份到：{arg0}', [widget.target]),
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 12),
@@ -297,11 +291,11 @@ class _BackupDestinationDialogState extends State<_BackupDestinationDialog> {
             const SizedBox(height: 16),
             TextField(
               controller: controller,
-              decoration: const InputDecoration(labelText: '网盘内的备份目录'),
+              decoration: InputDecoration(labelText: tr('网盘内的备份目录')),
             ),
             const SizedBox(height: 12),
-            const Text(
-              '自动上传新建和修改的文件。停止备份或删除本地文件，不会删除网盘副本。',
+            Text(
+              tr('自动上传新建和修改的文件。停止备份或删除本地文件，不会删除网盘副本。'),
               style: TextStyle(fontSize: 12, color: Colors.blueGrey),
             ),
           ],
@@ -311,11 +305,11 @@ class _BackupDestinationDialogState extends State<_BackupDestinationDialog> {
     actions: [
       TextButton(
         onPressed: () => Navigator.pop(context),
-        child: const Text('取消'),
+        child: Text(tr('取消')),
       ),
       FilledButton(
         onPressed: () => Navigator.pop(context, controller.text.trim()),
-        child: const Text('开始备份'),
+        child: Text(tr('开始备份')),
       ),
     ],
   );

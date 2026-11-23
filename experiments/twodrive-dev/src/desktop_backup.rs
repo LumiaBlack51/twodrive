@@ -278,7 +278,7 @@ pub fn run(
     let mut recent: Vec<Value> = vec![];
     let mut scanned = false;
     loop {
-        let selected = folders(state, p)?;
+        let mut selected = folders(state, p)?;
         let count = selected.iter().filter(|f| f.enabled).count();
         let mut status = json!({"state":"scanning","active":[],"recent":recent,"folders":count,"completed_scan":scanned});
         let result = (|| -> anyhow::Result<()> {
@@ -286,11 +286,28 @@ pub fn run(
                 status["state"] = json!("paused");
                 return Ok(());
             }
+            let policy = backend.sync_policy();
+            let mut excluded = policy.canonical_backup_exclusions();
+            excluded.extend(policy.exclude_directory_paths.iter().cloned());
+            let is_excluded = |path: &Path| excluded.iter().any(|dir| path.starts_with(dir));
+            status["unavailable_exclusion_paths"] = json!(
+                policy
+                    .exclude_directory_paths
+                    .iter()
+                    .filter(|p| !p.is_dir())
+                    .collect::<Vec<_>>()
+            );
+            selected.retain(|f| {
+                f.enabled && !is_excluded(&twodrive_dev::sync_policy::backup_path_key(&f.local))
+            });
             validate(&selected, p, state, &protected)?;
             s.save("report.json", &status)?;
             let mut seen = 0;
-            for folder in selected.iter().filter(|f| f.enabled) {
+            for folder in &selected {
                 let root = folder.local.canonicalize()?;
+                if is_excluded(&root) {
+                    continue;
+                }
                 let mut queue = vec![(root.clone(), folder.remote.clone())];
                 while let Some((local, remote)) = queue.pop() {
                     ensure!(!paused.exists(), "同步已暂停");
@@ -316,6 +333,9 @@ pub fn run(
                         ensure!(!name.contains(['\\', '\0']), "文件名不能映射到远端路径");
                         let source = item.path().canonicalize()?;
                         ensure!(source.starts_with(&root), "备份路径离开所选目录");
+                        if is_excluded(&source) {
+                            continue;
+                        }
                         let dest = format!("{remote}/{name}");
                         if kind.is_dir() {
                             queue.push((source, dest));
