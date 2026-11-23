@@ -1,8 +1,9 @@
+import 'language.dart';
 import 'package:flutter/material.dart';
 import 'client.dart';
 
 String capacityBytes(num? value) {
-  if (value == null || !value.isFinite || value < 0) return '未提供';
+  if (value == null || !value.isFinite || value < 0) return tr('未提供');
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
   var amount = value.toDouble();
   var unit = 0;
@@ -35,24 +36,28 @@ class StorageUsageView extends StatelessWidget {
         ? (used / total).clamp(0.0, 1.0)
         : null;
     final text = usage != null
-        ? '已用 ${capacityBytes(used)} / 总量 ${capacityBytes(total)} · 剩余 ${capacityBytes(free)}'
+        ? tr('已用 {arg0} / 总量 {arg1} · 剩余 {arg2}', [
+            capacityBytes(used),
+            capacityBytes(total),
+            capacityBytes(free),
+          ])
         : !connected
-        ? '未连接 · 连接后获取空间信息'
+        ? tr('未连接 · 连接后获取空间信息')
         : value?['state'] == 'unsupported'
-        ? '此网盘暂不提供容量信息'
+        ? tr('此网盘暂不提供容量信息')
         : value?['state'] == 'unavailable'
-        ? '空间信息暂时无法获取'
-        : '正在获取空间信息…';
+        ? tr('空间信息暂时无法获取')
+        : tr('正在获取空间信息…');
     final details = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Row(
           children: [
-            const Tooltip(
-              message: '账号总空间可能与照片、邮件等服务共用；容量由网盘返回。',
+            Tooltip(
+              message: tr('账号总空间可能与照片、邮件等服务共用；容量由网盘返回。'),
               child: Text(
-                '账号空间',
+                tr('账号空间'),
                 style: TextStyle(fontSize: 12, color: Colors.blueGrey),
               ),
             ),
@@ -62,7 +67,7 @@ class StorageUsageView extends StatelessWidget {
                 width: 28,
                 height: 28,
                 child: IconButton(
-                  tooltip: '刷新空间信息',
+                  tooltip: tr('刷新空间信息'),
                   padding: EdgeInsets.zero,
                   iconSize: 17,
                   onPressed: value?['loading'] == true ? null : onRefresh,
@@ -73,11 +78,14 @@ class StorageUsageView extends StatelessWidget {
         ),
         if (ring && usage != null) ...[
           Text(
-            '已用 ${capacityBytes(used)} / 总量 ${capacityBytes(total)}',
+            tr('已用 {arg0} / 总量 {arg1}', [
+              capacityBytes(used),
+              capacityBytes(total),
+            ]),
             style: const TextStyle(fontSize: 12),
           ),
           Text(
-            '剩余 ${capacityBytes(free)}',
+            tr('剩余 {arg0}', [capacityBytes(free)]),
             style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
           ),
         ] else
@@ -95,10 +103,10 @@ class StorageUsageView extends StatelessWidget {
             ),
           ),
         if (value?['stale'] == true)
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(top: 4),
             child: Text(
-              '更新未完成，显示上次结果',
+              tr('更新未完成，显示上次结果'),
               style: TextStyle(fontSize: 11, color: Colors.blueGrey),
             ),
           ),
@@ -106,7 +114,7 @@ class StorageUsageView extends StatelessWidget {
     );
     if (ring) {
       return Semantics(
-        label: '云盘空间：$text',
+        label: tr('云盘空间：{arg0}', [text]),
         child: Row(
           children: [
             if (ratio != null) ...[
@@ -156,6 +164,6 @@ class StorageUsageView extends StatelessWidget {
         ),
       );
     }
-    return Semantics(label: '云盘空间：$text', child: details);
+    return Semantics(label: tr('云盘空间：{arg0}', [text]), child: details);
   }
 }

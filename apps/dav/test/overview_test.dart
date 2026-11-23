@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/main.dart';
 import 'package:twodrive_dav/overview_page.dart';
-import 'package:twodrive_dav/workspace_navigation.dart';
 
 class OverviewClient extends StorageClient {
   int refreshes = 0;
@@ -88,14 +87,8 @@ void main() {
       c.status['cfapi']['progress']['phase'] = 'working';
       c.status['cfapi']['progress']['stage'] = 'remote';
       await tester.pumpWidget(DavApp(client: c));
-      expect(find.text('正在更新云端目录'), findsOneWidget);
-      expect(find.textContaining('处理中'), findsOneWidget);
-      expect(find.text('本轮尚未完成，统计来自最近一次检查。'), findsOneWidget);
-      expect(find.textContaining('原生待处理'), findsNothing);
-      c.status['cfapi']['progress']['phase'] = 'sync';
-      c.notifyListeners();
-      await tester.pump();
-      expect(find.textContaining('原生待处理'), findsOneWidget);
+      expect(find.text('管理原生同步'), findsNothing);
+      expect(find.textContaining('Windows CFAPI'), findsNothing);
       expect(find.text('正在更新云端目录'), findsNothing);
       expect(c.calls, isEmpty);
       await tester.pumpWidget(const SizedBox());
@@ -140,7 +133,7 @@ void main() {
     },
   );
   testWidgets(
-    'opening another mount preserves the browsing account and native errors remain visible',
+    'opening another mount preserves the browsing account',
     (tester) async {
       viewport(tester, const Size(1120, 900));
       final c = OverviewClient();
@@ -160,8 +153,7 @@ void main() {
           ),
         ),
       );
-      expect(find.text('有状态需要处理'), findsOneWidget);
-      expect(find.text('需要处理'), findsOneWidget);
+      expect(find.text('管理原生同步'), findsNothing);
       await tester.tap(
         find.descendant(
           of: find.byKey(const ValueKey('overview-account-b')),
@@ -170,10 +162,7 @@ void main() {
       );
       expect(opened, 'b');
       expect(c.selected, 'a');
-      final native = find.text('管理原生同步');
-      await tester.ensureVisible(native);
-      await tester.tap(native);
-      expect(destination, WorkspacePage.cfapi.index);
+      expect(destination, isNull);
       expect(c.calls, isEmpty);
       await tester.pumpWidget(const SizedBox());
       c.dispose();

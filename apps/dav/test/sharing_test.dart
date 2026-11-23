@@ -133,8 +133,7 @@ void main() {
       picker.folder = directory.path;
       picker.output = '${directory.path}/connection.json';
       final c = SharingClient();
-      await tester.pumpWidget(DavApp(client: c));
-      await tester.tap(find.text('共享').first);
+      await tester.pumpWidget(DavApp(client: c, server: true));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('选择共享文件夹'));
       await tester.pumpAndSettle();

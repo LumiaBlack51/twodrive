@@ -1,4 +1,4 @@
-# TwoDrive 0.1.7 — Linux x64
+# TwoDrive Development 0.2.25 — Linux x64
 
 先核对 Release 的 SHA256SUMS，解压完整目录，在 `bundle` 内执行：
 
@@ -7,11 +7,11 @@ python3 install-dav-desktop.py --bundle . --engine-dir . --gnome-anchor ./gnome-
 ~/.local/bin/twodrive-dav
 ```
 
-要求 GTK 3、会话 D-Bus 与托盘宿主；挂载需 FUSE 3。安装到当前用户，不替换稳定 OneDrive 服务，不自动启用自启动。运行中的更新可加 `--preserve-running-runtime` 保留旧进程路径；安装器不会重启客户端。
+要求 GTK 3、会话 D-Bus 与托盘宿主；挂载需 FUSE 3。安装到当前用户，不替换稳定 OneDrive 服务，不自动启用自启动。更新前先完成活动写入并退出 dev 客户端。
 
 GNOME/Zorin 的 TwoDrive 专用组件提供托盘定位。新组件首次安装可能需下一次登录桌面才加载；不要为了更新强制退出正在进行的工作。启动器在有 DISPLAY 时使用 X11（Wayland 桌面上为 XWayland），使托盘小窗口不进入 Dock/任务栏及窗口切换器。显式 GDK_BACKEND 优先；原生 GTK 3 Wayland 无法应用隐藏任务栏提示，因此显式使用该后端或无 XWayland 时不保证隐藏 Dock 图标。其他 Wayland compositor 尚未验收。
 
-连接页添加 WebDAV/NAS、PC/NAS（需分享端运行 TwoDrive）、Google Drive、OneDrive、iCloud Drive 或百度网盘。Google 需用户自备桌面应用凭据 JSON；本包不含任何账号/令牌/用户 client secret。首次 Microsoft/Google 连接打开系统浏览器授权。普通 NAS 可使用它的 WebDAV 服务。详细规范/使用说明在 `docs/`，其中源码链接与历史验证链接请通过 GitHub 同版本源码阅读。
+连接页添加 WebDAV/NAS、PC/NAS（分享端运行 TDLink Server）、Google Drive、OneDrive、iCloud Drive 或百度网盘。Google 需用户自备桌面应用凭据 JSON；本包不含任何账号/令牌/用户 client secret。首次 Microsoft/Google 连接打开系统浏览器授权。普通 NAS 可使用它的 WebDAV 服务。详细规范/使用说明在 `docs/`，其中源码链接与历史验证链接请通过 GitHub 同版本源码阅读。
 
 iCloud Drive 连接后默认可编辑：在现有连接表单内完成 Apple 账号、密码和双重认证，再保存并连接，日常登录不需要终端。可选诊断命令为 `twodrive-provider-login --state <该连接的私有登录目录>`。无需设置本机编辑密码，重启后继续恢复已授权的编辑权限。iCloud/百度的手动编辑不具备服务端原子版本覆盖，不因此开放自动备份。保留 `rclone`、Rclone 文档及组件校验清单；Linux 桌面和真实 iCloud 的运行结果需单独验收，参见 `docs/icloud-drive.md`。
 

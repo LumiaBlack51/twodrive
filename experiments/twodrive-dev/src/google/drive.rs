@@ -170,6 +170,22 @@ impl DriveFile {
     }
 }
 impl GoogleDrive {
+    pub fn check_login_identity(route: &str, token: &str, expected: &str) -> anyhow::Result<()> {
+        let about: Value = auth::client(route)?
+            .get(format!("{API}about"))
+            .query(&[("fields", "user(permissionId)")])
+            .bearer_auth(token)
+            .send()?
+            .error_for_status()?
+            .json()?;
+        ensure!(
+            about["user"]["permissionId"]
+                .as_str()
+                .is_some_and(|id| expected.strip_prefix("google:") == Some(id)),
+            "请选择原 Google 账号重新授权"
+        );
+        Ok(())
+    }
     pub fn connect(state: State, route: &str, writable: bool) -> anyhow::Result<Self> {
         let mut drive = Self {
             state,

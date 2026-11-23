@@ -104,7 +104,7 @@ void main() {
     final setting = find.widgetWithText(SwitchListTile, '启动时恢复已登录账号');
     expect(setting, findsOneWidget);
     expect(find.text('连接后自动挂载'), findsNothing);
-    expect(find.textContaining('“断开”仅对本次运行生效'), findsOneWidget);
+    expect(find.textContaining('“断开”仅对本次运行生效'), findsNothing);
     await tester.ensureVisible(setting);
     await tester.tap(setting);
     await tester.pumpAndSettle();

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'updates.dart';
 import 'desktop_preferences.dart';
+import 'language.dart';
 import 'file_manager.dart';
 
 typedef Json = Map<String, dynamic>;
@@ -15,7 +16,7 @@ class Transfer {
   final Json args;
   int done = 0;
   int total = 0;
-  String state = '传输中';
+  String state = tr('传输中');
   String? error;
   String get name => (args['path'] as String).split('/').last;
 }
@@ -35,7 +36,17 @@ class StorageClient extends ChangeNotifier {
     try {
       await preferences.setRestoreConnectionsOnStartup(enabled);
     } catch (e) {
-      error = '无法保存桌面设置：$e';
+      error = tr('无法保存桌面设置：{arg0}', [e]);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setLanguage(String value) async {
+    try {
+      await preferences.setLanguage(value);
+      desktopLocale.value = value;
+    } catch (e) {
+      error = tr('无法保存桌面设置：{arg0}', [e]);
     }
     notifyListeners();
   }
@@ -45,7 +56,7 @@ class StorageClient extends ChangeNotifier {
     try {
       await preferences.setAutoMountOnConnect(enabled);
     } catch (e) {
-      error = '无法保存桌面设置：$e';
+      error = tr('无法保存桌面设置：{arg0}', [e]);
       notifyListeners();
       return;
     }
@@ -69,6 +80,7 @@ class StorageClient extends ChangeNotifier {
   Json status = {};
   String? selected;
   String path = '/';
+  final Map<String, String> connectionErrors = {};
   String? _error;
   String? _pollError;
   String? get error => _error ?? _pollError;
@@ -137,7 +149,7 @@ class StorageClient extends ChangeNotifier {
   List<Json> get connectedProfiles =>
       profiles.where((p) => isProfileConnected(p['id'] as String)).toList();
   Iterable<Transfer> get runningTransfers =>
-      transfers.where((t) => t.state == '传输中');
+      transfers.where((t) => t.state == tr('传输中'));
   Json get sharing => (status['sharing'] as Json?) ?? {};
   bool get hosting => sharing['running'] == true;
   bool get syncError =>
@@ -162,10 +174,11 @@ class StorageClient extends ChangeNotifier {
       (status['backup']?['state'] == 'scanning' ||
           status['backup']?['state'] == 'starting') ||
       (status['cache']?['pending'] as num? ?? 0) > 0;
-  Future<void> pauseToggle() => action(paused ? '恢复同步' : '暂停同步', () async {
-    status = await request('pause', {'paused': !paused});
-  });
-  Future<void> signOut() => action('退出登录', () async {
+  Future<void> pauseToggle() =>
+      action(paused ? tr('恢复同步') : tr('暂停同步'), () async {
+        status = await request('pause', {'paused': !paused});
+      });
+  Future<void> signOut() => action(tr('退出登录'), () async {
     await request('sign_out', {'id': selected});
     entries = [];
     status = {};
@@ -205,7 +218,7 @@ class StorageClient extends ChangeNotifier {
         (op == 'local_read' && nativeItemCapabilities['read'] != true) ||
         (op == 'local_dehydrate' &&
             nativeItemCapabilities['native_copy_dehydrate'] != true)) {
-      throw StateError('本机文件能力不可用');
+      throw StateError(tr('本机文件能力不可用'));
     }
     final result = await request(op, {
       'schema_version': 1,
@@ -215,7 +228,7 @@ class StorageClient extends ChangeNotifier {
     if (result['schema_version'] != 1 ||
         result['scope'] != 'generated_fixture_only' ||
         result['items'] is! List) {
-      throw StateError('本机文件状态版本不兼容');
+      throw StateError(tr('本机文件状态版本不兼容'));
     }
     return result;
   }
@@ -225,7 +238,7 @@ class StorageClient extends ChangeNotifier {
       status['local_files']?['metadata_preflight'] == true;
   Future<Json> preflightLocalFile(String source, String kind) async {
     if (!canPreflightLocalFile) {
-      throw StateError('当前引擎不支持本地文件预检');
+      throw StateError(tr('当前引擎不支持本地文件预检'));
     }
     final result = await request('local_preflight', {
       'schema_version': 1,
@@ -237,7 +250,7 @@ class StorageClient extends ChangeNotifier {
         result['content_read'] != false ||
         result['hydration_requested'] != false ||
         result['import_performed'] != false) {
-      throw StateError('本地预检响应不兼容，请更新引擎与界面');
+      throw StateError(tr('本地预检响应不兼容，请更新引擎与界面'));
     }
     return result;
   }
@@ -290,16 +303,18 @@ class StorageClient extends ChangeNotifier {
   bool get writable => canUpload || canMkdir || canRename || canDelete;
   String get providerLabel =>
       profile?['provider_label'] as String? ?? 'TwoDrive';
-  String get accountLabel => profile?['account_label'] as String? ?? '账号';
+  String get accountLabel => profile?['account_label'] as String? ?? tr('账号');
   String get account => connected
       ? (status['account_name'] as String? ??
             profile?['account_name'] as String? ??
-            '账号名称暂不可用')
-      : '未登录';
+            tr('账号名称暂不可用'))
+      : tr('未登录');
   String get trayTitle {
     final connection = connected ? ' · $providerLabel · $account' : '';
-    final host = hosting ? ' · 正在共享 ${sharing['settings']?['name'] ?? ''}' : '';
-    return 'TwoDrive$connection$host${!connected && !hosting ? ' · 未连接' : ''}';
+    final host = hosting
+        ? tr(' · 正在共享 {arg0}', [sharing['settings']?['name'] ?? ''])
+        : '';
+    return 'TwoDrive$connection$host${!connected && !hosting ? tr(' · 未连接') : ''}';
   }
 
   String get trayState => error != null || syncError
@@ -323,10 +338,10 @@ class StorageClient extends ChangeNotifier {
     final id = args['profile'] as String? ?? selected;
     final owner = profiles.where((p) => p['id'] == id).firstOrNull;
     if (id == null || !isProfileConnected(id)) {
-      throw StateError('文件操作所属连接已改变，请刷新后重试');
+      throw StateError(tr('文件操作所属连接已改变，请刷新后重试'));
     }
     if (args['revision'] != null && args['revision'] != owner?['revision']) {
-      throw StateError('连接配置已更新，请刷新后重新选择文件');
+      throw StateError(tr('连接配置已更新，请刷新后重新选择文件'));
     }
   }
 
@@ -335,11 +350,14 @@ class StorageClient extends ChangeNotifier {
     String state,
     String peer,
     String launcher, {
+    bool server = false,
     String? nativeFixtureRoot,
   }) async {
     try {
       await preferences.load(File('$state/desktop-settings.json'));
+      desktopLocale.value = preferences.language;
       final p = await Process.start(engine, [
+        if (server) '--tdlink-server',
         '--state',
         state,
         '--peer-bin',
@@ -358,19 +376,23 @@ class StorageClient extends ChangeNotifier {
         try {
           accept(jsonDecode(line) as Json);
         } catch (_) {
-          fail('引擎返回无效数据');
+          fail(tr('引擎返回无效数据'));
         }
-      }, onError: (_) => fail('引擎通信中断'));
+      }, onError: (_) => fail(tr('引擎通信中断')));
       // Keep stderr drained without exposing private configuration in the UI.
       p.stderr.drain<void>();
       unawaited(
         p.exitCode.then((code) {
           if (!quitting) {
-            fail('本地引擎已退出（$code）。请重新启动客户端。');
+            fail(tr('本地引擎已退出（{arg0}）。请重新启动客户端。', [code]));
           }
         }),
       );
       available = true;
+      if (server) {
+        await refreshStatus();
+        return;
+      }
       // Operation notifications are opt-in. Older engines still support
       // the explicit reads made when a view opens or an action completes.
       try {
@@ -393,7 +415,7 @@ class StorageClient extends ChangeNotifier {
         );
       }
     } catch (e) {
-      fail('无法启动本地引擎：$e');
+      fail(tr('无法启动本地引擎：{arg0}', [e]));
     }
   }
 
@@ -415,7 +437,7 @@ class StorageClient extends ChangeNotifier {
         _engineOperations.add(id);
         if (!_busy) {
           activeId = id;
-          activity = '正在处理连接或文件操作';
+          activity = tr('正在处理连接或文件操作');
         }
       } else {
         _engineOperations.remove(id);
@@ -483,14 +505,14 @@ class StorageClient extends ChangeNotifier {
 
   Future<Json> request(String op, [Json args = const {}, int? requestId]) {
     if (!available || _process == null) {
-      return Future.error(StateError('本地引擎未运行'));
+      return Future.error(StateError(tr('本地引擎未运行')));
     }
     if (_pending.length >= 32 && op != 'cancel') {
-      return Future.error(StateError('请求正在处理中，请稍后重试'));
+      return Future.error(StateError(tr('请求正在处理中，请稍后重试')));
     }
     final id = requestId ?? ++_id;
     if (_pending.containsKey(id)) {
-      return Future.error(StateError('请求编号重复'));
+      return Future.error(StateError(tr('请求编号重复')));
     }
     final completer = Completer<Json>();
     _pending[id] = completer;
@@ -567,9 +589,9 @@ class StorageClient extends ChangeNotifier {
       _directoryStale = view?['stale'] as bool? ?? true;
     }
     _pollError = status['gateway_failed'] == true
-        ? '配对连接已断开，请重连。'
+        ? tr('配对连接已断开，请重连。')
         : status['mount_failed'] == true
-        ? '挂载进程已退出；请卸载后重试。缓存已保留。'
+        ? tr('挂载进程已退出；请卸载后重试。缓存已保留。')
         : null;
     if (_showQuota &&
         status['storage_usage'] == true &&
@@ -725,7 +747,7 @@ class StorageClient extends ChangeNotifier {
       if (error != null) failed.add(id);
     }
     if (failed.isNotEmpty) {
-      error = '部分连接未能恢复，请在连接页重试。';
+      error = tr('部分连接未能恢复，请在连接页重试。');
       notifyListeners();
     }
   }
@@ -738,15 +760,22 @@ class StorageClient extends ChangeNotifier {
       }
       return _selectConnected(id);
     }
-    return action('正在登录并连接', () async {
-      if (id == null) throw StateError('请先添加连接');
+    return action(tr('正在登录并连接'), () async {
+      if (id == null) throw StateError(tr('请先添加连接'));
       if (connected && status['profile'] == id) return;
       _selectionEpoch++;
       _selectingProfile = null;
       _browseGeneration++;
       activeId = ++_id;
       try {
-        final result = await request('connect', {'id': id}, activeId);
+        late final Json result;
+        try {
+          result = await request('connect', {'id': id}, activeId);
+          connectionErrors.remove(id);
+        } catch (e) {
+          connectionErrors[id] = e.toString().replaceFirst('Bad state: ', '');
+          return;
+        }
         await refreshStatus();
         selected = id;
         if (result['entries'] is List) {
@@ -758,7 +787,7 @@ class StorageClient extends ChangeNotifier {
         _directoryStale = result['entries'] is! List;
         if (!_directoryStale) _directoryChecked = DateTime.now();
         if (autoMountOnConnect && connected && canMount && !mounted) {
-          activity = '已连接，正在自动挂载';
+          activity = tr('已连接，正在自动挂载');
           activeId = ++_id;
           notifyListeners();
           await request('mount', {
@@ -800,7 +829,7 @@ class StorageClient extends ChangeNotifier {
       final result = await request('select', {'id': id, 'revision': revision});
       if (_disposed || quitting || epoch != _selectionEpoch) return;
       if (!profiles.any((p) => p['id'] == id && p['revision'] == revision)) {
-        throw StateError('连接配置已更新，请刷新后重试');
+        throw StateError(tr('连接配置已更新，请刷新后重试'));
       }
       _applyStatus(Map<String, dynamic>.from(result['status'] as Map));
     } catch (e) {
@@ -819,76 +848,79 @@ class StorageClient extends ChangeNotifier {
   /// When enabled, restore every authenticated account once per app process.
   /// Disconnect is session-only; startup restoration is a separate preference.
   /// The engine refuses browser login here and validates revision and binding.
-  Future<void> restoreOnStartup() => _startupRestore ??= action(
-    '正在恢复网盘连接和挂载',
-    () async {
-      if (!restoreConnectionsOnStartup) return;
-      _restoringStartup = true;
-      try {
-        final preferred = selected;
-        final candidates = profiles
-            .where((p) => p['startup_ready'] == true)
-            .map((p) => Map<String, dynamic>.from(p))
-            .toList();
-        // Restore the previous browsing account last, retaining all others.
-        final ordered = [
-          ...candidates.where((p) => p['id'] != preferred),
-          ...candidates.where((p) => p['id'] == preferred),
-        ];
-        final failures = <String>[];
-        for (final p in ordered) {
-          if (quitting || _disposed || !available) break;
-          final id = p['id'] as String;
-          final owner = {'profile': id, 'revision': p['revision']};
-          try {
-            activeId = reserveRequestId();
-            await request('resume', {
-              'id': id,
-              'revision': p['revision'],
-            }, activeId);
-            if (quitting || _disposed) break;
-            await refreshStatus();
-          } catch (e) {
-            if (!quitting) {
-              failures.add(
-                '${p['name']}：连接恢复失败，${'$e'.replaceFirst('Bad state: ', '')}',
-              );
-            }
-            continue;
-          }
-          if (quitting || _disposed) break;
-          if (autoMountOnConnect && mountSupported && !isProfileMounted(id)) {
+  Future<void> restoreOnStartup() =>
+      _startupRestore ??= action(tr('正在恢复网盘连接和挂载'), () async {
+        if (!restoreConnectionsOnStartup) return;
+        _restoringStartup = true;
+        try {
+          final preferred = selected;
+          final candidates = profiles
+              .where((p) => p['startup_ready'] == true)
+              .map((p) => Map<String, dynamic>.from(p))
+              .toList();
+          // Restore the previous browsing account last, retaining all others.
+          final ordered = [
+            ...candidates.where((p) => p['id'] != preferred),
+            ...candidates.where((p) => p['id'] == preferred),
+          ];
+          final failures = <String>[];
+          for (final p in ordered) {
+            if (quitting || _disposed || !available) break;
+            final id = p['id'] as String;
+            final owner = {'profile': id, 'revision': p['revision']};
             try {
               activeId = reserveRequestId();
-              await request('mount', {...owner, 'startup': true}, activeId);
-              if (!quitting && !_disposed) await refreshStatus();
+              await request('resume', {
+                'id': id,
+                'revision': p['revision'],
+              }, activeId);
+              connectionErrors.remove(id);
+              if (quitting || _disposed) break;
+              await refreshStatus();
             } catch (e) {
               if (!quitting) {
-                failures.add(
-                  '${p['name']}：自动挂载失败，${'$e'.replaceFirst('Bad state: ', '')}',
+                connectionErrors[id] = e.toString().replaceFirst(
+                  'Bad state: ',
+                  '',
                 );
+              }
+              continue;
+            }
+            if (quitting || _disposed) break;
+            if (autoMountOnConnect && mountSupported && !isProfileMounted(id)) {
+              try {
+                activeId = reserveRequestId();
+                await request('mount', {...owner, 'startup': true}, activeId);
+                if (!quitting && !_disposed) await refreshStatus();
+              } catch (e) {
+                if (!quitting) {
+                  failures.add(
+                    tr('{arg0}：自动挂载失败，{arg1}', [
+                      p['name'],
+                      '$e'.replaceFirst('Bad state: ', ''),
+                    ]),
+                  );
+                }
               }
             }
           }
+          if (!quitting && !_disposed) {
+            await loadProfiles();
+            await refreshStatus();
+            if (failures.isNotEmpty) error = failures.join('\n');
+          }
+        } finally {
+          _restoringStartup = false;
         }
-        if (!quitting && !_disposed) {
-          await loadProfiles();
-          await refreshStatus();
-          if (failures.isNotEmpty) error = failures.join('\n');
-        }
-      } finally {
-        _restoringStartup = false;
-      }
-    },
-  );
-  Future<void> openWriteRecovery(String id) => action('正在打开恢复目录', () async {
+      });
+  Future<void> openWriteRecovery(String id) => action(tr('正在打开恢复目录'), () async {
     final result = await request('write_recovery', {'profile': id});
     final directories = result['directories'] as List;
     for (final directory in directories) {
       await openLocalDirectory(directory as String);
     }
   });
-  Future<void> disconnect([String? profileId]) => action('正在断开', () async {
+  Future<void> disconnect([String? profileId]) => action(tr('正在断开'), () async {
     final id = profileId ?? selected;
     _selectionEpoch++;
     _selectingProfile = null;
@@ -901,7 +933,7 @@ class StorageClient extends ChangeNotifier {
     await refreshStatus();
   });
   Future<void> browse(String target) =>
-      action('读取目录', () => readDirectory(target));
+      action(tr('读取目录'), () => readDirectory(target));
   Future<void> readDirectory(String target) async {
     final generation = ++_browseGeneration;
     final identity = this.target;
@@ -937,7 +969,7 @@ class StorageClient extends ChangeNotifier {
     }
   }
 
-  Future<void> mutate(String op, Json args) => action('正在更新文件', () async {
+  Future<void> mutate(String op, Json args) => action(tr('正在更新文件'), () async {
     requireProfile(args);
     await request(op, {...target, ...args});
     await readDirectory(path);
@@ -957,18 +989,18 @@ class StorageClient extends ChangeNotifier {
     transfers.insert(0, task);
     if (transfers.length > 100) {
       final old = transfers.last;
-      if (old.state != '传输中') transfers.removeLast();
+      if (old.state != tr('传输中')) transfers.removeLast();
     }
     notifyListeners();
     try {
       await request(op, args, id);
-      task.state = '已完成';
+      task.state = tr('已完成');
       task.done = task.total;
       if (op == 'upload' && selected == args['profile'] && connected) {
         await readDirectory(path);
       }
     } catch (e) {
-      task.state = '未完成';
+      task.state = tr('未完成');
       task.error = '$e'.replaceFirst('Bad state: ', '');
       if (selected == args['profile']) error = task.error;
     } finally {
@@ -981,7 +1013,7 @@ class StorageClient extends ChangeNotifier {
   Future<void> cancel() async {
     final id = activeId ?? runningTransfers.firstOrNull?.id;
     if (id != null) {
-      activity = '正在取消，等待当前网络读写返回';
+      activity = tr('正在取消，等待当前网络读写返回');
       notifyListeners();
       await request('cancel', {'id': id});
     }
@@ -993,7 +1025,7 @@ class StorageClient extends ChangeNotifier {
     if (p == null) return Future.value();
     final op = isProfileMounted(id!) ? 'unmount' : 'mount';
     final owner = {'profile': id, 'revision': p['revision']};
-    return action(op == 'unmount' ? '正在卸载' : '正在挂载', () async {
+    return action(op == 'unmount' ? tr('正在卸载') : tr('正在挂载'), () async {
       activeId = ++_id;
       await request(op, owner, activeId);
       await refreshStatus();
@@ -1003,17 +1035,17 @@ class StorageClient extends ChangeNotifier {
   Future<void> openMountFolder(
     String id, {
     Future<void> Function(String)? openDirectory,
-  }) => action('打开挂载', () async {
+  }) => action(tr('打开挂载'), () async {
     final mount = mountForProfile(id);
     if (mount == null || mount['failed'] == true || mount['path'] is! String) {
-      throw StateError('请先挂载此网盘；挂载异常时请卸载后重试');
+      throw StateError(tr('请先挂载此网盘；挂载异常时请卸载后重试'));
     }
     await (openDirectory ?? openLocalDirectory)(mount['path'] as String);
   });
 
   Future<String?> save(Json profile) async {
     String? id;
-    await action('保存连接', () async {
+    await action(tr('保存连接'), () async {
       final result = await request('save_profile', profile);
       id = result['id'] as String?;
       await loadProfiles();
@@ -1025,10 +1057,10 @@ class StorageClient extends ChangeNotifier {
     Json? result;
     await action(
       op == 'share_start'
-          ? '正在启动共享'
+          ? tr('正在启动共享')
           : op == 'share_export'
-          ? '正在导出连接文件'
-          : '正在更新共享',
+          ? tr('正在导出连接文件')
+          : tr('正在更新共享'),
       () async {
         activeId = ++_id;
         result = await request(op, args, activeId);
@@ -1038,18 +1070,18 @@ class StorageClient extends ChangeNotifier {
     return result;
   }
 
-  Future<void> remove(String id) => action('删除连接配置', () async {
+  Future<void> remove(String id) => action(tr('删除连接配置'), () async {
     await request('remove_profile', {'id': id});
     await loadProfiles();
   });
-  Future<void> autostart(bool enabled) => action('更新自启动设置', () async {
+  Future<void> autostart(bool enabled) => action(tr('更新自启动设置'), () async {
     status = await request('autostart', {'enabled': enabled});
   });
-  Future<void> retryDeletes() => action('安排云端删除重试', () async {
+  Future<void> retryDeletes() => action(tr('安排云端删除重试'), () async {
     await request('retry_deletes', {'id': status['profile'] ?? selected});
     await refreshStatus();
   });
-  Future<void> clearCache() => action('释放已同步缓存', () async {
+  Future<void> clearCache() => action(tr('释放已同步缓存'), () async {
     await request('clear_cache', {'id': selected});
     await refreshStatus();
   });
@@ -1071,12 +1103,12 @@ class StorageClient extends ChangeNotifier {
 
   Future<bool> _shutdownOnce() async {
     if ((busy && !_restoringStartup) || runningTransfers.isNotEmpty) {
-      error = '请先完成或取消当前操作，再退出。';
+      error = tr('请先完成或取消当前操作，再退出。');
       notifyListeners();
       return false;
     }
     quitting = true;
-    activity = '正在退出，正在收尾连接…';
+    activity = tr('正在退出，正在收尾连接…');
     notifyListeners();
     try {
       if (available) {

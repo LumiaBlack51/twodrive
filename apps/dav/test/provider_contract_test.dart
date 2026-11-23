@@ -299,7 +299,7 @@ void main() {
         icons.last,
         endsWith('cloud-warning.${Platform.isWindows ? 'ico' : 'svg'}'),
       );
-      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
       expect(find.byIcon(Icons.error_outline), findsNothing);
       await tester.pumpWidget(
         MaterialApp(

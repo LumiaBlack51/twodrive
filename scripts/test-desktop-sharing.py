@@ -23,7 +23,7 @@ def run(args):
             for name in ['host', 'client']:
                 home = root / name
                 home.mkdir()
-                engines.append(desktop.Engine(args.engine, args.peer, home))
+                engines.append(desktop.Engine(args.engine, args.peer, home, tdlink=name == 'host'))
             host, client = engines
             settings = dict(name='Disposable shared PC', root=str(shared), writable=True,
                             discoverable=False, network='lan')
@@ -67,18 +67,9 @@ def run(args):
             client.call('save_profile', dict(id='shared-pc',kind='peer',network_route='system',**options))
             client.call('connect', dict(id='shared-pc'))
             client.call('disconnect')
-            # The same desktop engine can host while using a storage connection.
-            local_file = root / 'local-client.json'
-            host.call('share_export', dict(output=str(local_file)))
-            local_options = host.call('provider_action', dict(kind='peer', action='import', file=str(local_file)))['options']
-            host.call('save_profile', dict(id='local-client', kind='peer', network_route='system', **local_options))
-            host.call('connect', dict(id='local-client'))
-            simultaneous = host.call('status')
-            assert simultaneous['connected'] and simultaneous['sharing']['running']
-            host.call('list', dict(path='/'))
-            host.call('disconnect')
-            assert host.call('status')['sharing']['running']
-            checks['same_engine_disconnect_preserves_hosting'] = True
+            client.call('share_start', settings, failure=True)
+            host.call('profiles', failure=True)
+            checks['client_and_server_roles_are_separate'] = True
             host.call('share_stop')
             assert not host.call('status')['sharing']['running']
             restarted = host.call('share_start', settings)
@@ -102,7 +93,7 @@ def run(args):
             checks['changed_permissions_use_new_identity_and_enforce_readonly'] = True
             host.call('share_start', settings)
             host.close()
-            host = desktop.Engine(args.engine, args.peer, root / 'host')
+            host = desktop.Engine(args.engine, args.peer, root / 'host', tdlink=True)
             engines[0] = host
             assert not host.call('status')['sharing']['running']
             # A new start immediately succeeds only if quit released its child/lock.

@@ -604,6 +604,7 @@ mod tests {
         two.upload("/same.txt", b"account-two".to_vec()).unwrap();
         let mut app = App {
             args: Args {
+                tdlink_server: false,
                 state: state.dir.clone(),
                 peer_bin: PathBuf::new(),
                 launcher: PathBuf::new(),
@@ -622,7 +623,6 @@ mod tests {
             mounted: None,
             backup: None,
             network: Arc::default(),
-            hosting: sharing::Hosting::default(),
             native_fixture: local_files::NativeFixture::default(),
             native_runtime: cfapi_runtime::Runtime::default(),
             inactive: HashMap::new(),

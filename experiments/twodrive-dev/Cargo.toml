@@ -1,6 +1,6 @@
 [package]
 name = "twodrive-dev"
-version = "0.1.7"
+version = "0.2.25"
 edition = "2024"
 license = "MIT"
 rust-version = "1.91"

@@ -87,3 +87,20 @@ Google 使用服务返回的账号名称（现有探测优先邮箱）；OneDriv
 队列保留 32 项上限，满时拒绝新增工作而不阻塞取消通道；已经取消但尚未执行的任务不会再运行。文件传输和 FUSE 持久待办仍使用原有恢复机制，不能将 desktop IPC 队列与云端持久同步待办混为一谈。
 
 English: Status refreshes are single-flight, completion events synchronize account/connection state, and shallow directory polling runs every 15 seconds or on focus. Transient polling errors recover automatically; action failures remain visible. Native tray tooltips and connection screens show adapter-provided account names. The bounded IPC queue keeps cancellation available and skips queued cancelled work; it is separate from durable mount synchronization.
+
+### Development 0.2.25
+
+TwoDrive Client imports TDLink invitations under Connections. Open **TDLink Server**
+to publish a folder, export invitations or revoke a device. It uses a separate
+engine process and lock and reads the existing hosting configuration and device
+identities. Closing the server ends its share. Closing the client leaves the
+server running. Portable installations can start the server with
+`twodrive_dav --tdlink-server` (Windows: `twodrive_dav.exe --tdlink-server`).
+
+Desktop settings include Chinese and English. Exclusions accept a literal
+filename, extension, backup folder, backup folder name, wildcard or regex.
+A specific folder applies only to that local path; a folder-name rule applies
+throughout backup sources. An Office owner file remains local. Reconnect after
+saving the rules. Network diagnostics are available in the desktop engine's
+JSON-lines `status` response (`network`). On a supported engine the CLI IPC
+operation `local_preflight` checks file metadata without importing a file.

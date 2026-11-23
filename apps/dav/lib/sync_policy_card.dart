@@ -1,5 +1,22 @@
+import 'language.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'client.dart';
+
+enum RuleType {
+  filename('文件名', 'File name', 'exclude_filenames'),
+  extension('扩展名', 'Extension', 'exclude_extensions'),
+  folder('指定备份文件夹', 'Specific backup folder', 'exclude_directory_paths'),
+  directory('备份文件夹名称', 'Backup folder name', 'exclude_directory_names'),
+  wildcard('通配符', 'Wildcard', 'exclude_wildcards'),
+  regex('正则表达式', 'Regular expression', 'exclude_name_regexes');
+
+  const RuleType(this.chineseLabel, this.englishLabel, this.field);
+  final String chineseLabel;
+  final String englishLabel;
+  String get label => uiText(chineseLabel, englishLabel);
+  final String field;
+}
 
 class SyncPolicyCard extends StatefulWidget {
   const SyncPolicyCard({super.key, required this.client});
@@ -9,103 +26,121 @@ class SyncPolicyCard extends StatefulWidget {
 }
 
 class _SyncPolicyCardState extends State<SyncPolicyCard> {
-  final patterns = TextEditingController();
-  final directories = TextEditingController();
-  bool initialized = false;
+  late final rules = {
+    for (final type in RuleType.values)
+      type: List<String>.from(
+        widget.client.status['sync_policy']?[type.field] ?? [],
+      ),
+  };
   bool saving = false;
   String? message;
-  @override
-  void dispose() {
-    patterns.dispose();
-    directories.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final policy = widget.client.status['sync_policy'];
-    if (!initialized && policy is Map) {
-      patterns.text = (policy['exclude_name_regexes'] as List? ?? []).join(
-        '\n',
-      );
-      directories.text =
-          (policy['exclude_directory_names'] as List? ?? ['node_modules']).join(
-            '\n',
-          );
-      initialized = true;
-    }
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '同步排除规则',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+  Future<void> add(RuleType type) async {
+    String? value;
+    if (type == RuleType.folder) {
+      value = await getDirectoryPath();
+    } else {
+      var text = '';
+      value = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(type.label),
+          content: TextField(
+            autofocus: true,
+            onChanged: (v) => text = v,
+            onSubmitted: (v) => Navigator.pop(context, v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(tr('取消')),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              r'挂载中的 Office ~$ 临时文件仅保存在本机，不产生上传任务。备份默认跳过 node_modules 整个目录。',
+            FilledButton(
+              onPressed: () => Navigator.pop(context, text),
+              child: Text(tr('添加')),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: patterns,
-              minLines: 2,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: '文件名正则表达式（每行一条）',
-                hintText: r'(?i)\.bak$',
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: directories,
-              minLines: 1,
-              maxLines: 4,
-              decoration: const InputDecoration(labelText: '备份排除目录名（每行一个）'),
-            ),
-            const SizedBox(height: 12),
-            const Text('保存后重新连接账户生效。已排除的本地文件继续保留；此设置适用于文件管理器挂载与文件夹备份。'),
-            const SizedBox(height: 12),
-            FilledButton.tonal(
-              onPressed: saving || !widget.client.available ? null : save,
-              child: Text(saving ? '正在保存…' : '保存排除规则'),
-            ),
-            if (message != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(message!),
-              ),
           ],
         ),
-      ),
-    );
+      );
+    }
+    if (!mounted || value == null || value.trim().isEmpty) return;
+    var rule = value.trim();
+    if (type == RuleType.extension) {
+      rule = rule.replaceFirst(RegExp(r'^\.'), '');
+    }
+    if (rule.isNotEmpty && !rules[type]!.contains(rule)) {
+      setState(() {
+        rules[type]!.add(rule);
+        message = null;
+      });
+    }
   }
 
   Future<void> save() async {
-    setState(() {
-      saving = true;
-      message = null;
-    });
-    List<String> lines(String value) => value
-        .split('\n')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
+    setState(() => saving = true);
     try {
       await widget.client.request('save_sync_policy', {
-        'exclude_name_regexes': lines(patterns.text),
-        'exclude_directory_names': lines(directories.text),
+        for (final e in rules.entries) e.key.field: List.of(e.value),
       });
       await widget.client.refreshStatus();
-      if (mounted) setState(() => message = '已保存，重新连接账户后生效。');
+      if (mounted) setState(() => message = tr('已保存，重新连接账户后生效。'));
     } catch (e) {
       if (mounted) {
-        setState(() => message = '未保存：${'$e'.replaceFirst('Bad state: ', '')}');
+        setState(() => message = e.toString().replaceFirst('Bad state: ', ''));
       }
     } finally {
       if (mounted) setState(() => saving = false);
     }
   }
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(tr('同步排除规则'), style: Theme.of(context).textTheme.titleMedium),
+          for (final e in rules.entries)
+            for (final value in e.value)
+              ListTile(
+                dense: true,
+                title: Text(value),
+                subtitle: Text(e.key.label),
+                trailing: IconButton(
+                  tooltip: tr('移除规则'),
+                  icon: const Icon(Icons.close),
+                  onPressed: saving
+                      ? null
+                      : () => setState(() {
+                          e.value.remove(value);
+                          message = null;
+                        }),
+                ),
+              ),
+          Wrap(
+            spacing: 12,
+            children: [
+              PopupMenuButton<RuleType>(
+                enabled: !saving,
+                onSelected: add,
+                itemBuilder: (_) => [
+                  for (final type in RuleType.values)
+                    PopupMenuItem(value: type, child: Text(type.label)),
+                ],
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text(tr('添加排除项')),
+                ),
+              ),
+              FilledButton.tonal(
+                onPressed: saving || !widget.client.available ? null : save,
+                child: Text(tr('保存排除规则')),
+              ),
+            ],
+          ),
+          if (message != null) Text(message!),
+        ],
+      ),
+    ),
+  );
 }

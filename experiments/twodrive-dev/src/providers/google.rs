@@ -53,21 +53,23 @@ pub fn connect(
     p: &Profile,
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
+    expected: Option<&str>,
 ) -> anyhow::Result<Connection> {
-    open(p, cancel, network, true)
+    open(p, cancel, network, true, expected)
 }
 pub fn resume(
     p: &Profile,
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
 ) -> anyhow::Result<Connection> {
-    open(p, cancel, network, false)
+    open(p, cancel, network, false, None)
 }
 fn open(
     p: &Profile,
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
     interactive: bool,
+    expected: Option<&str>,
 ) -> anyhow::Result<Connection> {
     ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
     let state = state(p)?;
@@ -77,11 +79,28 @@ fn open(
     } else {
         "system"
     };
-    if Tokens::load(&state, &config).is_err() {
+    let authorize = || {
+        auth::login_checked(&state, &config, route, cancel, |token| {
+            if let Some(expected) = expected {
+                GoogleDrive::check_login_identity(route, token, expected)?;
+            }
+            Ok(())
+        })
+    };
+    let connect = || GoogleDrive::connect(state.clone(), route, p.writable);
+    let backend = if Tokens::load(&state, &config).is_err() {
         ensure!(interactive, "Google 登录已失效，请手动重新授权");
-        auth::login(&state, &config, route, cancel)?;
-    }
-    let backend = GoogleDrive::connect(state, route, p.writable)?;
+        authorize()?;
+        connect()?
+    } else {
+        match connect() {
+            Err(error) if interactive && error.is::<auth::ReauthorizationRequired>() => {
+                authorize()?;
+                connect()?
+            }
+            result => result?,
+        }
+    };
     let binding = format!("google:{}", backend.account_id);
     ensure!(!cancel.load(Ordering::Relaxed), "连接已取消");
     network.record(&format!("network: Google Drive route={route}"));

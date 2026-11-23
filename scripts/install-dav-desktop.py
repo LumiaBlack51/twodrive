@@ -86,6 +86,10 @@ def install(bundle, engine_dir, data, bin_dir, preserve_runtime=False):
         '[Desktop Entry]\nType=Application\nName=TwoDrive\nComment=WebDAV files and TwoDrive paired shares\n'
         + 'Exec=' + quote_exec(str(launcher)) + '\nIcon=twodrive-dav-minimal\nTerminal=false\n'
         + 'Categories=Network;FileTransfer;\nStartupWMClass=app.twodrive.twodrive_dav\n')
+    (applications / 'app.twodrive.tdlink.desktop').write_text(
+        '[Desktop Entry]\nType=Application\nName=TDLink Server\n'
+        + 'Exec=' + quote_exec(str(launcher)) + ' --tdlink-server\nIcon=twodrive-dav-minimal\nTerminal=false\n'
+        + 'Categories=Network;FileTransfer;\n')
     # Deliberately do not create or modify XDG_CONFIG_HOME/autostart.
     if previous.exists() and not preserve_runtime:
         shutil.rmtree(previous)

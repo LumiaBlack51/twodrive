@@ -291,6 +291,13 @@ pub fn run(
             let mut seen = 0;
             for folder in selected.iter().filter(|f| f.enabled) {
                 let root = folder.local.canonicalize()?;
+                if backend
+                    .sync_policy()
+                    .exclude_directory_paths
+                    .contains(&root)
+                {
+                    continue;
+                }
                 let mut queue = vec![(root.clone(), folder.remote.clone())];
                 while let Some((local, remote)) = queue.pop() {
                     ensure!(!paused.exists(), "同步已暂停");
@@ -318,6 +325,13 @@ pub fn run(
                         ensure!(source.starts_with(&root), "备份路径离开所选目录");
                         let dest = format!("{remote}/{name}");
                         if kind.is_dir() {
+                            if backend
+                                .sync_policy()
+                                .exclude_directory_paths
+                                .contains(&source)
+                            {
+                                continue;
+                            }
                             queue.push((source, dest));
                             continue;
                         }
