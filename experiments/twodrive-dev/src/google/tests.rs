@@ -531,3 +531,54 @@ fn malformed_aggregate_usage_never_becomes_zero() {
     }
     assert_eq!(f.list_requests.load(Ordering::Relaxed), 0);
 }
+
+#[cfg(all(target_os = "linux", feature = "mount"))]
+#[test]
+fn cold_open_validates_the_selected_file_without_listing_the_drive() {
+    let f = Fixture::new();
+    f.add("doc", "sample.pdf", "application/pdf", b"sample bytes");
+    let record = f.drive.list_all().unwrap().pop().unwrap();
+    let db = twodrive_core::Database::new(f.drive.state.dir.join("mount.sqlite3"));
+    db.init().unwrap();
+    db.upsert_metadata(&record).unwrap();
+    let file = db.get_by_path("/sample.pdf").unwrap().unwrap();
+    f.list_requests.store(0, Ordering::Relaxed);
+    let path = twodrive_fs::hydrate_record(
+        &db,
+        &f.drive.state.dir.join("cache"),
+        &crate::provider::Backend::new(f.drive.clone()),
+        &file,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), b"sample bytes");
+    assert_eq!(f.list_requests.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn changed_download_version_resolves_current_path_and_missing_files_stay_missing() {
+    let f = Fixture::new();
+    f.add("doc", "before.pdf", "application/pdf", b"old");
+    let known = f.drive.list_all().unwrap().pop().unwrap();
+    {
+        let mut files = f.files.lock().unwrap();
+        let meta = &mut files.get_mut("doc").unwrap().0;
+        meta["title"] = json!("after.pdf");
+        meta["etag"] = json!("\"v2\"");
+    }
+    let changed = f
+        .drive
+        .metadata_for_download("doc", &known)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (changed.path.as_str(), changed.etag.as_str()),
+        ("/after.pdf", "\"v2\"")
+    );
+    f.files.lock().unwrap().get_mut("doc").unwrap().0["labels"]["trashed"] = json!(true);
+    assert!(
+        f.drive
+            .metadata_for_download("doc", &known)
+            .unwrap()
+            .is_none()
+    );
+}

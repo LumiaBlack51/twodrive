@@ -13,6 +13,83 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         Ok(())
     }
 
+    fn getxattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        name: &OsStr,
+        size: u32,
+        reply: fuser::ReplyXattr,
+    ) {
+        if self.refresh_signal.is_none() || name != "user.twodrive.dav-controls" {
+            reply.error(libc::ENOTSUP);
+        } else if ino != fuser::FUSE_ROOT_ID && self.record_for_ino(ino).is_none() {
+            reply.error(libc::ENOENT);
+        } else if size == 0 {
+            reply.size(1);
+        } else {
+            reply.data(b"1");
+        }
+    }
+
+    fn setxattr(
+        &mut self,
+        req: &Request<'_>,
+        ino: u64,
+        name: &OsStr,
+        value: &[u8],
+        flags: i32,
+        position: u32,
+        reply: ReplyEmpty,
+    ) {
+        let Some(signal) = &self.refresh_signal else {
+            return reply.error(libc::ENOTSUP);
+        };
+        if name != "user.twodrive.dav-controls" {
+            return reply.error(libc::ENOTSUP);
+        }
+        if req.uid() != unsafe { libc::geteuid() } {
+            return reply.error(libc::EACCES);
+        }
+        if flags != 0 || position != 0 {
+            return reply.error(libc::EINVAL);
+        }
+        if ino == fuser::FUSE_ROOT_ID {
+            if value != b"sync" {
+                return reply.error(libc::EINVAL);
+            }
+            return match signal.try_send(()) {
+                Ok(()) | Err(std::sync::mpsc::TrySendError::Full(())) => reply.ok(),
+                Err(_) => reply.error(libc::EIO),
+            };
+        }
+        let Some(record) = self.record_for_ino(ino) else {
+            return reply.error(libc::ENOENT);
+        };
+        let action = match value {
+            b"pin" => "pin",
+            b"unpin" => "unpin",
+            b"release" => "release",
+            _ => return reply.error(libc::EINVAL),
+        };
+        let db = self.db.clone();
+        let cache = self.cache_dir.clone();
+        let backend = Arc::clone(&self.backend);
+        self.read_pool.spawn(move || {
+            let result = match action {
+                "pin" => {
+                    crate::hydration::pin_record(&db, &cache, backend.as_ref(), record).map(|_| ())
+                }
+                "unpin" => db.set_explicit_pin(&record.metadata.remote_id, false),
+                _ => db.release_selected(record).map(|_| ()),
+            };
+            match result {
+                Ok(()) => reply.ok(),
+                Err(_) => reply.error(libc::EIO),
+            }
+        });
+    }
+
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
         match filesystem_stats(&self.cache_dir) {
             Ok(stats) => reply.statfs(

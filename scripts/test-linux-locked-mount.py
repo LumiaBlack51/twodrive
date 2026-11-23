@@ -3,6 +3,8 @@
 import argparse
 import importlib.util
 import json
+import os
+import sqlite3
 from pathlib import Path
 import re
 import shutil
@@ -66,6 +68,22 @@ def run(args):
         owner = lambda: {'profile': 'locked', 'revision': engine.active_revision}
         engine.call('mount', owner())
         assert (target / 'existing.txt').read_bytes() == b'original remote bytes'
+        control = "user.twodrive.dav-controls"
+        selected = target / 'existing.txt'
+        assert os.getxattr(target, control) == b"1"
+        db_path = root / 'client/mount-locked/mount.sqlite3'
+        def residency():
+            with sqlite3.connect(f'file:{db_path}?mode=ro', uri=True) as db:
+                return db.execute("SELECT state, pin_explicit FROM files WHERE path='/existing.txt'").fetchone()
+        os.setxattr(selected, control, b'release')
+        assert residency() == ('online_only', 0)
+        os.setxattr(selected, control, b'pin')
+        assert residency() == ('pinned', 1)
+        os.setxattr(selected, control, b'unpin')
+        assert residency() == ('cached', 0)
+        os.setxattr(target, control, b'sync')
+        assert (share / 'existing.txt').read_bytes() == b'original remote bytes'
+        checks['native_cache_actions_apply_to_selected_mount'] = True
         binding_file = root / 'client/mount-locked/binding.json'
         assert json.loads(binding_file.read_text(encoding='utf-8'))['writable']
         engine.call('pause', {'paused': True})

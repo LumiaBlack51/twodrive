@@ -863,6 +863,26 @@ impl CloudBackend for GoogleDrive {
     fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
         Ok(self.snapshot()?.into_iter().find(|m| m.remote_id == id))
     }
+    fn metadata_for_download(
+        &self,
+        remote_id: &str,
+        known: &MetadataEntry,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        let Some(file) = self.file(remote_id)? else {
+            return Ok(None);
+        };
+        ensure!(
+            file.id == remote_id,
+            "Google returned a different file identity"
+        );
+        let entry = file.metadata(known.path.clone())?;
+        if strong_etag(&entry.etag).is_ok() && entry.etag == known.etag && entry.size == known.size
+        {
+            return Ok(Some(entry));
+        }
+        // A move or rename may have changed the canonical display path or duplicate-name alias.
+        self.get_metadata(remote_id)
+    }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         Ok(self.resolve(path)?.map(|(_, m)| m))
     }

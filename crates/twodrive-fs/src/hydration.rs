@@ -156,7 +156,7 @@ fn verify_remote_version<B: CloudBackend>(
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content"))?;
     let remote = backend
-        .get_metadata(cloud_id)?
+        .metadata_for_download(cloud_id, &record.metadata)?
         .ok_or_else(|| anyhow::anyhow!("cloud file no longer exists"))?;
     if remote.size != record.metadata.size || remote.etag != record.metadata.etag {
         db.upsert_metadata(&remote)?;
@@ -189,6 +189,15 @@ pub fn pin_path<B: CloudBackend>(
         );
     };
 
+    pin_record(db, cache_dir, backend, record)
+}
+
+pub(crate) fn pin_record<B: CloudBackend>(
+    db: &Database,
+    cache_dir: &Path,
+    backend: &B,
+    record: FileRecord,
+) -> anyhow::Result<usize> {
     db.set_explicit_pin(&record.metadata.remote_id, true)?;
     if !record.metadata.is_dir {
         let updated = db

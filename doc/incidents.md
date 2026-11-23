@@ -1878,6 +1878,16 @@ Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项�
 初始实现：[fff7c59](https://github.com/LumiaBlack51/twodrive/commit/fff7c59)，验证边界修正及本轮已验证的最终运行时代码：[4fb5b25](https://github.com/LumiaBlack51/twodrive/commit/4fb5b25ffeb0406b05fc1161b7f85bfb90e595a3)。[原生 Linux CI](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401817) 和[原生 Windows CI](https://github.com/LumiaBlack51/twodrive/actions/runs/40807054924/job/123228401486) 均成功，日志已核实测试数及 PDF/DOCX/PPTX 增量/全量逐字节结果。代码与记录由指向 dev 的 [PR #48](https://github.com/LumiaBlack51/twodrive/pull/48) 交付；本记录后续只补验证证据，不改运行时代码/锁文件。未创建 Release，也未安装或替换现用程序。
 
 
+## TD-20261123-10：Google Drive 挂载首次打开普通文件长时间停在 0%
+
+- 现场与影响：Linux Development 0.2.25。用户打开约 3.26 MB 的在线文件，启动两分钟后活动仍为零；约四分钟时记录收到全部字节，随后仍在等待发布缓存。挂载数据库约 7.4 万条。仅查看任务、缓存元数据和挂载状态。
+- 机制：挂载在下载前后各校验远端版本。Google 按 ID 取元数据的实现每次调用账号分页全量索引。媒体下载本身也会按 ID 校验 ETag。历史桥接下载的首字节等待与本次 FUSE 路径不同。改为按 ID 检查选中文件的版本及大小，版本变化时重新解析规范路径。旧代码在合成冷读中发出两次全盘列表，修改后为零且内容逐字节一致。原会话的下载随后成功落入缓存，未重新打开用户文件或测量线上加速比。交付待补。
+
+## TD-20261123-11：Development 挂载的文件右键缺少离线缓存操作
+
+- 现场与影响：Linux Development 0.2.25。本机 Nautilus 的 dev 扩展要求活动挂载提供缓存操作能力标志。挂载根查询该标志返回 ENOTSUP，菜单仅显示查看状态。正式版按自己的挂载绑定运行命令。dev 安装包的扩展安装路径亦需检查。
+- dev 可写 FUSE 提供挂载内操作，安装器部署独立扩展与徽标。回环账号的真实 FUSE 依次验证释放、固定、取消固定及刷新，确认数据库状态和远端样本字节；另覆盖旧绑定和缺少能力标志的菜单。未对用户文件执行释放或固定。交付待补。
+
 ## 记录模板
 
 复制以下模板填写。未知项明确写“未确认”或“未执行”，不要省略验证边界。

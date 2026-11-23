@@ -643,6 +643,14 @@ impl CloudBackend for Backend {
         self.check_pause()?;
         self.inner.get_metadata(id)
     }
+    fn metadata_for_download(
+        &self,
+        remote_id: &str,
+        known: &MetadataEntry,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.check_pause()?;
+        self.inner.metadata_for_download(remote_id, known)
+    }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         self.check_pause()?;
         valid_path(path)?;

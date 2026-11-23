@@ -1,3 +1,9 @@
+twodrive (0.2.24+dev0.2.27-1) unstable; urgency=medium
+
+  * Fix Development Google Drive cold reads and Nautilus cache actions.
+
+ -- TwoDrive maintainers <maintainers@users.noreply.github.com>  Mon, 23 Nov 2026 18:40:00 +0800
+
 twodrive (0.2.24+dev0.2.26-1) unstable; urgency=medium
 
   * Publish the Development desktop tray window fix.

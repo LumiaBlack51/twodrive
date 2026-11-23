@@ -586,9 +586,20 @@ impl Database {
                 normalize_cloud_path(path)
             );
         };
+        self.release_selected(record)
+    }
 
+    pub fn release_selected(&self, record: FileRecord) -> anyhow::Result<usize> {
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM files WHERE remote_id=?1 AND path=?2)",
+                params![record.metadata.remote_id, record.metadata.path],
+                |row| row.get::<_, bool>(0)
+            )?,
+            "release target changed"
+        );
         // An explicit release overrides Always Keep for exactly this subtree.
         // Change policy in the same transaction as download cancellation so a
         // concurrent pin/download cannot observe an unpinned but active transfer.

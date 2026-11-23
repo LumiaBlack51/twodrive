@@ -13,6 +13,8 @@ on:
       - 'scripts/test-dav-tray-x11.py'
       - 'scripts/test-tray-workspace-linux.py'
       - 'packaging/gnome-tray-anchor/**'
+      - 'packaging/nautilus/**'
+      - 'packaging/icons/**'
       - 'doc/provider-integration-spec.md'
       - 'scripts/install-dav-desktop.py'
       - 'scripts/test_dav_installer.py'
@@ -123,6 +125,8 @@ jobs:
           cp experiments/twodrive-dev/target/release/twodrive-dev experiments/twodrive-dev/target/release/twodrive-dav-engine experiments/twodrive-dev/target/release/twodrive-provider-login apps/dav/build/linux/x64/release/bundle/
           cp dist/rclone/* apps/dav/build/linux/x64/release/bundle/
           cp -r packaging/gnome-tray-anchor apps/dav/build/linux/x64/release/bundle/
+          cp packaging/nautilus/twodrive_nautilus.py apps/dav/build/linux/x64/release/bundle/twodrive_dav_nautilus.py
+          cp -r packaging/icons/hicolor/scalable/emblems apps/dav/build/linux/x64/release/bundle/
           cp scripts/install-dav-desktop.py apps/dav/build/linux/x64/release/bundle/
           mkdir -p apps/dav/build/linux/x64/release/bundle/docs
           cp doc/provider-integration-spec.md doc/storage-connections-dev.md doc/desktop-sharing-validation.md doc/google-drive-dev.md doc/icloud-drive.md doc/tray-positioning-2026-10-14.md apps/dav/build/linux/x64/release/bundle/docs/

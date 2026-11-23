@@ -26,6 +26,14 @@ pub trait CloudBackend: Send + Sync + 'static {
             .into_iter()
             .find(|entry| entry.remote_id == remote_id))
     }
+    /// Revalidate a known download. Return canonical metadata if its version changed.
+    fn metadata_for_download(
+        &self,
+        remote_id: &str,
+        _known: &MetadataEntry,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.get_metadata(remote_id)
+    }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         let path = normalize_cloud_path(path);
         Ok(self

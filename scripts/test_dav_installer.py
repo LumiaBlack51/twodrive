@@ -25,11 +25,20 @@ class InstallerTests(unittest.TestCase):
             (bundle/'twodrive_dav').write_bytes(b'new-gui')
             (bundle/'data/flutter_assets/assets/cloud-connected.svg').write_bytes(b'status-svg')
             (bundle/'data/flutter_assets/assets/app-icon.svg').write_bytes(b'plain-app-svg')
+            (bundle/'twodrive_dav_nautilus.py').write_bytes(b'dev extension fixture')
+            (bundle/'emblems').mkdir()
+            (bundle/'emblems/emblem-twodrive-cloud.svg').write_bytes(b'cloud fixture')
+            stable = root/'data/nautilus-python/extensions/twodrive_nautilus.py'
+            stable.parent.mkdir(parents=True)
+            stable.write_bytes(b'stable extension fixture')
             engines = root/'engines'
             engines.mkdir()
             for name in ['twodrive-dev', 'twodrive-dav-engine', 'twodrive-provider-login']:
                 (engines/name).write_bytes(b'new-executable')
             installer.install(bundle, engines, root/'data', root/'bin', preserve_runtime=True)
+            self.assertEqual(stable.read_bytes(), b'stable extension fixture')
+            self.assertEqual(stable.with_name('twodrive_dav_nautilus.py').read_bytes(), b'dev extension fixture')
+            self.assertEqual((root/'data/icons/hicolor/scalable/emblems/emblem-twodrive-dav-cloud.svg').read_bytes(), b'cloud fixture')
             retired = list(app.glob('runtime-before-*'))
             self.assertEqual(len(retired), 1)
             self.assertEqual((retired[0]/'twodrive-dav-engine').read_bytes(), b'old-executable')
