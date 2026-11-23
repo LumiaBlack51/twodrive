@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the installed Flutter GUI, Openbox and SNI in a private X11 session."""
 import argparse
+import errno
 import os
 from pathlib import Path
 import subprocess
@@ -127,7 +128,9 @@ if __name__ == "__main__":
             raise SystemExit("Use the outer test entry point to create an isolated desktop")
         exercise(bundle, engines, home, args.gnome)
     else:
-        with tempfile.TemporaryDirectory(prefix="twodrive-tray-test-") as directory:
+        fixture = tempfile.TemporaryDirectory(prefix="twodrive-tray-test-")
+        directory = fixture.name
+        try:
             home = Path(directory)
             (home / "fixture").touch()
             runtime = home / "run"
@@ -143,3 +146,15 @@ if __name__ == "__main__":
             subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x1024x24", "dbus-run-session",
                             "--", "python3", __file__, str(bundle), "--engines", str(engines),
                             "--private-session", *(["--gnome"] if args.gnome else [])], env=env, check=True)
+
+        finally:
+            # Private GNOME services may finish disposing their XDG files just
+            # after the session bus exits. Retry only this test-owned directory.
+            for attempt in range(10):
+                try:
+                    fixture.cleanup()
+                    break
+                except OSError as error:
+                    if error.errno != errno.ENOTEMPTY or attempt == 9:
+                        raise
+                    time.sleep(0.2)

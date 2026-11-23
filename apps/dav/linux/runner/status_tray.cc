@@ -290,14 +290,22 @@ void stop(Tray* tray) {
     // On X11 the Flutter 3.41 embedder can release a secondary framebuffer
     // on the GTK thread while its EGL rendering context is busy elsewhere.
     // Keep a GDK context current until the popup has released its GL objects.
-    GdkGLContext* previous = gdk_gl_context_get_current();
+    // Unparenting can invalidate the drawing surface/current context. Hold
+    // the view through that step, then dispose it while the popup still exists.
+    if (tray->content) {
+      g_object_ref(tray->content);
+      gtk_container_remove(GTK_CONTAINER(tray->popup), GTK_WIDGET(tray->content));
+    }
     g_autoptr(GdkGLContext) cleanup = nullptr;
-    if (!previous && tray->content && g_strcmp0(g_getenv("FLUTTER_LINUX_RENDERER"), "software") != 0) {
-      auto* surface = gtk_widget_get_window(GTK_WIDGET(tray->content));
+    if (tray->content && g_strcmp0(g_getenv("FLUTTER_LINUX_RENDERER"), "software") != 0) {
+      auto* surface = gtk_widget_get_window(GTK_WIDGET(tray->popup));
       if (surface) {
         g_autoptr(GError) error = nullptr;
         cleanup = gdk_window_create_gl_context(surface, &error);
         if (cleanup && gdk_gl_context_realize(cleanup, &error)) {
+          // GDK caches its last context. Flutter can change the underlying
+          // EGL binding directly, so force a real rebind on the GTK thread.
+          gdk_gl_context_clear_current();
           gdk_gl_context_make_current(cleanup);
           if (gdk_gl_context_get_current() != cleanup)
             g_warning("Tray shutdown: could not activate the GDK cleanup context");
@@ -307,10 +315,12 @@ void stop(Tray* tray) {
         }
       }
     }
+    if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray disposing detached view");
+    g_clear_object(&tray->content);
+    if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray detached view released");
     gtk_widget_destroy(GTK_WIDGET(tray->popup));
     if (cleanup) gdk_gl_context_clear_current();
     tray->popup = nullptr;
-    tray->content = nullptr;
   }
   if (tray->reposition) { g_source_remove(tray->reposition); tray->reposition = 0; }
   if (tray->legacy) { gtk_status_icon_set_visible(tray->legacy, FALSE); g_clear_object(&tray->legacy); }
