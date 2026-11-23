@@ -208,7 +208,7 @@ class _OverviewPageState extends State<OverviewPage> {
                 ),
               ],
             );
-            if (constraints.maxWidth >= 960) {
+            if (constraints.maxWidth >= fourColumnWidth) {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -287,7 +287,7 @@ class _OverviewPageState extends State<OverviewPage> {
         ),
         LayoutBuilder(
           builder: (context, constraints) {
-            final columns = constraints.maxWidth >= 960
+            final columns = constraints.maxWidth >= fourColumnWidth
                 ? 4
                 : constraints.maxWidth >= 540
                 ? 2
@@ -343,13 +343,13 @@ class _OverviewPageState extends State<OverviewPage> {
               ),
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             );
-            return constraints.maxWidth >= 820
+            return constraints.maxWidth >= fourColumnWidth
                 ? Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(flex: 3, child: transfers),
+                      Expanded(child: transfers),
                       const SizedBox(width: 12),
-                      Expanded(flex: 2, child: backup),
+                      Expanded(child: backup),
                     ],
                   )
                 : Column(
@@ -388,6 +388,7 @@ class _OverviewPageState extends State<OverviewPage> {
     );
   }
 
+  static const double fourColumnWidth = 960;
   static const blue = Color(0xff2472df);
   static const heading = TextStyle(fontSize: 16, fontWeight: FontWeight.w600);
   static const muted = TextStyle(fontSize: 12, color: Color(0xff778295));

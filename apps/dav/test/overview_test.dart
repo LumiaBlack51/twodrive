@@ -102,6 +102,48 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
+  testWidgets('transfer overview aligns with the second account card', (
+    tester,
+  ) async {
+    viewport(tester, const Size(1200, 1600));
+    final c = OverviewClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OverviewPage(
+            client: c,
+            onNavigate: (_) {},
+            onOpenMount: (_) async {},
+          ),
+        ),
+      ),
+    );
+    Rect panelBounds(Finder content) => tester.getRect(
+      find.ancestor(of: content, matching: find.byType(Container)).first,
+    );
+    for (final width in [1200.0, 880.0, 430.0]) {
+      tester.view.physicalSize = Size(width, 1600);
+      await tester.pump();
+      final account = panelBounds(
+        find.byKey(const ValueKey('overview-account-b')),
+      );
+      final transfers = panelBounds(find.text('传输概览'));
+      final backup = panelBounds(find.text('备份概览'));
+      expect(
+        transfers.right,
+        closeTo(account.right, 0.01),
+        reason: 'width $width',
+      );
+      if (width == 1200) {
+        expect(backup.left - transfers.right, closeTo(12, 0.01));
+      } else {
+        expect(backup.top, greaterThan(transfers.bottom));
+      }
+    }
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
+
   testWidgets(
     'startup opens the overview and status polling does no directory or quota IO',
     (tester) async {
