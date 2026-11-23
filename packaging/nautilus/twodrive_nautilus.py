@@ -1,5 +1,4 @@
 import os
-import stat
 import shutil
 import sqlite3
 import subprocess

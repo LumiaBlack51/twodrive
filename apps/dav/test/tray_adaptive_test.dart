@@ -38,6 +38,7 @@ void main() {
         ),
         home: TrayPanel(
           client: client,
+          onRefresh: () {},
           onManage: ([int page = 0]) async {},
           onOpenFolder: () async {
             opened = true;
@@ -47,6 +48,8 @@ void main() {
       ),
     );
     expect(tester.takeException(), isNull);
+    expect(find.byTooltip('刷新状态'), findsOneWidget);
+    expect(find.byTooltip('刷新空间信息'), findsNothing);
     for (final label in ['打开文件夹', '查看文件']) {
       final bounds = tester.getRect(find.text(label));
       expect(bounds.bottom, lessThanOrEqualTo(320));

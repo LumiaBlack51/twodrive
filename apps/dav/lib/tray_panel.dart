@@ -333,11 +333,6 @@ class TrayPanel extends StatelessWidget {
                               ring: true,
                               value: c.quotas[c.selected],
                               connected: c.connected,
-                              onRefresh: c.connected
-                                  ? () {
-                                      c.refreshQuota(c.selected!, force: true);
-                                    }
-                                  : null,
                             ),
                           ],
                         ),

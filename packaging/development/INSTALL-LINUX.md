@@ -1,4 +1,4 @@
-# TwoDrive Development 0.2.27 — Linux x64
+# TwoDrive Development 0.3.0 — Linux x64
 
 先核对 Release 的 SHA256SUMS，解压完整目录，在 `bundle` 内执行：
 
