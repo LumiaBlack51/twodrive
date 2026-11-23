@@ -73,7 +73,7 @@ fn persistent_delete_denial_is_not_requeued_or_executed_until_due_or_manual_retr
         sender,
         pending: Arc::new(Mutex::new(Default::default())),
     };
-    enqueue_recovery(&reopened, &queue).unwrap();
+    enqueue_recovery(&reopened, &queue, true).unwrap();
     assert!(receiver.try_recv().is_err());
     assert!(!recover_pending_delete_id(&reopened, &backend, "denied-id").unwrap());
     assert_eq!(recover_pending_deletes(&reopened, &backend).unwrap(), 0);
@@ -90,7 +90,7 @@ fn persistent_delete_denial_is_not_requeued_or_executed_until_due_or_manual_retr
     );
     backend.deny.store(false, Ordering::SeqCst);
     reopened.retry_pending_deletes().unwrap();
-    enqueue_recovery(&reopened, &queue).unwrap();
+    enqueue_recovery(&reopened, &queue, true).unwrap();
     assert!(matches!(receiver.try_recv().unwrap(), UploadCommand::Delete(id) if id == "denied-id"));
     assert_eq!(recover_pending_deletes(&reopened, &backend).unwrap(), 1);
     assert!(reopened.pending_deletes().unwrap().is_empty());

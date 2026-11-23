@@ -151,7 +151,12 @@ class StorageClient extends ChangeNotifier {
     _showQuota = visible && quota;
   }
 
-  Future<void> refreshView({bool forceDirectory = false}) async {
+  Future<void> refreshView({
+    bool forceDirectory = false,
+    bool forceQuota = false,
+  }) async {
+    // The next status result selects eligible accounts and coalesces pending quota reads.
+    if (forceQuota && _showQuota) _quotaChecked.clear();
     if (_showFiles) {
       await pollNow(forceDirectory: forceDirectory);
       return;

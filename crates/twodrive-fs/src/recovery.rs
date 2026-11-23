@@ -504,7 +504,11 @@ pub(crate) fn recover_interrupted_writes(db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn enqueue_recovery(db: &Database, sender: &UploadQueue) -> anyhow::Result<()> {
+pub(crate) fn enqueue_recovery(
+    db: &Database,
+    sender: &UploadQueue,
+    include_pins: bool,
+) -> anyhow::Result<()> {
     for delete in db
         .pending_deletes()?
         .into_iter()
@@ -529,7 +533,8 @@ pub(crate) fn enqueue_recovery(db: &Database, sender: &UploadQueue) -> anyhow::R
             && (matches!(
                 record.state,
                 FileState::Dirty | FileState::Uploading | FileState::Conflict
-            ) || (!record.metadata.is_dir
+            ) || (include_pins
+                && !record.metadata.is_dir
                 && record.effective_pinned()
                 && !has_existing_cache(&record)))
             && queued.insert(record.metadata.remote_id.clone())

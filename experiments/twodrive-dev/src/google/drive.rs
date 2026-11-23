@@ -288,6 +288,30 @@ impl GoogleDrive {
             serde_json::from_value(value).map_err(|_| anyhow::anyhow!("Google 文件信息不完整"))?;
         Ok((!file.labels.trashed).then_some(file))
     }
+    fn under_root(&self, file: &DriveFile) -> anyhow::Result<bool> {
+        let mut pending: VecDeque<_> = file.parents.iter().map(|p| p.id.clone()).collect();
+        let mut visited = BTreeSet::new();
+        while let Some(id) = pending.pop_front() {
+            if id == self.root {
+                return Ok(true);
+            }
+            if visited.insert(id.clone()) {
+                ensure!(
+                    visited.len() <= LIMIT,
+                    "Google folder ancestry exceeds the index limit"
+                );
+                if let Some(folder) = self.file(&id)? {
+                    ensure!(
+                        folder.id == id && folder.mime == FOLDER,
+                        "Invalid Google parent"
+                    );
+                    pending.extend(folder.parents.into_iter().map(|p| p.id));
+                }
+            }
+        }
+        Ok(false)
+    }
+
     fn inventory(&self, parent: Option<&str>) -> anyhow::Result<Vec<DriveFile>> {
         if let Some(id) = parent {
             valid_id(id)?;
@@ -862,6 +886,26 @@ impl CloudBackend for GoogleDrive {
     }
     fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
         Ok(self.snapshot()?.into_iter().find(|m| m.remote_id == id))
+    }
+    fn metadata_for_download(
+        &self,
+        remote_id: &str,
+        known: &MetadataEntry,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        let Some(file) = self.file(remote_id)? else {
+            return Ok(None);
+        };
+        ensure!(
+            file.id == remote_id,
+            "Google returned a different file identity"
+        );
+        let entry = file.metadata(known.path.clone())?;
+        if strong_etag(&entry.etag).is_ok() && entry.etag == known.etag && entry.size == known.size
+        {
+            return Ok(self.under_root(&file)?.then_some(entry));
+        }
+        // A move or rename may have changed the canonical display path or duplicate-name alias.
+        self.get_metadata(remote_id)
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         Ok(self.resolve(path)?.map(|(_, m)| m))

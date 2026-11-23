@@ -1,7 +1,7 @@
 name: twodrive_dav
 description: TwoDrive Development for Linux and Windows, with extensible storage providers.
 publish_to: none
-version: 0.2.26+12
+version: 0.3.0+13
 environment:
   sdk: ^3.11.5
 dependencies:

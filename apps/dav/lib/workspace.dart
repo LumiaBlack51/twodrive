@@ -132,9 +132,14 @@ class _WorkspaceState extends State<Workspace>
     );
   }
 
-  void refreshWorkspace({bool forceDirectory = false}) {
+  void refreshWorkspace({
+    bool forceDirectory = false,
+    bool forceQuota = false,
+  }) {
     updateViewInterests();
-    unawaited(c.refreshView(forceDirectory: forceDirectory));
+    unawaited(
+      c.refreshView(forceDirectory: forceDirectory, forceQuota: forceQuota),
+    );
   }
 
   void navigateTo(int destination) {
@@ -509,7 +514,7 @@ class _WorkspaceState extends State<Workspace>
   Widget buildTray() => TrayPanel(
     client: c,
     onManage: openDashboardFromTray,
-    onRefresh: refreshWorkspace,
+    onRefresh: () => refreshWorkspace(forceQuota: true),
     onOpenFolder: () async {
       if (!c.canMount) {
         await openDashboardFromTray(0);

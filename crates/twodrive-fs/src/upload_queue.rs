@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 use twodrive_backend::CloudBackend;
 use twodrive_core::{Database, FileState};
 
-use crate::hydration::hydrate_record;
+use crate::hydration::hydrate_pinned_record;
 use crate::locks::item_sync_lock;
 use crate::recovery::{
     recover_dirty_record, recover_pending_delete_id, recover_pending_metadata_record,
@@ -211,7 +211,7 @@ pub(crate) fn run_upload_worker<B: CloudBackend>(
             && !record.metadata.is_dir
             && record.effective_pinned()
             && !record.cache_path.as_deref().is_some_and(Path::exists)
-            && let Err(err) = hydrate_record(&db, &cache_dir, backend.as_ref(), &record)
+            && let Err(err) = hydrate_pinned_record(&db, &cache_dir, backend.as_ref(), &record)
         {
             eprintln!("twodrive: queued pinned hydration failed for {remote_id}: {err:#}");
         }

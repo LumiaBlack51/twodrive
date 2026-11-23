@@ -23,7 +23,7 @@ pub fn hydrate_pending_pins<B: CloudBackend>(
         .collect::<Vec<_>>();
     let mut hydrated = 0;
     for record in records {
-        match hydrate_record(db, cache_dir, backend, &record) {
+        match hydrate_pinned_record(db, cache_dir, backend, &record) {
             Ok(_) => hydrated += 1,
             Err(err) => {
                 eprintln!(
@@ -42,10 +42,29 @@ pub fn hydrate_record<B: CloudBackend>(
     backend: &B,
     record: &FileRecord,
 ) -> anyhow::Result<PathBuf> {
+    hydrate_current(db, cache_dir, backend, record, false)
+}
+
+pub(crate) fn hydrate_pinned_record<B: CloudBackend>(
+    db: &Database,
+    cache_dir: &Path,
+    backend: &B,
+    record: &FileRecord,
+) -> anyhow::Result<PathBuf> {
+    hydrate_current(db, cache_dir, backend, record, true)
+}
+
+fn hydrate_current<B: CloudBackend>(
+    db: &Database,
+    cache_dir: &Path,
+    backend: &B,
+    record: &FileRecord,
+    require_pin: bool,
+) -> anyhow::Result<PathBuf> {
     let current = db.get_by_remote_id(&record.metadata.remote_id)?;
     let record = reconcile_cached_record(db, current.as_ref().unwrap_or(record))?;
     let generation = db.download_generation(&record.metadata.remote_id)?;
-    hydrate_generation(db, cache_dir, backend, &record, generation)
+    hydrate_version(db, cache_dir, backend, &record, generation, require_pin)
 }
 
 pub(crate) fn hydrate_generation<B: CloudBackend>(
@@ -54,6 +73,17 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
     backend: &B,
     record: &FileRecord,
     generation: i64,
+) -> anyhow::Result<PathBuf> {
+    hydrate_version(db, cache_dir, backend, record, generation, false)
+}
+
+fn hydrate_version<B: CloudBackend>(
+    db: &Database,
+    cache_dir: &Path,
+    backend: &B,
+    record: &FileRecord,
+    generation: i64,
+    require_pin: bool,
 ) -> anyhow::Result<PathBuf> {
     if record.metadata.is_dir {
         anyhow::bail!("cannot hydrate a directory");
@@ -77,7 +107,7 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         record.state != twodrive_core::FileState::LocalOnly,
         "local-only content is unavailable; preserve its metadata for recovery"
     );
-    if !db.begin_hydration(&record.metadata.remote_id, generation)? {
+    if !db.claim_download(&record.metadata.remote_id, generation, require_pin)? {
         return Err(hydration_cancelled().into());
     }
     fs::create_dir_all(cache_dir)?;
@@ -156,7 +186,7 @@ fn verify_remote_version<B: CloudBackend>(
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("local-only file has no cloud content"))?;
     let remote = backend
-        .get_metadata(cloud_id)?
+        .metadata_for_download(cloud_id, &record.metadata)?
         .ok_or_else(|| anyhow::anyhow!("cloud file no longer exists"))?;
     if remote.size != record.metadata.size || remote.etag != record.metadata.etag {
         db.upsert_metadata(&remote)?;
@@ -194,7 +224,7 @@ pub fn pin_path<B: CloudBackend>(
         let updated = db
             .get_by_remote_id(&record.metadata.remote_id)?
             .unwrap_or(record);
-        hydrate_record(db, cache_dir, backend, &updated)?;
+        hydrate_pinned_record(db, cache_dir, backend, &updated)?;
         return Ok(1);
     }
 
@@ -204,7 +234,7 @@ pub fn pin_path<B: CloudBackend>(
             let updated = db
                 .get_by_remote_id(&child.metadata.remote_id)?
                 .unwrap_or(child);
-            hydrate_record(db, cache_dir, backend, &updated)?;
+            hydrate_pinned_record(db, cache_dir, backend, &updated)?;
             count += 1;
         }
     }
