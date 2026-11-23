@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -27,6 +28,11 @@ def wait_for(test, seconds=45):
             pass
         time.sleep(.2)
     raise AssertionError('disposable native mount operation did not settle')
+
+
+def cached_bytes_ready(db_path):
+    with sqlite3.connect(f'file:{db_path}?mode=ro', uri=True) as db:
+        return db.execute("SELECT cache_path IS NOT NULL FROM files WHERE path='/existing.txt'").fetchone()[0]
 
 
 def mounted(path):
@@ -75,11 +81,23 @@ def run(args):
         def residency():
             with sqlite3.connect(f'file:{db_path}?mode=ro', uri=True) as db:
                 return db.execute("SELECT state, pin_explicit FROM files WHERE path='/existing.txt'").fetchone()
-        os.setxattr(selected, control, b'release')
+        os.chmod(selected, 0o444)
+        assert selected.stat().st_mode & 0o777 == 0o444
+        # The import fixture replaces GI widgets only. The production action helper
+        # checks the live profile, mount table, descriptors and actual kernel xattrs.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'packaging/nautilus'))
+        from test_twodrive_nautilus import EXTENSION as extension
+        extension.dav_state_dir = lambda: root / 'client'
+        profile = next(p for p in extension.dav_profiles() if p["id"] == "locked")
+        key = extension.dav_key(profile, "/existing.txt")
+        def cache_action(action):
+            result = extension.dav_action({"action": action, "keys": [key]})
+            assert result == {"messages": ["existing.txt: request accepted"]}, result
+        cache_action('release')
         assert residency() == ('online_only', 0)
-        os.setxattr(selected, control, b'pin')
-        assert residency() == ('pinned', 1)
-        os.setxattr(selected, control, b'unpin')
+        cache_action('pin')
+        wait_for(lambda: residency() == ('pinned', 1) and cached_bytes_ready(db_path))
+        cache_action('unpin')
         assert residency() == ('cached', 0)
         os.setxattr(target, control, b'sync')
         assert (share / 'existing.txt').read_bytes() == b'original remote bytes'

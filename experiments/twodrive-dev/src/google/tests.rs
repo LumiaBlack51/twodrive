@@ -582,3 +582,27 @@ fn changed_download_version_resolves_current_path_and_missing_files_stay_missing
             .is_none()
     );
 }
+
+#[test]
+fn ancestor_moved_out_of_the_root_prevents_download_with_an_unchanged_etag() {
+    let f = Fixture::new();
+    f.add("folder", "nested", FOLDER, b"");
+    f.add("doc", "sample.pdf", "application/pdf", b"data");
+    f.files.lock().unwrap().get_mut("doc").unwrap().0["parents"] = json!([{"id":"folder"}]);
+    let known = f.drive.get_metadata("doc").unwrap().unwrap();
+    f.list_requests.store(0, Ordering::Relaxed);
+    assert!(
+        f.drive
+            .metadata_for_download("doc", &known)
+            .unwrap()
+            .is_some()
+    );
+    f.files.lock().unwrap().get_mut("folder").unwrap().0["parents"] = json!([]);
+    assert!(
+        f.drive
+            .metadata_for_download("doc", &known)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(f.list_requests.load(Ordering::Relaxed), 0);
+}

@@ -55,6 +55,17 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
     record: &FileRecord,
     generation: i64,
 ) -> anyhow::Result<PathBuf> {
+    hydrate_version(db, cache_dir, backend, record, generation, false)
+}
+
+pub(crate) fn hydrate_version<B: CloudBackend>(
+    db: &Database,
+    cache_dir: &Path,
+    backend: &B,
+    record: &FileRecord,
+    generation: i64,
+    require_pin: bool,
+) -> anyhow::Result<PathBuf> {
     if record.metadata.is_dir {
         anyhow::bail!("cannot hydrate a directory");
     }
@@ -77,7 +88,7 @@ pub(crate) fn hydrate_generation<B: CloudBackend>(
         record.state != twodrive_core::FileState::LocalOnly,
         "local-only content is unavailable; preserve its metadata for recovery"
     );
-    if !db.begin_hydration(&record.metadata.remote_id, generation)? {
+    if !db.claim_download(&record.metadata.remote_id, generation, require_pin)? {
         return Err(hydration_cancelled().into());
     }
     fs::create_dir_all(cache_dir)?;
@@ -189,15 +200,6 @@ pub fn pin_path<B: CloudBackend>(
         );
     };
 
-    pin_record(db, cache_dir, backend, record)
-}
-
-pub(crate) fn pin_record<B: CloudBackend>(
-    db: &Database,
-    cache_dir: &Path,
-    backend: &B,
-    record: FileRecord,
-) -> anyhow::Result<usize> {
     db.set_explicit_pin(&record.metadata.remote_id, true)?;
     if !record.metadata.is_dir {
         let updated = db

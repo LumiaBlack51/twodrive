@@ -94,6 +94,19 @@ impl Database {
         Ok(records)
     }
 
+    pub fn pending_pin_downloads(&self) -> anyhow::Result<Vec<String>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT remote_id FROM files WHERE is_dir=0
+            AND (pin_explicit=1 OR pin_origin_remote_id IS NOT NULL) AND cache_path IS NULL
+            AND release_pending=0 AND cloud_remote_id IS NOT NULL
+            AND state IN ('online_only','hydrating','pinned') ORDER BY path",
+        )?;
+        Ok(stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?)
+    }
+
     pub fn all_records(&self) -> anyhow::Result<Vec<FileRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(

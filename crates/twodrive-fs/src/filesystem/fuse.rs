@@ -54,40 +54,45 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         if flags != 0 || position != 0 {
             return reply.error(libc::EINVAL);
         }
-        if ino == fuser::FUSE_ROOT_ID {
-            if value != b"sync" {
-                return reply.error(libc::EINVAL);
-            }
+        if ino == fuser::FUSE_ROOT_ID && value == b"sync" {
             return match signal.try_send(()) {
                 Ok(()) | Err(std::sync::mpsc::TrySendError::Full(())) => reply.ok(),
                 Err(_) => reply.error(libc::EIO),
             };
         }
-        let Some(record) = self.record_for_ino(ino) else {
+        let (target, command) = if ino == ROOT_INO {
+            let Some((action, id)) = value
+                .iter()
+                .position(|b| *b == b':')
+                .map(|i| (&value[..i], &value[i + 1..]))
+            else {
+                return reply.error(libc::EINVAL);
+            };
+            let Some(target) = std::str::from_utf8(id)
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+            else {
+                return reply.error(libc::EINVAL);
+            };
+            (target, action)
+        } else {
+            (ino, value)
+        };
+        let Some(record) = self.record_for_ino(target) else {
             return reply.error(libc::ENOENT);
         };
-        let action = match value {
-            b"pin" => "pin",
-            b"unpin" => "unpin",
-            b"release" => "release",
+        use crate::cache_controls::Action;
+        let action = match command {
+            b"pin" => Action::Pin,
+            b"unpin" => Action::Unpin,
+            b"release" => Action::Release,
             _ => return reply.error(libc::EINVAL),
         };
-        let db = self.db.clone();
-        let cache = self.cache_dir.clone();
-        let backend = Arc::clone(&self.backend);
-        self.read_pool.spawn(move || {
-            let result = match action {
-                "pin" => {
-                    crate::hydration::pin_record(&db, &cache, backend.as_ref(), record).map(|_| ())
-                }
-                "unpin" => db.set_explicit_pin(&record.metadata.remote_id, false),
-                _ => db.release_selected(record).map(|_| ()),
-            };
-            match result {
-                Ok(()) => reply.ok(),
-                Err(_) => reply.error(libc::EIO),
-            }
-        });
+        if let Some(controls) = &self.cache_controls {
+            controls.submit(record, action, reply);
+        } else {
+            reply.error(libc::ENOTSUP);
+        }
     }
 
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {

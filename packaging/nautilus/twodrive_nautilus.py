@@ -994,7 +994,8 @@ def apply_dav_action(key, root, path, action):
             target = f"/proc/self/fd/{target_fd}"
             if stat.S_ISLNK(os.fstat(target_fd).st_mode) or os.getxattr(target, DAV_CONTROL) != b"1":
                 raise OSError("unsupported cache action")
-            os.setxattr(target, DAV_CONTROL, action.encode("ascii"))
+            value = action if action == "sync" else f"{action}:{os.fstat(target_fd).st_ino}"
+            os.setxattr(f"/proc/self/fd/{root_fd}", DAV_CONTROL, value.encode("ascii"))
         finally:
             os.close(target_fd)
     finally:

@@ -100,6 +100,11 @@ fn mount_backend_with_retention<B: CloudBackend>(
         TwoDriveFs::new_with_upload_concurrency(db, cache_dir, backend, upload_concurrency)?;
     let (signal_tx, signal_rx) = mpsc::sync_channel(1);
     if desktop_controls {
+        fs.cache_controls = Some(crate::cache_controls::CacheControls::new(
+            fs.db.clone(),
+            recovery_cache.clone(),
+            fs.backend.clone(),
+        ));
         fs.refresh_signal = Some(signal_tx.clone());
     }
     let recovery_db = fs.db.clone();

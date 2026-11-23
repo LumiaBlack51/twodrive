@@ -369,11 +369,20 @@ impl Database {
     }
 
     pub fn begin_hydration(&self, remote_id: &str, generation: i64) -> anyhow::Result<bool> {
+        self.claim_download(remote_id, generation, false)
+    }
+
+    pub fn claim_download(
+        &self,
+        remote_id: &str,
+        generation: i64,
+        require_pin: bool,
+    ) -> anyhow::Result<bool> {
         Ok(self.connect()?.execute(
             "UPDATE files SET state = CASE WHEN pin_explicit = 1 OR pin_origin_remote_id IS NOT NULL THEN 'pinned' ELSE 'hydrating' END, cache_path = NULL, cache_accessed_unix = NULL
              WHERE remote_id = ?1 AND download_generation = ?2 AND release_pending = 0
-             AND state IN ('online_only', 'hydrating', 'pinned', 'cached', 'error') AND cloud_remote_id IS NOT NULL",
-            params![remote_id, generation])? == 1)
+             AND state IN ('online_only', 'hydrating', 'pinned', 'cached', 'error') AND cloud_remote_id IS NOT NULL AND (?3=0 OR pin_explicit=1 OR pin_origin_remote_id IS NOT NULL)",
+            params![remote_id, generation, require_pin])? == 1)
     }
 
     pub fn finish_hydration(

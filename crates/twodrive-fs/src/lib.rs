@@ -1,6 +1,8 @@
 #![cfg_attr(windows, allow(dead_code))]
 //! Files On-Demand, recovery and the FUSE adapter.
 mod activity;
+#[cfg(unix)]
+mod cache_controls;
 mod cache_io;
 mod conflicts;
 #[cfg(unix)]
