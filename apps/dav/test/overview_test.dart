@@ -132,42 +132,39 @@ void main() {
       c.dispose();
     },
   );
-  testWidgets(
-    'opening another mount preserves the browsing account',
-    (tester) async {
-      viewport(tester, const Size(1120, 900));
-      final c = OverviewClient();
-      c.status['cfapi']['progress']['remote'] = {
-        'error': 'network_unavailable',
-      };
-      String? opened;
-      int? destination;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: OverviewPage(
-              client: c,
-              onNavigate: (v) => destination = v,
-              onOpenMount: (id) async => opened = id,
-            ),
+  testWidgets('opening another mount preserves the browsing account', (
+    tester,
+  ) async {
+    viewport(tester, const Size(1120, 900));
+    final c = OverviewClient();
+    c.status['cfapi']['progress']['remote'] = {'error': 'network_unavailable'};
+    String? opened;
+    int? destination;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OverviewPage(
+            client: c,
+            onNavigate: (v) => destination = v,
+            onOpenMount: (id) async => opened = id,
           ),
         ),
-      );
-      expect(find.text('管理原生同步'), findsNothing);
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const ValueKey('overview-account-b')),
-          matching: find.text('打开目录'),
-        ),
-      );
-      expect(opened, 'b');
-      expect(c.selected, 'a');
-      expect(destination, isNull);
-      expect(c.calls, isEmpty);
-      await tester.pumpWidget(const SizedBox());
-      c.dispose();
-    },
-  );
+      ),
+    );
+    expect(find.text('管理原生同步'), findsNothing);
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('overview-account-b')),
+        matching: find.text('打开目录'),
+      ),
+    );
+    expect(opened, 'b');
+    expect(c.selected, 'a');
+    expect(destination, isNull);
+    expect(c.calls, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
   testWidgets(
     'minimum window has a scrollable overview with reachable policy and backup links',
     (tester) async {

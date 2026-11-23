@@ -1,5 +1,4 @@
 //! Desktop policy uses the same compiled filename rules as stable Linux.
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use twodrive_core::NameExclusions;
@@ -73,10 +72,10 @@ impl SyncPolicy {
         }
         Ok(())
     }
-    pub fn canonical_backup_exclusions(&self) -> anyhow::Result<Vec<PathBuf>> {
+    pub fn canonical_backup_exclusions(&self) -> Vec<PathBuf> {
         self.exclude_directory_paths
             .iter()
-            .map(|p| canonical_directory(p))
+            .map(|p| backup_path_key(p))
             .collect()
     }
 
@@ -103,30 +102,20 @@ impl SyncPolicy {
     }
 }
 
-// A previously selected directory may have been removed. Resolve its nearest
-// existing ancestor so a recreated directory still has the same comparison key.
-fn canonical_directory(path: &Path) -> anyhow::Result<PathBuf> {
-    let mut missing = Vec::new();
-    let mut ancestor = path;
-    loop {
-        match std::fs::symlink_metadata(ancestor) {
-            Ok(_) => {
-                let mut resolved = ancestor
-                    .canonicalize()
-                    .context("无法解析备份排除目录，请检查该规则")?;
-                anyhow::ensure!(resolved.is_dir(), "备份排除路径必须是文件夹");
-                for component in missing.into_iter().rev() {
-                    resolved.push(component);
-                }
-                return Ok(resolved);
+// A saved exclusion can disappear, become a file, or become inaccessible.
+// Resolve its reachable prefix so its original location remains excluded.
+pub fn backup_path_key(path: &Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        if let Ok(resolved) = ancestor.canonicalize() {
+            if ancestor == path {
+                return resolved;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                missing.push(ancestor.file_name().context("无法解析备份排除目录")?);
-                ancestor = ancestor.parent().context("无法解析备份排除目录")?;
+            if let Ok(tail) = path.strip_prefix(ancestor) {
+                return resolved.join(tail);
             }
-            Err(e) => return Err(e).context("无法读取备份排除目录，请检查该规则"),
         }
     }
+    path.to_path_buf()
 }
 
 // Match a complete filename. Only '*' and '?' have special meaning.

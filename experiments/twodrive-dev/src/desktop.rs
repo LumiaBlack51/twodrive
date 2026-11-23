@@ -768,7 +768,7 @@ impl App {
                 let mut policy: twodrive_dev::sync_policy::SyncPolicy =
                     serde_json::from_value(a.clone())?;
                 policy.validate()?;
-                policy.exclude_directory_paths = policy.canonical_backup_exclusions()?;
+                policy.exclude_directory_paths = policy.canonical_backup_exclusions();
                 self.state.save("sync-policy.json", &policy)?;
                 Ok(json!({"restart_required":true}))
             }
