@@ -1912,7 +1912,7 @@ Linux 根工作区默认测试、严格 Clippy/格式、独立工作区 84 项�
 
 ### TD-20261123-10 至 13 的成品与本机验证（2026-11-23）
 
-- [PR #83](https://github.com/LumiaBlack51/twodrive/pull/83) 合入 Development。合并提交的七个工作流通过，[0.3.0 预发布](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.0) 的 16 个文件已逐一核对大小和 SHA-256。Debian 源码与二进制清单通过校验，Windows 11 实际安装并验证了 1.3.0.0 测试 MSIX。详见[随包验证记录](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.0/runtime-validation.json)。
+- [PR #83](https://github.com/LumiaBlack51/twodrive/pull/83) 合入 Development。[合并提交 c746b3b 的七个工作流及运行链接](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.0/verification.json)均已核对通过，[0.3.0 预发布](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.0) 的 16 个文件已逐一核对大小和 SHA-256。Debian 源码与二进制清单通过校验，Windows 11 实际安装并验证了 1.3.0.0 测试 MSIX。详见[随包验证记录](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.0/runtime-validation.json)。
 - 在相同的 1440 像素宽 X11 测试桌面，两个模拟账号均未连接。0.2.25 第二张账户卡片和传输概览的右边缘分别位于 806 和 924 像素；0.3.0 两者均位于 806。对实际内核 FUSE 上的隔离挂载验证了缓存菜单操作、待写保护与恢复。
 - 本机 Linux 从 0.2.25 覆盖安装。升级前确认无活动传输和待写队列，安装阶段核对现有配置、登录状态文件摘要及挂载数据库的状态计数。重新启动后，界面、已加载的 Flutter 应用库、引擎和挂载工作进程均对应发布包。原 Google Drive 挂载已恢复，文件管理器扩展识别原 PDF 的缓存操作，其已缓存的 3,261,122 字节仍在本地。未留旧运行程序。本次未对用户文件发起冷下载、固定、释放或云端写入。
 
