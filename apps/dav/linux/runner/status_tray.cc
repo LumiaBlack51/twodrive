@@ -294,8 +294,18 @@ void stop(Tray* tray) {
     g_autoptr(GdkGLContext) cleanup = nullptr;
     if (!previous && tray->content && g_strcmp0(g_getenv("FLUTTER_LINUX_RENDERER"), "software") != 0) {
       auto* surface = gtk_widget_get_window(GTK_WIDGET(tray->content));
-      if (surface) cleanup = gdk_window_create_gl_context(surface, nullptr);
-      if (cleanup && gdk_gl_context_realize(cleanup, nullptr)) gdk_gl_context_make_current(cleanup);
+      if (surface) {
+        g_autoptr(GError) error = nullptr;
+        cleanup = gdk_window_create_gl_context(surface, &error);
+        if (cleanup && gdk_gl_context_realize(cleanup, &error)) {
+          gdk_gl_context_make_current(cleanup);
+          if (gdk_gl_context_get_current() != cleanup)
+            g_warning("Tray shutdown: could not activate the GDK cleanup context");
+        } else {
+          g_warning("Tray shutdown: GDK cleanup context unavailable: %s",
+                    error ? error->message : "unknown error");
+        }
+      }
     }
     gtk_widget_destroy(GTK_WIDGET(tray->popup));
     if (cleanup) gdk_gl_context_clear_current();
