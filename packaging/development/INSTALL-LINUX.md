@@ -15,6 +15,6 @@ GNOME/Zorin 的 TwoDrive 专用组件提供托盘定位。新组件首次安装�
 
 iCloud Drive 连接后默认可编辑：在现有连接表单内完成 Apple 账号、密码和双重认证，再保存并连接，日常登录不需要终端。可选诊断命令为 `twodrive-provider-login --state <该连接的私有登录目录>`。无需设置本机编辑密码，重启后继续恢复已授权的编辑权限。iCloud/百度的手动编辑不具备服务端原子版本覆盖，不因此开放自动备份。保留 `rclone`、Rclone 文档及组件校验清单；Linux 桌面和真实 iCloud 的运行结果需单独验收，参见 `docs/icloud-drive.md`。
 
-分享此电脑：单独打开 TDLink Server，选择目录，点击“启动共享 → 导出连接文件”。另一台电脑在“连接 → 添加连接 → 从 TwoDrive 连接文件添加”中导入并“保存并连接”。默认只读，邀请十分钟单次有效；配对成功后无需重新导入。关闭窗口后共享继续在托盘运行，退出应用停止；重启应用后需再次点击启动。修改目录或读写权限后需重新导出，服务端可撤销设备。验证范围见 `docs/desktop-sharing-validation.md`。
+分享此电脑：单独打开 TDLink Server，选择目录，点击“启动共享 → 导出连接文件”。另一台电脑在“连接 → 添加连接 → 从 TwoDrive 连接文件添加”中导入并“保存并连接”。默认只读，邀请十分钟单次有效；配对成功后无需重新导入。关闭服务端时确认停止共享，正在传输的文件可能需要重试；重启应用后需再次点击启动。修改目录或读写权限后需重新导出，服务端可撤销设备。验证范围见 `docs/desktop-sharing-validation.md`。
 
 English: Verify SHA256SUMS and keep the whole bundle. Run the command above from `bundle` to install for this user. GNOME's new positioning component may load only on the next desktop login. The launcher prefers X11/XWayland when DISPLAY is available so the tray panel can stay out of the taskbar. Explicit GDK_BACKEND is preserved; GTK 3 native Wayland cannot apply taskbar-hiding hints. Autostart remains unchanged. Credentials are supplied by the user, never bundled. Consult `docs/` and the matching source archive for the provider/auth/upload contract and validation boundaries.

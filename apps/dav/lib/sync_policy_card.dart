@@ -63,7 +63,7 @@ class _SyncPolicyCardState extends State<SyncPolicyCard> {
       );
     }
     if (!mounted || value == null || value.trim().isEmpty) return;
-    var rule = value.trim();
+    var rule = type == RuleType.folder ? value : value.trim();
     if (type == RuleType.extension) {
       rule = rule.replaceFirst(RegExp(r'^\.'), '');
     }

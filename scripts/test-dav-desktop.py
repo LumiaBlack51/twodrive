@@ -211,6 +211,19 @@ def run(args):
             (backup_source/'sample.txt').write_bytes(b'first backup version')
             (backup_source/'skip-link').symlink_to(root/'source.bin')
             backup_map = [{'local':str(backup_source), 'remote':remote+'/backup', 'enabled':True}]
+            excluded_root = root / 'excluded-root'
+            excluded_root.mkdir()
+            nested = backup_source / 'excluded-child'
+            nested.mkdir()
+            for folder in [excluded_root, nested]:
+                (folder / 'never-upload.txt').write_text('private fixture')
+            alias = root
+            if os.name != 'nt':
+                alias = root / 'alias'
+                alias.symlink_to(root, target_is_directory=True)
+            engine.call('save_sync_policy', {'exclude_directory_paths':[
+                str(alias / excluded_root.name), str(alias / 'backup-source' / nested.name)]})
+            backup_map.append({'local':str(excluded_root),'remote':remote+'/excluded-root','enabled':True})
             engine.call('pause', {'paused':True})
             engine.call('save_backups', {'id':profile['id'], 'folders':backup_map})
             time.sleep(2)
@@ -238,6 +251,9 @@ def run(args):
                     assert time.monotonic()<deadline, 'backup deadline exceeded'
                     time.sleep(1)
             wait_backup(b'first backup version')
+            assert all(e['name'] != 'excluded-root' for e in engine.call('list', {'path':remote})['entries'])
+            assert all(e['name'] != 'excluded-child' for e in engine.call('list', {'path':remote+'/backup'})['entries'])
+            report['checks']['picked_root_and_nested_directory_excluded'] = True
             engine.call('disconnect')
             manifest_file=root/'client/backup-verification/manifest.json'
             manifest=json.loads(manifest_file.read_text())

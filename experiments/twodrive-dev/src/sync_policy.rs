@@ -1,6 +1,7 @@
 //! Desktop policy uses the same compiled filename rules as stable Linux.
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use twodrive_core::NameExclusions;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -8,7 +9,7 @@ use twodrive_core::NameExclusions;
 pub struct SyncPolicy {
     pub exclude_name_regexes: NameExclusions,
     pub exclude_directory_names: Vec<String>,
-    pub exclude_directory_paths: Vec<std::path::PathBuf>,
+    pub exclude_directory_paths: Vec<PathBuf>,
     pub exclude_filenames: Vec<String>,
     pub exclude_extensions: Vec<String>,
     pub exclude_wildcards: Vec<String>,
@@ -72,6 +73,13 @@ impl SyncPolicy {
         }
         Ok(())
     }
+    pub fn canonical_backup_exclusions(&self) -> anyhow::Result<Vec<PathBuf>> {
+        self.exclude_directory_paths
+            .iter()
+            .map(|p| canonical_directory(p))
+            .collect()
+    }
+
     pub fn excludes_file(&self, path: &str) -> bool {
         let name = path.rsplit('/').next().unwrap_or(path);
         self.exclude_name_regexes.matches(name)
@@ -91,6 +99,32 @@ impl SyncPolicy {
             self.exclude_directory_names.iter().any(|n| n == name)
         } else {
             self.excludes_file(name)
+        }
+    }
+}
+
+// A previously selected directory may have been removed. Resolve its nearest
+// existing ancestor so a recreated directory still has the same comparison key.
+fn canonical_directory(path: &Path) -> anyhow::Result<PathBuf> {
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    loop {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(_) => {
+                let mut resolved = ancestor
+                    .canonicalize()
+                    .context("无法解析备份排除目录，请检查该规则")?;
+                anyhow::ensure!(resolved.is_dir(), "备份排除路径必须是文件夹");
+                for component in missing.into_iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(ancestor.file_name().context("无法解析备份排除目录")?);
+                ancestor = ancestor.parent().context("无法解析备份排除目录")?;
+            }
+            Err(e) => return Err(e).context("无法读取备份排除目录，请检查该规则"),
         }
     }
 }

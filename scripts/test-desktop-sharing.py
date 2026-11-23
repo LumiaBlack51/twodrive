@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 
 spec = importlib.util.spec_from_file_location('desktop_check', Path(__file__).with_name('test-dav-desktop.py'))
 desktop = importlib.util.module_from_spec(spec)
@@ -25,6 +26,18 @@ def run(args):
                 home.mkdir()
                 engines.append(desktop.Engine(args.engine, args.peer, home, tdlink=name == 'host'))
             host, client = engines
+            # Same default state as a running host, exactly as installed.
+            shared_home = root / 'same-state-client'
+            shared_home.mkdir()
+            same = desktop.Engine(args.engine, args.peer, shared_home,
+                                  state_path=root / 'host' / 'client')
+            engines.append(same)
+            assert 'sharing' not in same.call('status')
+            duplicate = subprocess.run([args.engine, '--state', str(root / 'host' / 'client'),
+                                        '--peer-bin', args.peer, '--launcher', args.peer, '--tdlink-server'],
+                                       input='', capture_output=True, text=True, timeout=8)
+            assert duplicate.returncode != 0 and 'already running' in duplicate.stderr
+            checks['shared_state_with_distinct_roles_and_exclusive_server_lock'] = True
             settings = dict(name='Disposable shared PC', root=str(shared), writable=True,
                             discoverable=False, network='lan')
             initial = host.call('share_start', settings)
@@ -87,15 +100,14 @@ def run(args):
             client.call('connect', dict(id='readonly'))
             client.call('upload', dict(path='/denied.txt',source=str(source)), failure=True)
             assert not (shared/'denied.txt').exists()
-            client.call('disconnect')
-            host.call('share_stop')
-            host.call('share_export', dict(output=str(root/'stopped.json')), failure=True)
             checks['changed_permissions_use_new_identity_and_enforce_readonly'] = True
-            host.call('share_start', settings)
+            client.call('list', dict(path='/'))
             host.close()
+            client.call('disconnect')
             host = desktop.Engine(args.engine, args.peer, root / 'host', tdlink=True)
             engines[0] = host
             assert not host.call('status')['sharing']['running']
+            host.call('share_export', dict(output=str(root/'stopped.json')), failure=True)
             # A new start immediately succeeds only if quit released its child/lock.
             host.call('share_start', settings)
             host.call('share_stop')

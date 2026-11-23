@@ -288,14 +288,11 @@ pub fn run(
             }
             validate(&selected, p, state, &protected)?;
             s.save("report.json", &status)?;
+            let excluded = backend.sync_policy().canonical_backup_exclusions()?;
             let mut seen = 0;
             for folder in selected.iter().filter(|f| f.enabled) {
                 let root = folder.local.canonicalize()?;
-                if backend
-                    .sync_policy()
-                    .exclude_directory_paths
-                    .contains(&root)
-                {
+                if excluded.iter().any(|dir| root.starts_with(dir)) {
                     continue;
                 }
                 let mut queue = vec![(root.clone(), folder.remote.clone())];
@@ -325,11 +322,7 @@ pub fn run(
                         ensure!(source.starts_with(&root), "备份路径离开所选目录");
                         let dest = format!("{remote}/{name}");
                         if kind.is_dir() {
-                            if backend
-                                .sync_policy()
-                                .exclude_directory_paths
-                                .contains(&source)
-                            {
+                            if excluded.iter().any(|dir| source.starts_with(dir)) {
                                 continue;
                             }
                             queue.push((source, dest));

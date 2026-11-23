@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'client.dart';
 import 'workspace.dart';
-import 'sharing_page.dart';
+import 'server_window.dart';
 import 'platform_paths.dart';
 import 'app_theme.dart';
 
@@ -83,17 +83,7 @@ class DavApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: appTheme(),
       home: server
-          ? Scaffold(
-              body: ListenableBuilder(
-                listenable: client,
-                builder: (_, _) => Column(
-                  children: [
-                    if (client.error != null) Text(client.error!),
-                    Expanded(child: SharingPage(client: client)),
-                  ],
-                ),
-              ),
-            )
+          ? ServerWindow(client: client, desktop: desktop)
           : Workspace(client: client, desktop: desktop),
     ),
   );

@@ -1,5 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
+import 'package:twodrive_dav/server_window.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:twodrive_dav/client.dart';
@@ -56,6 +59,7 @@ class SharingClient extends StorageClient {
   final calls = <String>[];
   final arguments = <String, Json>{};
   Json? saved;
+  String? newlyPaired;
   @override
   Future<Json> request(
     String op, [
@@ -64,7 +68,14 @@ class SharingClient extends StorageClient {
   ]) async {
     calls.add(op);
     arguments[op] = Map.from(args);
-    if (op == 'status') return Map.from(status);
+    if (op == 'status') {
+      if (newlyPaired != null) status['sharing']['peers'] = [newlyPaired];
+      return Map.from(status);
+    }
+    if (op == 'share_revoke') {
+      newlyPaired = null;
+      status['sharing']['peers'] = [];
+    }
     if (op == 'share_start') {
       status['sharing'] = {
         'supported': true,
@@ -165,6 +176,24 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.arguments['share_export']?['output'], picker.output);
       expect(find.textContaining('已导出：'), findsOneWidget);
+      c.newlyPaired = '0123456789abcdef0123456789abcdef';
+      await tester.tap(find.byTooltip('刷新状态'));
+      await tester.pumpAndSettle();
+      final revoke = find.text('撤销访问');
+      await tester.scrollUntilVisible(
+        revoke,
+        200,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.tap(revoke);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('撤销'));
+      await tester.pumpAndSettle();
+      expect(
+        c.arguments['share_revoke']?['device'],
+        '0123456789abcdef0123456789abcdef',
+      );
+      await tester.ensureVisible(find.text('停止共享'));
       await tester.tap(find.text('停止共享'));
       await tester.pumpAndSettle();
       expect(c.hosting, false);
@@ -173,6 +202,44 @@ void main() {
       c.dispose();
     },
   );
+
+  testWidgets('closing an active server requires confirmation before quit', (
+    tester,
+  ) async {
+    final client = SharingClient();
+    client.status['sharing']['running'] = true;
+    final methods = <String>[];
+    const channel = MethodChannel('window_manager');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      methods.add(call.method);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(DavApp(client: client, server: true));
+    await tester.pumpAndSettle();
+    final window = tester.state(find.byType(ServerWindow)) as WindowListener;
+    window.onWindowClose();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(client.hosting, isTrue);
+    expect(client.calls, isNot(contains('quit')));
+    window.onWindowClose();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('停止共享'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(client.calls.where((op) => op == 'quit'), hasLength(1));
+    expect(methods, contains('destroy'));
+    await tester.pumpWidget(const SizedBox());
+    client.dispose();
+  });
 
   testWidgets(
     'add connection imports hints then saves and connects the newly created profile',
