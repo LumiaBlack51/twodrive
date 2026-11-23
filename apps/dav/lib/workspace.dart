@@ -3,6 +3,7 @@ import 'language.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
 import 'status_tray.dart';
@@ -48,10 +49,12 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> with WindowListener {
+class _WorkspaceState extends State<Workspace>
+    with WindowListener, WidgetsBindingObserver {
   StorageClient get c => widget.client;
   final tray = StatusTray();
   bool panel = false;
+  bool nativeTrayVisible = false;
   DialogRoute<void>? foregroundPanel;
   bool presenting = false;
   int page = WorkspacePage.overview.index;
@@ -64,10 +67,35 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     super.initState();
     c.addListener(changed);
     if (widget.desktop) {
+      WidgetsBinding.instance.addObserver(this);
       windowManager.addListener(this);
+      tray.onVisibility = (visible) {
+        nativeTrayVisible = visible;
+        if (visible) {
+          c.setView(visible: true, quota: true);
+          unawaited(c.refreshView());
+        } else {
+          unawaited(updateViewAfterTrayClose());
+        }
+      };
       tray.onQuit = () => unawaited(quit());
       tray.onActivate = (position) => unawaited(showPanel(position));
       unawaited(initTray());
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (mounted && Platform.isLinux) setState(() {});
+  }
+
+  Future<void> updateViewAfterTrayClose() async {
+    final focused = await windowManager.isFocused();
+    if (!mounted || nativeTrayVisible) return;
+    if (focused) {
+      refreshWorkspace();
+    } else {
+      c.setView(visible: false);
     }
   }
 
@@ -137,7 +165,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
 
   @override
   void onWindowBlur() {
-    c.setView(visible: false);
+    if (!nativeTrayVisible) c.setView(visible: false);
     if (!Platform.isLinux && !Platform.isWindows && panel && !presenting) {
       unawaited(windowManager.hide());
     }
@@ -211,6 +239,18 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     }
   }
 
+  Future<void> openDashboardFromTray([int? destination]) async {
+    if (Platform.isLinux) {
+      await tray.panel(false);
+      if (!mounted) return;
+      if (destination != null) navigateTo(destination);
+      await windowManager.show();
+      await windowManager.focus();
+      return;
+    }
+    await showManagement(destination);
+  }
+
   Future<void> showManagement([int? destination]) async {
     final popup = foregroundPanel;
     if (popup != null) {
@@ -269,7 +309,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   }
 
   Future<void> signOut() async {
-    await showManagement(2);
+    await openDashboardFromTray(2);
     if (await confirm(
       tr('退出登录？'),
       tr('断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。'),
@@ -316,7 +356,9 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   void dispose() {
     c.removeListener(changed);
     if (widget.desktop) {
+      WidgetsBinding.instance.removeObserver(this);
       windowManager.removeListener(this);
+      tray.onVisibility = null;
       tray.onActivate = null;
     }
     super.dispose();
@@ -468,11 +510,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
 
   Widget buildTray() => TrayPanel(
     client: c,
-    onManage: showManagement,
+    onManage: openDashboardFromTray,
     onRefresh: refreshWorkspace,
     onOpenFolder: () async {
       if (!c.canMount) {
-        await showManagement(0);
+        await openDashboardFromTray(0);
         return;
       }
       if (!c.mounted) {
@@ -487,6 +529,31 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   @override
   Widget build(BuildContext context) {
     if (panel) return buildTray();
+    final workspace = buildWorkspace();
+    if (!widget.desktop || !Platform.isLinux) return workspace;
+    final primary = View.of(context);
+    final secondary = WidgetsBinding.instance.platformDispatcher.views
+        .where((view) => view.viewId != primary.viewId)
+        .firstOrNull;
+    return ViewAnchor(
+      view: secondary == null
+          ? null
+          : View(
+              view: secondary,
+              child: MaterialApp(
+                locale: Localizations.localeOf(context),
+                supportedLocales: const [Locale('zh'), Locale('en')],
+                localizationsDelegates: GlobalMaterialLocalizations.delegates,
+                debugShowCheckedModeBanner: false,
+                theme: Theme.of(context),
+                home: buildTray(),
+              ),
+            ),
+      child: workspace,
+    );
+  }
+
+  Widget buildWorkspace() {
     return Scaffold(
       body: Row(
         children: [

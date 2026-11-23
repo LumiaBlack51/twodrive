@@ -19,17 +19,18 @@ parser.add_argument('--virtual-input', action='store_true',
 args=parser.parse_args()
 if args.virtual_input:
  assert os.environ.get('XDG_RUNTIME_DIR','').startswith('/tmp/td-panel-isolated-')
-tree=subprocess.check_output(['xwininfo','-root','-tree'],text=True)
-windows={}
-for line in tree.splitlines():
- for role,marker in [('tray','("twodrive-development" "twodrive-development")'),('window','("app.twodrive.twodrive_dav" "App.twodrive.twodrive_dav")')]:
-  if marker not in line or 'TwoDrive Development' not in line:continue
+def owned_windows():
+ tree=subprocess.check_output(['xwininfo','-root','-tree'],text=True)
+ for line in tree.splitlines():
+  if 'twodrive' not in line.lower() or not line.strip().startswith('0x'):continue
   ident=line.strip().split()[0]
-  prop=subprocess.check_output(['xprop','-id',ident,'_NET_WM_PID'],text=True)
-  if re.search(r'= '+str(args.pid)+r'\b',prop):windows[role]=ident
-assert set(windows)=={'tray','window'}, 'selected process does not own the expected GTK tray/window'
-window=windows['window'];tray=int(windows['tray'],16)
-info=subprocess.check_output(['xwininfo','-id',windows['tray']],text=True)
+  prop=subprocess.run(['xprop','-id',ident,'_NET_WM_PID','WM_WINDOW_ROLE'],capture_output=True,text=True).stdout
+  if re.search(r'_NET_WM_PID\(CARDINAL\) = '+str(args.pid)+r'\b',prop):yield ident,line,prop
+icon=next((ident for ident,line,_ in owned_windows() if '("twodrive-development" "twodrive-development")' in line),None)
+assert icon, 'selected process does not own the expected XEmbed icon'
+tray=int(icon,16)
+window=None
+info=subprocess.check_output(['xwininfo','-id',icon],text=True)
 tray_x=int(re.search(r'Absolute upper-left X:\s+(-?\d+)',info).group(1))
 tray_y=int(re.search(r'Absolute upper-left Y:\s+(-?\d+)',info).group(1))
 x.XDefaultRootWindow.argtypes=[c.c_void_p];x.XDefaultRootWindow.restype=c.c_ulong
@@ -64,6 +65,10 @@ def expected_geometry(point,geometry):
  return [left*scale,top*scale,390*scale,570*scale]
 
 def state():
+ global window
+ if window is None:
+  window=next((ident for ident,_,props in owned_windows() if '"twodrive-tray"' in props),None)
+  if window is None:return {'Map State':'IsUnMapped'}
  data=subprocess.check_output(['xwininfo','-id',window],text=True)
  return {k:re.search(k+r':\s+(.+)',data).group(1) for k in ['Absolute upper-left X','Absolute upper-left Y','Width','Height','Map State']}
 def click():

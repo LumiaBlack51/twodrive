@@ -17,7 +17,9 @@ G_GNUC_BEGIN_IGNORE_DEPRECATIONS
 namespace {
 struct Tray {
   FlMethodChannel* channel = nullptr;
-  GtkWindow* window = nullptr;
+  GtkWindow* popup = nullptr;
+  FlView* primary = nullptr;
+  FlView* content = nullptr;
   GDBusConnection* bus = nullptr;
   GDBusNodeInfo* info = nullptr;
   guint object = 0;
@@ -47,10 +49,23 @@ GVariant* host_call(Tray* tray, const char* method, const char* reply) {
       kAnchorInterface, method, g_variant_new("(u)", static_cast<guint32>(getpid())),
       G_VARIANT_TYPE(reply), G_DBUS_CALL_FLAGS_NO_AUTO_START, 300, nullptr, nullptr);
 }
+// Flutter 3.41's GTK embedder derives app lifecycle only from its primary
+// view. Keep secondary-view rendering active while the dashboard is minimized.
+void sync_hidden_dashboard_lifecycle(Tray* tray) {
+  auto* primary = gtk_widget_get_toplevel(GTK_WIDGET(tray->primary));
+  auto* surface = gtk_widget_get_window(primary);
+  if (!surface || (gtk_widget_get_mapped(primary) &&
+      !(gdk_window_get_state(surface) & (GDK_WINDOW_STATE_WITHDRAWN | GDK_WINDOW_STATE_ICONIFIED)))) return;
+  const char* state = gtk_widget_get_mapped(GTK_WIDGET(tray->popup))
+      ? "AppLifecycleState.resumed" : "AppLifecycleState.hidden";
+  g_autoptr(GBytes) message = g_bytes_new(state, strlen(state));
+  fl_binary_messenger_send_on_channel(fl_engine_get_binary_messenger(fl_view_get_engine(tray->primary)),
+      "flutter/lifecycle", message, nullptr, nullptr, nullptr);
+}
 void dismiss(Tray* tray) {
-  if (!tray->panel || !gtk_widget_get_visible(GTK_WIDGET(tray->window))) return;
+  if (!tray->panel || !gtk_widget_get_visible(GTK_WIDGET(tray->popup))) return;
   tray->dismissed = g_get_monotonic_time();
-  gtk_widget_hide(GTK_WIDGET(tray->window));
+  gtk_widget_hide(GTK_WIDGET(tray->popup));
 }
 gboolean focus_out(GtkWidget*, GdkEventFocus*, gpointer data) {
   auto* tray = static_cast<Tray*>(data);
@@ -72,13 +87,13 @@ gboolean key_press(GtkWidget*, GdkEventKey* event, gpointer data) {
 }
 gboolean position_mapped_panel(gpointer data) {
   auto* tray = static_cast<Tray*>(data);
-  if (tray->panel && gtk_widget_get_visible(GTK_WIDGET(tray->window))) {
+  if (tray->panel && gtk_widget_get_visible(GTK_WIDGET(tray->popup))) {
     ++tray->placement_attempts;
     const auto bounds = tray->anchor.panel();
     // Wayland does not accept application-selected absolute window positions.
     // GNOME places only this PID's panel using the actual compositor tray actor.
     if (tray->host_anchor) {
-      g_autoptr(GVariant) result = host_call(tray, "PositionPanel", "(b)");
+      g_autoptr(GVariant) result = host_call(tray, "PositionTray", "(b)");
       gboolean placed = FALSE;
       if (result) g_variant_get(result, "(b)", &placed);
       // A Wayland surface can map before the compositor has registered its
@@ -89,11 +104,11 @@ gboolean position_mapped_panel(gpointer data) {
 #ifdef GDK_WINDOWING_X11
     // A session may still have an older positioning component loaded. Apply
     // our dock-safe bounds after its reply, so it cannot reintroduce overlap.
-    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->window))))
-      gdk_window_move_resize(gtk_widget_get_window(GTK_WIDGET(tray->window)),
+    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->popup))))
+      gdk_window_move_resize(gtk_widget_get_window(GTK_WIDGET(tray->popup)),
           bounds.x, bounds.y, bounds.width, bounds.height);
 #endif
-    gtk_widget_set_opacity(GTK_WIDGET(tray->window), 1.0);
+    gtk_widget_set_opacity(GTK_WIDGET(tray->popup), 1.0);
   }
   tray->reposition = 0;
   return G_SOURCE_REMOVE;
@@ -102,8 +117,8 @@ gboolean mapped(GtkWidget*, GdkEvent*, gpointer data) {
   auto* tray = static_cast<Tray*>(data);
   if (tray->panel) {
     // Keep the mapped utility surface out of the taskbar and window switcher.
-    gtk_window_set_skip_taskbar_hint(tray->window, TRUE);
-    gtk_window_set_skip_pager_hint(tray->window, TRUE);
+    gtk_window_set_skip_taskbar_hint(tray->popup, TRUE);
+    gtk_window_set_skip_pager_hint(tray->popup, TRUE);
   }
   if (tray->panel && !tray->reposition) {
     tray->placement_attempts = 0;
@@ -118,7 +133,7 @@ void capture_anchor(Tray* tray, gint x, gint y) {
   if (host) {
     g_variant_get(host, "(biiiiiiii)", &found, &ix, &iy, &iw, &ih, &ax, &ay, &aw, &ah);
     if (found && iw > 0 && ih > 0 && aw > 0 && ah > 0) {
-      auto* display = gtk_widget_get_display(GTK_WIDGET(tray->window));
+      auto* display = gtk_widget_get_display(GTK_WIDGET(tray->popup));
       g_autoptr(GVariant) state = twodrive::current_display_state(tray->bus);
       const int ui_scale = twodrive::legacy_ui_scale(tray->bus, state);
       const auto scale = twodrive::host_coordinate_scale(display, state, ui_scale);
@@ -134,7 +149,7 @@ void capture_anchor(Tray* tray, gint x, gint y) {
     }
   }
   tray->host_anchor = false;
-  auto* display = gtk_widget_get_display(GTK_WIDGET(tray->window));
+  auto* display = gtk_widget_get_display(GTK_WIDGET(tray->popup));
   if (x == 0 && y == 0) {
     auto* pointer = gdk_seat_get_pointer(gdk_display_get_default_seat(display));
     gdk_device_get_position(pointer, nullptr, &x, &y);
@@ -192,19 +207,29 @@ GVariant* property(GDBusConnection*, const gchar*, const gchar*, const gchar*,
   return g_variant_new_string("");
 }
 void activate(Tray* tray, gint x, gint y) {
-    if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray activate: panel=%d visible=%d point=%d,%d", tray->panel, gtk_widget_get_visible(GTK_WIDGET(tray->window)), x, y);
+    if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray activate: panel=%d visible=%d point=%d,%d", tray->panel, gtk_widget_get_visible(GTK_WIDGET(tray->popup)), x, y);
     // Close synchronously on the native event. A tray click can first take
     // focus away; don't reopen the panel on that same click's Activate.
-    if (tray->panel && (gtk_widget_get_visible(GTK_WIDGET(tray->window)) ||
+    if (tray->panel && (gtk_widget_get_visible(GTK_WIDGET(tray->popup)) ||
         g_get_monotonic_time() - tray->dismissed < 250000)) {
       dismiss(tray);
       return;
     }
     capture_anchor(tray, x, y);
-    g_autoptr(FlValue) args = fl_value_new_map();
-    fl_value_set_string_take(args, "x", fl_value_new_int(x));
-    fl_value_set_string_take(args, "y", fl_value_new_int(y));
-    fl_method_channel_invoke_method(tray->channel, "activate", args, nullptr, nullptr, nullptr);
+    if (!tray->content) {
+      tray->content = fl_view_new_for_engine(fl_view_get_engine(tray->primary));
+      gtk_container_add(GTK_CONTAINER(tray->popup), GTK_WIDGET(tray->content));
+      gtk_widget_show(GTK_WIDGET(tray->content));
+    }
+    const auto bounds = tray->anchor.panel();
+    gtk_window_set_default_size(tray->popup, bounds.width, bounds.height);
+    gtk_window_resize(tray->popup, bounds.width, bounds.height);
+    gtk_window_move(tray->popup, bounds.x, bounds.y);
+    tray->panel = true;
+    if (tray->host_anchor) gtk_widget_set_opacity(GTK_WIDGET(tray->popup), 0);
+    gtk_widget_show(GTK_WIDGET(tray->popup));
+    gtk_window_present_with_time(tray->popup, tray->activation_time);
+    gtk_widget_grab_focus(GTK_WIDGET(tray->content));
 }
 void legacy_activate(GtkStatusIcon* icon, gpointer data) {
   auto* tray = static_cast<Tray*>(data);
@@ -234,7 +259,7 @@ void method(GDBusConnection*, const gchar*, const gchar*, const gchar*,
   if (g_str_equal(name, "ProvideXdgActivationToken")) {
     const gchar* token = nullptr;
     g_variant_get(parameters, "(&s)", &token);
-    gtk_window_set_startup_id(tray->window, token);
+    gtk_window_set_startup_id(tray->popup, token);
     g_dbus_method_invocation_return_value(invocation, nullptr);
     return;
   }
@@ -264,41 +289,7 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
   auto* tray = static_cast<Tray*>(data);
   const char* name = fl_method_call_get_name(request);
   if (g_str_equal(name, "panel")) {
-    auto* args = fl_method_call_get_args(request);
-    const bool panel = fl_value_get_bool(fl_value_lookup_string(args, "enabled"));
-    tray->panel = panel;
-    tray->focus_armed = false;
-    if (!panel) {
-      if (tray->reposition) g_source_remove(tray->reposition);
-      tray->reposition = 0;
-      gtk_widget_set_opacity(GTK_WIDGET(tray->window), 1.0);
-    }
-    if (panel && !tray->anchor.valid) capture_anchor(tray, 0, 0);
-    const auto bounds = tray->anchor.panel();
-    if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray bounds: %d,%d %dx%d", bounds.x, bounds.y, bounds.width, bounds.height);
-    // This surface alternates between a tray utility and the dashboard.
-    // Apply its role before mapping, and restore normal window participation
-    // when returning to the dashboard. Do not rely only on the Dart hint.
-    gtk_window_set_type_hint(tray->window,
-        panel ? GDK_WINDOW_TYPE_HINT_UTILITY : GDK_WINDOW_TYPE_HINT_NORMAL);
-    gtk_window_set_skip_taskbar_hint(tray->window, panel);
-    gtk_window_set_skip_pager_hint(tray->window, panel);
-    gtk_window_set_decorated(tray->window, !panel);
-    gtk_window_set_resizable(tray->window, TRUE);
-    GdkGeometry geometry = {};
-    geometry.min_width = panel ? bounds.width : 840;
-    geometry.min_height = panel ? bounds.height : 580;
-    geometry.max_width = bounds.width;
-    geometry.max_height = bounds.height;
-    gtk_window_set_geometry_hints(tray->window, nullptr, &geometry,
-        static_cast<GdkWindowHints>(panel ? GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE : GDK_HINT_MIN_SIZE));
-    gtk_window_resize(tray->window, panel ? bounds.width : 1120, panel ? bounds.height : 760);
-    if (panel) {
-      if (tray->host_anchor) gtk_widget_set_opacity(GTK_WIDGET(tray->window), 0.0);
-      gtk_window_move(tray->window, bounds.x, bounds.y);
-      gtk_widget_show(GTK_WIDGET(tray->window));
-      gtk_window_present_with_time(tray->window, tray->activation_time);
-    }
+    dismiss(tray);
   } else if (g_str_equal(name, "destroy")) {
     stop(tray);
   } else if (g_str_equal(name, "configure")) {
@@ -315,7 +306,7 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
     const char* desktop = g_getenv("XDG_CURRENT_DESKTOP");
     bool gnome = desktop && (g_strrstr(desktop, "GNOME") || g_strrstr(desktop, "Zorin"));
 #ifdef GDK_WINDOWING_X11
-    gnome = gnome && GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->window)));
+    gnome = gnome && GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->popup)));
 #else
     gnome = false;
 #endif
@@ -363,8 +354,10 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
 }
 void dispose(gpointer data) {
   auto* tray = static_cast<Tray*>(data);
-  g_signal_handlers_disconnect_by_data(tray->window, tray);
   stop(tray);
+  g_signal_handlers_disconnect_by_data(gtk_widget_get_toplevel(GTK_WIDGET(tray->primary)), tray);
+  g_signal_handlers_disconnect_by_data(tray->popup, tray);
+  gtk_widget_destroy(GTK_WIDGET(tray->popup));
   if (tray->info) g_dbus_node_info_unref(tray->info);
   g_clear_object(&tray->bus);
   delete tray;
@@ -381,11 +374,32 @@ void register_status_tray(FlView* view) {
       "twodrive/status_tray", FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(tray->channel, call, tray, dispose);
   auto* window = GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(view)));
-  tray->window = window;
-  g_signal_connect(window, "focus-out-event", G_CALLBACK(focus_out), tray);
-  g_signal_connect(window, "focus-in-event", G_CALLBACK(focus_in), tray);
-  g_signal_connect(window, "key-press-event", G_CALLBACK(key_press), tray);
-  g_signal_connect(window, "map-event", G_CALLBACK(mapped), tray);
+  tray->primary = view;
+  tray->popup = GTK_WINDOW(gtk_window_new(GTK_WINDOW_TOPLEVEL));
+  gtk_window_set_title(tray->popup, "TwoDrive Tray");
+  gtk_window_set_role(tray->popup, "twodrive-tray");
+  gtk_window_set_type_hint(tray->popup, GDK_WINDOW_TYPE_HINT_UTILITY);
+  gtk_window_set_decorated(tray->popup, FALSE);
+  gtk_window_set_keep_above(tray->popup, TRUE);
+  gtk_window_set_skip_taskbar_hint(tray->popup, TRUE);
+  gtk_window_set_skip_pager_hint(tray->popup, TRUE);
+  g_signal_connect(tray->popup, "delete-event", G_CALLBACK(gtk_widget_hide_on_delete), nullptr);
+  g_signal_connect(tray->popup, "focus-out-event", G_CALLBACK(focus_out), tray);
+  g_signal_connect(tray->popup, "focus-in-event", G_CALLBACK(focus_in), tray);
+  g_signal_connect(tray->popup, "key-press-event", G_CALLBACK(key_press), tray);
+  g_signal_connect(tray->popup, "map-event", G_CALLBACK(mapped), tray);
+  g_signal_connect(tray->popup, "map", G_CALLBACK(+[](GtkWidget*, Tray* t) {
+    sync_hidden_dashboard_lifecycle(t);
+    fl_method_channel_invoke_method(t->channel, "trayVisible", nullptr, nullptr, nullptr, nullptr);
+  }), tray);
+  g_signal_connect(tray->popup, "unmap", G_CALLBACK(+[](GtkWidget*, Tray* t) {
+    sync_hidden_dashboard_lifecycle(t);
+    fl_method_channel_invoke_method(t->channel, "trayHidden", nullptr, nullptr, nullptr, nullptr);
+  }), tray);
+  g_signal_connect_after(window, "window-state-event", G_CALLBACK(+[](GtkWidget*, GdkEventWindowState*, Tray* t) -> gboolean {
+    if (gtk_widget_get_mapped(GTK_WIDGET(t->popup))) sync_hidden_dashboard_lifecycle(t);
+    return FALSE;
+  }), tray);
   auto* app = gtk_window_get_application(window);
   if (app) {
     g_autoptr(GSimpleAction) action = g_simple_action_new("quit", nullptr);
