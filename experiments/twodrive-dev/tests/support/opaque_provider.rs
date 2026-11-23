@@ -20,6 +20,7 @@ pub struct OpaqueProvider {
     pub download_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub metadata_lookups: Arc<Mutex<Vec<String>>>,
     pub directory_lookups: Arc<Mutex<Vec<String>>>,
+    pub mutation_gate: Option<Arc<Mutex<()>>>,
     pub upload_delay: std::time::Duration,
     pub delete_delay: std::time::Duration,
     pub parent_browsing: bool,
@@ -31,6 +32,7 @@ impl Default for OpaqueProvider {
             download_gate: None,
             metadata_lookups: Arc::default(),
             directory_lookups: Arc::default(),
+            mutation_gate: None,
             upload_delay: std::time::Duration::ZERO,
             delete_delay: std::time::Duration::ZERO,
             parent_browsing: false,
@@ -200,6 +202,9 @@ impl CloudBackend for OpaqueProvider {
         Ok(m)
     }
     fn delete(&self, id: &str) -> anyhow::Result<()> {
+        if let Some(gate) = &self.mutation_gate {
+            drop(gate.lock().unwrap_or_else(|e| e.into_inner()));
+        }
         std::thread::sleep(self.delete_delay);
         self.by_id(id)?;
         self.files.lock().unwrap().remove(id);
@@ -229,6 +234,9 @@ impl Provider for OpaqueProvider {
         version: Option<&str>,
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
+        if let Some(gate) = &self.mutation_gate {
+            drop(gate.lock().unwrap_or_else(|e| e.into_inner()));
+        }
         std::thread::sleep(self.upload_delay);
         self.upload_file_with_version(path, source, id, version, &mut |done, total| {
             progress(done, total)
