@@ -534,13 +534,18 @@ impl WebDavBackend {
         Ok(path)
     }
 
-    fn propfind(&self, path: &str, depth: u8) -> anyhow::Result<Vec<MetadataEntry>> {
+    fn propfind_xml(
+        &self,
+        path: &str,
+        depth: u8,
+        properties: &'static str,
+    ) -> anyhow::Result<String> {
         let response = self.send(
             "PROPFIND",
             self.request("PROPFIND", path)?
                 .header("Depth", depth.to_string())
                 .header("Content-Type", "application/xml; charset=utf-8")
-                .body(PROPFIND),
+                .body(properties),
         )?;
         ensure!(
             response.status() == StatusCode::MULTI_STATUS,
@@ -552,6 +557,80 @@ impl WebDavBackend {
             xml.len() as u64 <= MAX_XML,
             "PROPFIND response exceeds metadata limit"
         );
+        Ok(xml)
+    }
+
+    fn share_quota(&self, xml: &str) -> anyhow::Result<Option<crate::provider::StorageUsage>> {
+        let document = roxmltree::Document::parse(xml)?;
+        let root = document.root_element();
+        ensure!(is_dav(root, "multistatus"), "invalid DAV quota response");
+        let mut responses = root.children().filter(|n| is_dav(*n, "response"));
+        let response = responses.next().context("missing DAV quota response")?;
+        ensure!(
+            responses.next().is_none()
+                && self.href_path(
+                    child_text(response, "href").context("missing DAV href")?,
+                    "/"
+                )? == "/",
+            "unexpected DAV quota resource"
+        );
+        let mut used = None;
+        let mut free = None;
+        // Older TDLink servers reply with only the root href when neither
+        // property is implemented. An explicit failing status is still an error.
+        if let Some(status) = child_text(response, "status") {
+            ensure!(
+                status.split_whitespace().nth(1) == Some("200"),
+                "DAV quota resource failed"
+            );
+        }
+        for propstat in response.children().filter(|n| is_dav(*n, "propstat")) {
+            let code = child_text(propstat, "status").and_then(|s| s.split_whitespace().nth(1));
+            if code == Some("404") {
+                continue;
+            }
+            ensure!(code == Some("200"), "DAV quota property request failed");
+            let props = propstat
+                .children()
+                .find(|n| is_dav(*n, "prop"))
+                .context("missing DAV quota properties")?;
+            for prop in props.children() {
+                let field = if is_dav(prop, "quota-used-bytes") {
+                    &mut used
+                } else if is_dav(prop, "quota-available-bytes") {
+                    &mut free
+                } else {
+                    continue;
+                };
+                ensure!(field.is_none(), "duplicate DAV quota property");
+                *field = Some(
+                    prop.text()
+                        .context("empty DAV quota property")?
+                        .trim()
+                        .parse::<u64>()?,
+                );
+            }
+        }
+        if used.is_none() && free.is_none() {
+            return Ok(None);
+        }
+        let total = used
+            .zip(free)
+            .map(|(u, f)| {
+                u.checked_add(f)
+                    .context("DAV quota exceeds supported range")
+            })
+            .transpose()?;
+        Ok(Some(crate::provider::StorageUsage {
+            used,
+            free,
+            total,
+            scope: "share".into(),
+        }))
+    }
+
+    fn propfind(&self, path: &str, depth: u8) -> anyhow::Result<Vec<MetadataEntry>> {
+        let xml = self.propfind_xml(path, depth, PROPFIND)?;
         let document = roxmltree::Document::parse(&xml)?;
         ensure!(
             is_dav(document.root_element(), "multistatus"),
@@ -890,6 +969,16 @@ impl CloudBackend for WebDavBackend {
 }
 
 impl crate::provider::Provider for WebDavBackend {
+    fn storage_usage(
+        &self,
+        check: &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<crate::provider::StorageUsage>> {
+        check()?;
+        let xml = self.propfind_xml("/", 0, r#"<D:propfind xmlns:D="DAV:"><D:prop><D:quota-used-bytes/><D:quota-available-bytes/></D:prop></D:propfind>"#)?;
+        check()?;
+        self.share_quota(&xml)
+    }
+
     fn capabilities(&self) -> crate::provider::Capabilities {
         crate::provider::Capabilities {
             upload: self.writable,
@@ -927,6 +1016,56 @@ mod desktop_tests {
         thread,
         time::Instant,
     };
+    #[test]
+    fn share_quota_accepts_partial_values_and_rejects_foreign_or_invalid_data() {
+        let backend = WebDavBackend::new("http://127.0.0.1/share/", None, false).unwrap();
+        let xml = |href, status, properties| {
+            format!(
+                r#"<multistatus xmlns="DAV:"><response><href>{href}</href><propstat><prop>{properties}</prop><status>HTTP/1.1 {status}</status></propstat></response></multistatus>"#
+            )
+        };
+        let legacy =
+            r#"<multistatus xmlns="DAV:"><response><href>/share/</href></response></multistatus>"#;
+        assert_eq!(backend.share_quota(legacy).unwrap(), None);
+        assert!(
+            backend
+                .share_quota(
+                    &legacy.replace("</href>", "</href><status>HTTP/1.1 403 Forbidden</status>")
+                )
+                .is_err()
+        );
+        let free = "<quota-available-bytes>0</quota-available-bytes>";
+        let partial = backend
+            .share_quota(&xml("/share/", "200 OK", free))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (partial.used, partial.free, partial.total),
+            (None, Some(0), None)
+        );
+        assert_eq!(
+            backend
+                .share_quota(&xml("/share/", "404 Not Found", free))
+                .unwrap(),
+            None
+        );
+        for invalid in [
+            xml("/other/", "200 OK", free),
+            xml("/share/", "403 Forbidden", free),
+            xml(
+                "/share/",
+                "200 OK",
+                "<quota-used-bytes>invalid</quota-used-bytes>",
+            ),
+            xml(
+                "/share/",
+                "200 OK",
+                "<quota-used-bytes>18446744073709551615</quota-used-bytes><quota-available-bytes>1</quota-available-bytes>",
+            ),
+        ] {
+            assert!(backend.share_quota(&invalid).is_err());
+        }
+    }
     fn flaky_server() -> (String, Arc<AtomicUsize>, thread::JoinHandle<()>) {
         let server = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/", server.local_addr().unwrap());

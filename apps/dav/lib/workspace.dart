@@ -109,14 +109,14 @@ class _WorkspaceState extends State<Workspace>
   }
 
   Future<void> updateTray() async {
-    final signature =
-        '${c.connected}:${c.busy}:${c.error}:${c.mounted}:${c.proxyFallback}:${c.paused}:${c.syncing}:${c.syncError}:${c.trayTitle}';
+    final icon = c.trayState;
+    final title = c.trayTitle;
+    final signature = '$icon:$title';
     if (_traySignature == signature) {
       return;
     }
+    await tray.icon(icon, title: title);
     _traySignature = signature;
-    final icon = c.trayState;
-    await tray.icon(icon, title: c.trayTitle);
   }
 
   void updateViewInterests() {
@@ -608,10 +608,7 @@ class _WorkspaceState extends State<Workspace>
                       ),
                       for (final destination in WorkspacePage.sidebar)
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 2),
                           margin: const EdgeInsets.symmetric(horizontal: 8),
                           decoration: BoxDecoration(
                             color: page == destination.index
@@ -635,8 +632,6 @@ class _WorkspaceState extends State<Workspace>
                             leading: Icon(destination.icon),
                             title: Text(
                               destination.label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: page == destination.index

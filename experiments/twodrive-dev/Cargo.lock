@@ -3840,7 +3840,7 @@ dependencies = [
 
 [[package]]
 name = "twodrive-dev"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3867,6 +3867,7 @@ dependencies = [
  "reqwest 0.12.28",
  "ring",
  "roxmltree",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",

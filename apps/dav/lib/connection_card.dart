@@ -137,7 +137,12 @@ class ConnectionCard extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 8),
-        StorageUsageView(value: usage, connected: online, onRefresh: onRefresh),
+        StorageUsageView(
+          value: usage,
+          shared: profile['kind'] == 'peer',
+          connected: online,
+          onRefresh: onRefresh,
+        ),
       ],
     );
     return Card(

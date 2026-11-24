@@ -28,7 +28,21 @@ class TrayPanel extends StatelessWidget {
     final backup = c.status['backup'] as Map? ?? {};
     final overall = c.status['overall'] as Map?;
     final issues = (overall?['issues'] as List?) ?? [];
-    final fallback = c.proxyFallback || overall?['route_fallback'] == true;
+    final endpointFallback = c.proxyFallback;
+    final fallback =
+        endpointFallback ||
+        (c.connected && c.status['system_tunnel_active'] == true);
+    final otherFallbacks = ((c.status['accounts'] as List?) ?? [])
+        .whereType<Map>()
+        .where(
+          (a) =>
+              a['profile'] != c.selected &&
+              a['connected'] == true &&
+              a['route_fallback'] == true,
+        )
+        .map((a) => a['name'])
+        .whereType<String>()
+        .join(', ');
     final issue =
         c.error ??
         (issues.isNotEmpty
@@ -72,7 +86,7 @@ class TrayPanel extends StatelessWidget {
         : issue != null
         ? tr('需要处理')
         : fallback
-        ? tr('已连接 · 使用系统／代理兜底')
+        ? tr(endpointFallback ? '已连接 · 使用系统／代理兜底' : '部分请求正在使用系统网络')
         : c.syncing
         ? tr('正在同步')
         : (backup['folders'] as num? ?? 0) > 0 &&
@@ -331,21 +345,37 @@ class TrayPanel extends StatelessWidget {
                             const SizedBox(height: 8),
                             StorageUsageView(
                               ring: true,
+                              shared: c.profile?['kind'] == 'peer',
                               value: c.quotas[c.selected],
                               connected: c.connected,
                             ),
                           ],
                         ),
                       ),
-                      if (fallback)
+                      if (fallback ||
+                          (c.connected &&
+                              c.status['component_fallback'] == true))
                         Padding(
                           padding: EdgeInsets.all(12),
                           child: Text(
-                            tr('直连未能完成部分请求，已使用系统／代理兜底。'),
+                            endpointFallback
+                                ? tr('此设备连接已切换到系统网络。')
+                                : fallback
+                                ? tr('中继或设备发现的 TCP 连接正在使用系统网络。')
+                                : tr('部分辅助网络请求尝试使用系统网络。'),
                             style: TextStyle(
-                              color: Color(0xff985800),
+                              color: fallback
+                                  ? const Color(0xff985800)
+                                  : Colors.blueGrey,
                               fontSize: 12,
                             ),
+                          ),
+                        ),
+                      if (otherFallbacks.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            tr('以下设备正在使用系统网络：{arg0}', [otherFallbacks]),
                           ),
                         ),
                       if (issue != null)

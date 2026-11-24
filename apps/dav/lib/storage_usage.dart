@@ -21,14 +21,17 @@ class StorageUsageView extends StatelessWidget {
     required this.connected,
     this.onRefresh,
     this.ring = false,
+    this.shared = false,
   });
   final Json? value;
   final bool connected;
   final VoidCallback? onRefresh;
   final bool ring;
+  final bool shared;
   @override
   Widget build(BuildContext context) {
     final usage = value?['usage'] as Map?;
+    final shareStorage = shared || usage?['scope'] == 'share';
     final total = usage?['total'] as num?;
     final used = usage?['used'] as num?;
     final free = usage?['free'] as num?;
@@ -44,7 +47,7 @@ class StorageUsageView extends StatelessWidget {
         : !connected
         ? tr('未连接 · 连接后获取空间信息')
         : value?['state'] == 'unsupported'
-        ? tr('此网盘暂不提供容量信息')
+        ? tr(shareStorage ? '共享端未报告容量' : '此网盘暂不提供容量信息')
         : value?['state'] == 'unavailable'
         ? tr('空间信息暂时无法获取')
         : tr('正在获取空间信息…');
@@ -55,9 +58,21 @@ class StorageUsageView extends StatelessWidget {
         Row(
           children: [
             Tooltip(
-              message: tr('账号总空间可能与照片、邮件等服务共用；容量由网盘返回。'),
+              message: tr(
+                shared
+                    ? '容量为共享目录所在文件系统的已用及可用空间。'
+                    : shareStorage
+                    ? '容量由共享端返回。'
+                    : '账号总空间可能与照片、邮件等服务共用；容量由网盘返回。',
+              ),
               child: Text(
-                tr('账号空间'),
+                tr(
+                  shared
+                      ? '共享所在卷'
+                      : shareStorage
+                      ? '共享空间'
+                      : '账号空间',
+                ),
                 style: TextStyle(fontSize: 12, color: Colors.blueGrey),
               ),
             ),

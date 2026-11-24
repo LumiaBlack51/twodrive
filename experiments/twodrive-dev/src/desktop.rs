@@ -712,7 +712,7 @@ impl App {
             }
         };
         Ok(
-            json!({"providers":providers::catalog(),"capabilities":self.capabilities(),"route_fallback":self.network.fallback(),"paused":self.state.dir.join("paused").exists(),"backup":backup,"backup_failed":backup_failed,"mount_activity":mount_activity,
+            json!({"providers":providers::catalog(),"capabilities":self.capabilities(),"route_fallback":self.network.fallback(),"component_fallback":self.network.component_fallback(),"system_tunnel_active":self.network.system_tunnel_active(),"paused":self.state.dir.join("paused").exists(),"backup":backup,"backup_failed":backup_failed,"mount_activity":mount_activity,
               "version":env!("CARGO_PKG_VERSION"),"local_files":self.native_fixture.capabilities(),
             "build":{"core_version":twodrive_core::VERSION,"edition":"Development","platform":std::env::consts::OS,"revision":option_env!("TWODRIVE_BUILD_REVISION").unwrap_or("local")},
             "sync_policy":twodrive_dev::sync_policy::SyncPolicy::load(&self.state.dir)?,

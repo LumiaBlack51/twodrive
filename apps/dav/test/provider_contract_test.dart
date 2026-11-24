@@ -299,6 +299,15 @@ void main() {
         icons.last,
         endsWith('cloud-warning.${Platform.isWindows ? 'ico' : 'svg'}'),
       );
+      c.status = {'connected': true, 'component_fallback': true};
+      c.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(icons.last, isNot(contains('cloud-warning')));
+      c.status['overall'] = {'route_fallback': true};
+      c.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(icons.last, contains('cloud-warning'));
+      c.status = {'connected': true, 'route_fallback': true};
       expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
       expect(find.byIcon(Icons.error_outline), findsNothing);
       await tester.pumpWidget(
@@ -324,10 +333,78 @@ void main() {
       c.dispose();
     },
   );
+  testWidgets('another account fallback does not label the selected drive', (
+    tester,
+  ) async {
+    final c = StorageClient()
+      ..selected = 'local'
+      ..status = {
+        'connected': true,
+        'route_fallback': false,
+        'overall': {'route_fallback': true},
+        'accounts': [
+          {
+            'profile': 'other',
+            'name': 'Other device',
+            'connected': true,
+            'route_fallback': true,
+          },
+        ],
+      };
+    expect(c.trayState, 'warning');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TrayPanel(
+          client: c,
+          onManage: ([int page = 0]) async {},
+          onOpenFolder: () async {},
+          onQuit: () async {},
+        ),
+      ),
+    );
+    expect(find.text('已连接 · 使用系统／代理兜底'), findsNothing);
+    expect(find.textContaining('Other device'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
+  testWidgets(
+    'active relay has its own warning and identifies the share volume',
+    (tester) async {
+      final c = StorageClient()
+        ..selected = 'pc'
+        ..profiles = [
+          {'id': 'pc', 'kind': 'peer', 'name': 'Fixture PC'},
+        ]
+        ..status = {
+          'connected': true,
+          'system_tunnel_active': true,
+          'component_fallback': true,
+        };
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TrayPanel(
+            client: c,
+            onManage: ([int page = 0]) async {},
+            onOpenFolder: () async {},
+            onQuit: () async {},
+          ),
+        ),
+      );
+      expect(find.text('部分请求正在使用系统网络'), findsOneWidget);
+      expect(find.text('已连接 · 使用系统／代理兜底'), findsNothing);
+      expect(find.text('共享所在卷'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
   test('warning is connected fallback only; actual errors retain priority', () {
     final c = StorageClient();
     c.status = {'connected': true, 'route_fallback': true, 'paused': true};
     expect(c.trayState, 'warning');
+    c.status = {'connected': true, 'system_tunnel_active': true};
+    expect(c.trayState, 'warning');
+    c.status['system_tunnel_active'] = false;
+    expect(c.trayState, 'connected');
     c.status['backup_failed'] = true;
     expect(c.trayState, 'error');
     c.status = {'connected': false, 'route_fallback': true};
