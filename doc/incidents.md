@@ -4,7 +4,7 @@
 
 - 日期与影响：2026-11-24，[PR #87 的 Linux 作业](https://github.com/LumiaBlack51/twodrive/actions/runs/45338760989/job/138257053270) 在夹具第 207 行报 missing object ID，阻断候选构建。关联 TD-20261123-03。此次是解锁后的对象检查竞态。
 - 触发和证据：放行合成云端变更后，测试以同名路径读出对象 ID，再分开下载。两次查询之间，队列可以正常删除旧锁并创建新一代。此时查询旧 ID 会失败。
-- 修复和验证：等待持久队列排空后读取最终对象，仍严格断言第二代的内容和后续删除；放行前的前台响应及远端状态断言保留。使用隔离提供者，未操作用户文件。实际托管复验随修复 PR 跟踪。
+- 修复和验证：等待持久队列排空后读取最终对象，仍严格断言第二代的内容和后续删除；放行前的前台响应及远端状态断言保留。使用隔离提供者，未操作用户文件。该回归在本机连续 12 次通过，[合并提交的 Linux 与 Windows 桌面检查](https://github.com/LumiaBlack51/twodrive/actions/runs/45345701187)均通过。
 
 ## TD-20261124-03：未设置 Google Drive 备份仍告警，Linux 托盘展开时底部闪动
 
@@ -13,6 +13,14 @@
 - 根因与修复：连接恢复时无条件为支持备份的账号启动 worker，甚至零来源也需再次连接提供者；若初始化失败，空任务报告永久停在 starting。按启用目录数写入 idle 或 starting，只有存在启用目录时才创建 worker。保存备份设置仍会启动或停止相应工作，真实错误按原逻辑提示。英文托盘翻译来自引擎的账号问题。
 - 托盘底部：用户确认是打开文件夹按钮下方的 TwoDrive 字样。旧版映射时没有等待次视图首帧；在 X11／XWayland 用 GTK 的坐标提前放置后，还要求 Shell 对同一窗口反复调整尺寸。修复后 X11 只读取 Shell 锚点，使用 GDK 安放窗口，Wayland 仍通过 Shell 安放。首帧和定位均就绪后才显示窗体。页脚使用独立不透明绘制区域。
 - 实测与边界：0.3.1 正式引擎在无来源且无法取得合成 worker 锁时回归失败。修复后双账号 IPC 及空、禁用、重新启用、移除配置的回归通过。Xvfb、Openbox 与模拟 Shell 锚点的旧包每次点击调用四次 PositionTray，修复后没有争用；最小化主窗口时连续 32 次采样，页脚的位置和字样像素一致。静态截图不能确定用户桌面每一次闪烁的来源。Flutter 全套 147 项通过，分析无问题；启用 mount 的 Rust 测试 245 项通过、13 项按配置忽略，严格 Clippy 与双账号引擎 IPC 通过。测试未写入真实 Google Drive。
+
+### Development 0.3.2 发布及安装验证
+
+修复已随 [PR #87](https://github.com/LumiaBlack51/twodrive/pull/87) 合入 dev。合并提交 `dd918d4fd05b031dcc4287b88cc06a1581c2dd8a` 的七项工作流通过。发布前逐项核对了 GitHub 上 16 个制品的大小与 SHA-256。用正式 Linux 包复跑双账号备份回归，在 X11 下连续 32 次采样的页脚像素一致，在隔离的原生 GNOME Wayland 会话中三次关闭重开均定位稳定。[Development 0.3.2](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.2) · [运行时验证](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.2/runtime-validation.json)
+
+本机检查写入、传输和待处理队列均为零后，按现有安装方式覆盖升级 Linux 客户端。63 个运行时文件逐一匹配正式包；运行中的桌面程序、Flutter AOT、引擎与配对程序均已核对。Google Drive 和 Windows 共享盘恢复到原挂载点，配置、会话及绑定验证通过。本机 Google Drive 账号无启用备份目录，报告为空闲，无活动任务或备份子进程，系统托盘图标恢复为已连接。验证过程未向 Google Drive 写入文件。
+
+Windows 共享端在空闲时通过专属控制台正常退出，原位置覆盖升级为 0.3.2。运行程序摘要与正式包匹配，启动参数、设备身份和配对记录均已核对。Linux 客户端通过原配对对共享根目录作只读容量查询，收到 HTTP 207，总容量与 Windows 卷 API 一致（953.9 GiB）。
 
 ## TD-20261124-02：Development 路由计数在托管严格编译时被拒绝
 
