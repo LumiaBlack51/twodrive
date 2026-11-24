@@ -1,3 +1,9 @@
+twodrive (0.2.24+dev0.3.2-1) unstable; urgency=medium
+
+  * Keep unconfigured backups idle and stabilize the Linux tray footer.
+
+ -- TwoDrive maintainers <maintainers@users.noreply.github.com>  Tue, 24 Nov 2026 14:00:00 +0800
+
 twodrive (0.2.24+dev0.3.1-1) unstable; urgency=medium
 
   * Correct peer route reporting and display remote share capacity.

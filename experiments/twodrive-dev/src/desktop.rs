@@ -576,7 +576,9 @@ impl App {
         {
             return Ok(());
         }
-        backup::reset_report(&self.state, p)?;
+        if !backup::prepare_worker(&self.state, p)? {
+            return Ok(());
+        }
         let mut cmd = Command::new(std::env::current_exe()?);
         cmd.arg("--state")
             .arg(&self.state.dir)

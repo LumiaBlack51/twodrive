@@ -48,12 +48,15 @@ pub fn folders(state: &State, p: &Profile) -> anyhow::Result<Vec<Folder>> {
 pub fn save_folders(state: &State, p: &Profile, folders: &[Folder]) -> anyhow::Result<()> {
     directory(state, p)?.save("folders.json", &folders)
 }
-pub fn reset_report(state: &State, p: &Profile) -> anyhow::Result<()> {
+pub fn prepare_worker(state: &State, p: &Profile) -> anyhow::Result<bool> {
     let count = folders(state, p)?.iter().filter(|f| f.enabled).count();
+    let enabled = count > 0;
+    let phase = if enabled { "starting" } else { "idle" };
     directory(state, p)?.save(
         "report.json",
-        &json!({"state":"starting","active":[],"recent":[],"folders":count,"completed_scan":false}),
-    )
+        &json!({"state":phase,"active":[],"recent":[],"folders":count,"completed_scan":false}),
+    )?;
+    Ok(enabled)
 }
 pub fn cleanup_spool(state: &State, p: &Profile) -> anyhow::Result<()> {
     let file = directory(state, p)?.dir.join("snapshot");
@@ -436,6 +439,35 @@ pub fn run(
 mod tests {
     use super::super::test_provider::OpaqueProvider;
     use super::*;
+    #[test]
+    fn disabled_backup_stays_idle_on_connect_and_when_the_last_source_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = State::new(temp.path().join("state")).unwrap();
+        let profile = Profile {
+            id: "fixture".into(),
+            ..Default::default()
+        };
+        let mut source = Folder {
+            local: temp.path().join("source"),
+            remote: "/saved".into(),
+            enabled: false,
+        };
+        for sources in [vec![], vec![source.clone()]] {
+            save_folders(&state, &profile, &sources).unwrap();
+            assert!(!prepare_worker(&state, &profile).unwrap());
+            let idle = report(&state, &profile).unwrap();
+            assert_eq!(idle["state"], "idle");
+            assert_eq!(idle["folders"], 0);
+        }
+        source.enabled = true;
+        save_folders(&state, &profile, &[source]).unwrap();
+        assert!(prepare_worker(&state, &profile).unwrap());
+        assert_eq!(report(&state, &profile).unwrap()["state"], "starting");
+        save_folders(&state, &profile, &[]).unwrap();
+        assert!(!prepare_worker(&state, &profile).unwrap());
+        assert_eq!(report(&state, &profile).unwrap()["state"], "idle");
+    }
+
     #[test]
     fn only_unchanged_create_intents_can_resume_the_owned_session() {
         let record = Record {

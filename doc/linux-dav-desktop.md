@@ -69,6 +69,10 @@ until manually connected. Changing this preference does not disconnect or connec
 accounts in the running app. Explicit maintenance `--restore-connections` requests
 continue to select their specified accounts.
 
+For Google Drive and other backup-capable accounts, the backup worker starts when
+at least one backup folder is enabled. Removing or disabling the last folder
+returns backup status to idle. The account can stay connected and mounted.
+
 **连接后自动挂载** independently controls automatic file-manager mounting after both
 manual connection and startup restoration. Disabling it still allows connection
 restoration, but sends no automatic mount request and does not remove existing

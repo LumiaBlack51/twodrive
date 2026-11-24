@@ -82,6 +82,11 @@ def run(args):
             engine = desktop.Engine(args.engine, args.peer, root)
             try:
                 revisions = {}
+                # An unconfigured backup must never need the worker's exclusive lock.
+                lock = root / 'client' / 'backup-a' / 'run.lock'
+                engine.call('profiles')
+                lock.parent.mkdir(mode=0o700)
+                lock.mkdir(mode=0o700)
                 for account in payloads:
                     server = ThreadingHTTPServer(('127.0.0.1', 0), handler(account))
                     servers.append(server)
@@ -90,6 +95,10 @@ def run(args):
                                 'url': f'http://127.0.0.1:{server.server_port}/', 'network_route': 'system'})
                     revisions[account] = engine.call('connect', {'id': account})['revision']
                 assert {p['id'] for p in engine.call('status')['connections']} == {'a', 'b'}
+                account_a = next(item for item in engine.call('status')['accounts'] if item['profile'] == 'a')
+                assert account_a['backup']['state'] == 'idle' and not account_a['backup_failed'], account_a['backup']
+                assert not engine.call('status')['overall']['error']
+                report['checks']['no_backup_sources_stays_idle_without_worker'] = True
                 assert all(p['connected'] for p in engine.call('profiles')['profiles'])
                 report['checks']['both_accounts_remain_connected'] = True
 

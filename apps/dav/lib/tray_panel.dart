@@ -46,7 +46,11 @@ class TrayPanel extends StatelessWidget {
     final issue =
         c.error ??
         (issues.isNotEmpty
-            ? issues.map((v) => '${v['account']} · ${v['message']}').join('\n')
+            ? issues
+                  .map(
+                    (v) => '${v['account']} · ${tr(v['message'].toString())}',
+                  )
+                  .join('\n')
             : null) ??
         (c.status['backup_failed'] == true
             ? tr('备份进程已退出，请重新连接')
@@ -543,11 +547,20 @@ class TrayPanel extends StatelessWidget {
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.only(bottom: 8),
-            child: Text(
-              'TwoDrive',
-              style: TextStyle(fontSize: 10, color: Colors.blueGrey),
+          const RepaintBoundary(
+            child: ColoredBox(
+              color: Color(0xfffafbfe),
+              child: SizedBox(
+                width: double.infinity,
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'TwoDrive',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 10, color: Colors.blueGrey),
+                  ),
+                ),
+              ),
             ),
           ),
         ],
