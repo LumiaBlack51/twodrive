@@ -17,6 +17,13 @@ String tr(String key, [List<Object?> values = const []]) {
 
 const _english = <String, String>{
   '网盘': 'Drive',
+  '备份需要处理，请查看该网盘的备份状态': 'Check the backup status for this drive.',
+  '挂载进程已退出，请卸载后重试': 'The mount stopped. Unmount it and try again.',
+  '连接进程已退出，请重连': 'The connection stopped. Reconnect this drive.',
+  '挂载写入需要处理；编辑内容保留在本机，请打开该网盘的写入恢复目录':
+      'Open the write recovery folder for this drive. Your changes are saved locally.',
+  '暂时无法读取挂载状态，请稍后重试': 'Mount status is unavailable. Try again shortly.',
+  '云端删除被拒绝，任务已保留': 'The server rejected a deletion. The task is saved.',
   '保存备份文件夹': 'Save backup folders',
   '备份目标已改变，请重新选择': 'The backup destination changed. Select it again.',
   '选择备份文件夹': 'Choose backup folder',

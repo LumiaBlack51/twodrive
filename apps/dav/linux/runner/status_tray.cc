@@ -38,6 +38,8 @@ struct Tray {
   gint64 dismissed = 0;
   guint reposition = 0;
   guint placement_attempts = 0;
+  bool frame_ready = false;
+  bool placed = false;
 };
 const char* kPath = "/StatusNotifierItem";
 const char* kInterface = "org.kde.StatusNotifierItem";
@@ -86,30 +88,35 @@ gboolean key_press(GtkWidget*, GdkEventKey* event, gpointer data) {
   dismiss(tray);
   return TRUE;
 }
+void reveal_when_ready(Tray* tray) {
+  if (tray->placed && tray->frame_ready && gtk_widget_get_mapped(GTK_WIDGET(tray->popup)))
+    gtk_widget_set_opacity(GTK_WIDGET(tray->popup), 1.0);
+}
 gboolean position_mapped_panel(gpointer data) {
   auto* tray = static_cast<Tray*>(data);
-  if (tray->panel && gtk_widget_get_visible(GTK_WIDGET(tray->popup))) {
-    ++tray->placement_attempts;
-    const auto bounds = tray->anchor.panel();
-    // Wayland does not accept application-selected absolute window positions.
-    // GNOME places only this PID's panel using the actual compositor tray actor.
+  if (tray->panel && gtk_widget_get_mapped(GTK_WIDGET(tray->popup))) {
+#ifdef GDK_WINDOWING_X11
+    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->popup)))) {
+      // GTK has already requested these bounds before map. Correct the WM only
+      // if it placed us elsewhere. Shell and XWayland use different units.
+      const auto bounds = tray->anchor.panel();
+      auto* surface = gtk_widget_get_window(GTK_WIDGET(tray->popup));
+      gint x, y;
+      gdk_window_get_origin(surface, &x, &y);
+      if (x != bounds.x || y != bounds.y || gdk_window_get_width(surface) != bounds.width ||
+          gdk_window_get_height(surface) != bounds.height)
+        gdk_window_move_resize(surface, bounds.x, bounds.y, bounds.width, bounds.height);
+    } else
+#endif
     if (tray->host_anchor) {
       g_autoptr(GVariant) result = host_call(tray, "PositionTray", "(b)");
       gboolean placed = FALSE;
       if (result) g_variant_get(result, "(b)", &placed);
-      // A Wayland surface can map before the compositor has registered its
-      // MetaWindow. Retry briefly, including initial configure acknowledgements.
-      if (result && tray->placement_attempts < 20 &&
-          (!placed || tray->placement_attempts < 4)) return G_SOURCE_CONTINUE;
+      // A Wayland surface may map before GNOME registers its MetaWindow.
+      if (result && !placed && ++tray->placement_attempts < 20) return G_SOURCE_CONTINUE;
     }
-#ifdef GDK_WINDOWING_X11
-    // A session may still have an older positioning component loaded. Apply
-    // our dock-safe bounds after its reply, so it cannot reintroduce overlap.
-    if (GDK_IS_X11_DISPLAY(gtk_widget_get_display(GTK_WIDGET(tray->popup))))
-      gdk_window_move_resize(gtk_widget_get_window(GTK_WIDGET(tray->popup)),
-          bounds.x, bounds.y, bounds.width, bounds.height);
-#endif
-    gtk_widget_set_opacity(GTK_WIDGET(tray->popup), 1.0);
+    tray->placed = true;
+    reveal_when_ready(tray);
   }
   tray->reposition = 0;
   return G_SOURCE_REMOVE;
@@ -219,6 +226,13 @@ void activate(Tray* tray, gint x, gint y) {
     capture_anchor(tray, x, y);
     if (!tray->content) {
       tray->content = fl_view_new_for_engine(fl_view_get_engine(tray->primary));
+      GdkRGBA background;
+      gdk_rgba_parse(&background, "#fafbfe");
+      fl_view_set_background_color(tray->content, &background);
+      g_signal_connect(tray->content, "first-frame", G_CALLBACK(+[](FlView*, Tray* t) {
+        t->frame_ready = true;
+        reveal_when_ready(t);
+      }), tray);
       gtk_container_add(GTK_CONTAINER(tray->popup), GTK_WIDGET(tray->content));
       gtk_widget_show(GTK_WIDGET(tray->content));
     }
@@ -227,7 +241,8 @@ void activate(Tray* tray, gint x, gint y) {
     gtk_window_resize(tray->popup, bounds.width, bounds.height);
     gtk_window_move(tray->popup, bounds.x, bounds.y);
     tray->panel = true;
-    if (tray->host_anchor) gtk_widget_set_opacity(GTK_WIDGET(tray->popup), 0);
+    tray->placed = false;
+    gtk_widget_set_opacity(GTK_WIDGET(tray->popup), 0);
     gtk_widget_show(GTK_WIDGET(tray->popup));
     gtk_window_present_with_time(tray->popup, tray->activation_time);
     gtk_widget_grab_focus(GTK_WIDGET(tray->content));
@@ -293,6 +308,7 @@ void stop(Tray* tray) {
     // Unparenting can invalidate the drawing surface/current context. Hold
     // the view through that step, then dispose it while the popup still exists.
     if (tray->content) {
+      g_signal_handlers_disconnect_by_data(tray->content, tray);
       g_object_ref(tray->content);
       gtk_container_remove(GTK_CONTAINER(tray->popup), GTK_WIDGET(tray->content));
     }

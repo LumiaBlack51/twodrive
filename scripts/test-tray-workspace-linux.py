@@ -3,9 +3,11 @@
 import argparse
 import errno
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 
 from PIL import ImageGrab
@@ -28,9 +30,35 @@ def until(probe, label):
     raise AssertionError(f"Timed out waiting for {label}")
 
 
+def mock_anchor():
+    # Real Shell can supply an anchor in different units from GTK. On X11
+    # it must never be asked to resize the same window as the application.
+    from gi.repository import Gio, GLib
+    xml = '<node><interface name="app.twodrive.TrayAnchor1">'
+    for name, result in [('GetAnchor', 'biiiiiiii'), ('PositionTray', 'b')]:
+        xml += f'<method name="{name}"><arg direction="in" type="u"/>'
+        xml += ''.join(f'<arg direction="out" type="{kind}"/>' for kind in result) + '</method>'
+    info = Gio.DBusNodeInfo.new_for_xml(xml + '</interface></node>')
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    calls = []
+    def reply(conn, sender, path, iface, name, params, invocation):
+        calls.append(name)
+        value = (GLib.Variant('(biiiiiiii)', (True, 1210, 970, 24, 24, 0, 0, 1280, 960))
+                 if name == 'GetAnchor' else GLib.Variant('(b)', (True,)))
+        invocation.return_value(value)
+    bus.register_object('/app/twodrive/TrayAnchor', info.interfaces[0], reply, None, None)
+    result = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                           'RequestName', GLib.Variant('(su)', ('org.gnome.Shell', 4)),
+                           GLib.VariantType('(u)'), Gio.DBusCallFlags.NONE, 1000, None)
+    assert result.unpack() == (1,), 'fixture must own its private Shell name'
+    loop = GLib.MainLoop()
+    threading.Thread(target=loop.run, daemon=True).start()
+    return calls, loop, bus
+
 def exercise(bundle, engines, home, gnome):
     wm = subprocess.Popen(["gnome-shell", "--x11", "--sm-disable"] if gnome else ["openbox"])
     app = None
+    calls, loop, anchor_bus = (None, None, None) if gnome else mock_anchor()
     try:
         wm_name = "GNOME Shell" if gnome else "Openbox"
         until(lambda: wm_name in output("wmctrl", "-m"), "window manager")
@@ -77,6 +105,29 @@ def exercise(bundle, engines, home, gnome):
         until(lambda: "IsViewable" in output("xwininfo", "-id", panel), "tray above minimized dashboard")
         time.sleep(0.4)
         assert minimized(), "opening the tray restored the dashboard"
+        # The footer stays painted while the hidden primary view and the visible
+        # secondary view process periodic status updates. Sample the actual GTK
+        # presentation, including the text, rather than Flutter layout alone.
+        def footer():
+            geometry = output("xwininfo", "-id", panel)
+            def field(label):
+                return int(re.search(label + r":\s+(-?\d+)", geometry).group(1))
+            x = field("Absolute upper-left X") + field("Width") // 2
+            bottom = field("Absolute upper-left Y") + field("Height")
+            bounds = (x - 52, bottom - 26, x + 52, bottom - 4)
+            image = ImageGrab.grab(bbox=bounds).convert("RGB")
+            return bounds, image
+        opacity = output("xprop", "-id", panel, "_NET_WM_WINDOW_OPACITY")
+        assert "=" not in opacity or int(opacity.split("=")[1].strip(), 0) == 0xffffffff, opacity
+        bounds, first = footer()
+        if calls is not None:
+            assert 'GetAnchor' in calls and 'PositionTray' not in calls, f'competing X11 positioning: {calls}'
+        assert len(first.getcolors(4096) or []) > 8, "tray footer text did not render"
+        for _ in range(32):
+            time.sleep(0.05)
+            next_bounds, frame = footer()
+            assert next_bounds == bounds and frame.tobytes() == first.tobytes(), "tray footer flickered"
+
         output("xdotool", "key", "Escape")
         until(lambda: "IsUnMapped" in output("xwininfo", "-id", panel), "Escape dismissal")
         assert minimized(), "dismissing the tray restored the dashboard"
@@ -101,6 +152,9 @@ def exercise(bundle, engines, home, gnome):
         assert app.wait(timeout=15) == 0, "Quit must cleanly exit with the tray mapped"
         print("Tray preserved dashboard pixels and minimization; Dashboard explicitly restored it.")
     finally:
+        if loop:
+            loop.quit()
+            anchor_bus.close_sync(None)
         if app:
             app.terminate()
             app.wait(timeout=10)

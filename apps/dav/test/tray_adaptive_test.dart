@@ -2,8 +2,58 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/tray_panel.dart';
+import 'package:twodrive_dav/language.dart';
 
 void main() {
+  testWidgets(
+    'tray footer stays anchored through account error and quota updates',
+    (tester) async {
+      final c = StorageClient()
+        ..available = true
+        ..selected = 'peer'
+        ..profiles = [
+          {'id': 'peer', 'kind': 'peer', 'name': 'Windows'},
+        ]
+        ..status = {'connected': true, 'profile': 'peer'};
+      desktopLocale.value = 'en';
+      addTearDown(() {
+        desktopLocale.value = 'zh';
+        c.dispose();
+      });
+      Future<void> draw() => tester.pumpWidget(
+        MaterialApp(
+          home: TrayPanel(
+            client: c,
+            onManage: ([int page = 0]) async {},
+            onOpenFolder: () async {},
+            onQuit: () async {},
+          ),
+        ),
+      );
+      await draw();
+      final footer = find.text('TwoDrive').last;
+      final bounds = tester.getRect(footer);
+      c.status['overall'] = {
+        'issues': [
+          {'account': 'Google Drive', 'message': '备份需要处理，请查看该网盘的备份状态'},
+        ],
+      };
+      c.quotas['peer'] = {
+        'state': 'ready',
+        'usage': {'scope': 'share', 'total': 100, 'used': 40, 'free': 60},
+      };
+      await draw();
+      expect(
+        find.text('Google Drive · Check the backup status for this drive.'),
+        findsOneWidget,
+      );
+      expect(tester.getRect(footer), bounds);
+      expect(
+        tester.getRect(find.text('Open folder')).bottom,
+        lessThan(bounds.top),
+      );
+    },
+  );
   testWidgets('short tray keeps actions visible while its details scroll', (
     tester,
   ) async {
