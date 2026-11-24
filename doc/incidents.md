@@ -5,7 +5,7 @@
 - 日期：2026-11-24。状态：已定位。关联 TD-20261124-01。影响 PR #85 的 f5e09a1，未发布。
 - 症状及证据：[Linux 作业 138216948519](https://github.com/LumiaBlack51/twodrive/actions/runs/45326407688/job/138216948519) 与 [Windows 作业 138216948152](https://github.com/LumiaBlack51/twodrive/actions/runs/45326407688/job/138216948152) 的严格 Clippy 在运行测试前拒绝旧名字 AtomicUsize::fetch_update。本机 Rust 1.96 未报告弃用。应用需要兼容声明的 Rust 1.91。
 - 修复与防复发：同一连接的计数、标志和有界日志使用同一把互斥锁，保留饱和递减和多个隧道先后关闭的回归。无需更新工具链下限或放宽警告。
-- 验证边界与交付：本机复跑路由测试及严格 Clippy。当前提交仍须托管编译复验。用户安装与数据不受此编译错误影响。
+- 验证边界与交付：本机复跑路由测试及严格 Clippy。[合并后的 Linux 和 Windows 工作流](https://github.com/LumiaBlack51/twodrive/actions/runs/45329097240) 通过。用户安装与数据不受此编译错误影响。
 
 ## TD-20261124-01：共享盘托盘网络警告、容量缺失及英文导航截断
 
@@ -32,7 +32,9 @@
 
 ### 交付记录
 
-[PR #85](https://github.com/LumiaBlack51/twodrive/pull/85) 的首轮 Dot 静态复核建议明确共享文件夹与所在卷的差异。托盘提示、容量标题及仪表盘已标明所在卷。Linux 端已在已配对的本机 QUIC 网关与共享端间验证数值，和文件系统的可用总容量一致。相同测试将在托管 Windows 临时卷执行，本机现用旧共享端仍无容量字段。发布及覆盖安装待补充。
+[PR #85](https://github.com/LumiaBlack51/twodrive/pull/85) 的首轮 Dot 静态复核建议明确共享文件夹与所在卷的差异。托盘提示、容量标题及仪表盘已标明所在卷。Linux 端已在已配对的本机 QUIC 网关与共享端间验证数值，和文件系统的可用总容量一致。托管 Windows 也通过同一项配对回归，临时共享所在卷的可用字节数与系统查询一致。本机现用旧 Windows 共享端仍无容量字段。
+
+Dot 复核最终提交后，修复合入 Development 分支。发布提交 `ea13c1d115cdb762b4972d477a524f6978a75c13` 的七项工作流通过。[Development 0.3.1](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.1) 发布前逐项核对了 16 个远端文件的状态、大小和 SHA-256，包括桌面安装包及 Debian 源码、二进制、调试包和构建清单。[构建与校验记录](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.1/verification.json)
 
 ## TD-20261111-21：启动恢复绕过自动挂载偏好，断开与重启语义不明确
 
