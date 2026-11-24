@@ -71,6 +71,20 @@ impl Adapter {
     }
 }
 
+// Pair each successful system connection with its close, including task cancellation.
+struct SystemTunnel;
+impl SystemTunnel {
+    fn opened() -> Self {
+        eprintln!("{}", super::diagnostics::SYSTEM_TCP_OPEN);
+        Self
+    }
+}
+impl Drop for SystemTunnel {
+    fn drop(&mut self) {
+        eprintln!("{}", super::diagnostics::SYSTEM_TCP_CLOSE);
+    }
+}
+
 async fn tunnel(
     socket: &mut TcpStream,
     physical: &Physical,
@@ -128,7 +142,7 @@ async fn tunnel(
         ))
     })
     .await??;
-    let mut outbound = tokio::time::timeout(Duration::from_secs(15), async {
+    let (mut outbound, _system_tunnel) = tokio::time::timeout(Duration::from_secs(15), async {
         let ips = dns.ips(&host).await?;
         let mut attempts: FuturesUnordered<_> = ips
             .iter()
@@ -136,7 +150,7 @@ async fn tunnel(
             .collect();
         while let Some(result) = attempts.next().await {
             if let Ok(stream) = result {
-                return Ok(stream);
+                return Ok((stream, None));
             }
         }
         ensure!(
@@ -152,7 +166,7 @@ async fn tunnel(
             .collect();
         while let Some(result) = attempts.next().await {
             if let Ok(stream) = result {
-                return Ok(stream);
+                return Ok((stream, Some(SystemTunnel::opened())));
             }
         }
         anyhow::bail!("system TCP connection failed")

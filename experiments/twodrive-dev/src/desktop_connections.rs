@@ -163,7 +163,7 @@ impl App {
                             .as_mut()
                             .is_some_and(|c| c.0.try_wait().ok().flatten().is_some()),
                         gateway_failed,
-                        self.network.fallback(),
+                        self.network.fallback() || self.network.system_tunnel_active(),
                     )
                 } else if let Some(saved) = self.inactive.get_mut(&p.id) {
                     let gateway_failed = saved
@@ -185,7 +185,7 @@ impl App {
                             .as_mut()
                             .is_some_and(|c| c.0.try_wait().ok().flatten().is_some()),
                         gateway_failed,
-                        saved.network.fallback(),
+                        saved.network.fallback() || saved.network.system_tunnel_active(),
                     )
                 } else {
                     continue;

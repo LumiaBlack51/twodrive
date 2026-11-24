@@ -28,7 +28,10 @@ class TrayPanel extends StatelessWidget {
     final backup = c.status['backup'] as Map? ?? {};
     final overall = c.status['overall'] as Map?;
     final issues = (overall?['issues'] as List?) ?? [];
-    final fallback = c.proxyFallback;
+    final endpointFallback = c.proxyFallback;
+    final fallback =
+        endpointFallback ||
+        (c.connected && c.status['system_tunnel_active'] == true);
     final otherFallbacks = ((c.status['accounts'] as List?) ?? [])
         .whereType<Map>()
         .where(
@@ -83,7 +86,7 @@ class TrayPanel extends StatelessWidget {
         : issue != null
         ? tr('需要处理')
         : fallback
-        ? tr('已连接 · 使用系统／代理兜底')
+        ? tr(endpointFallback ? '已连接 · 使用系统／代理兜底' : '部分请求正在使用系统网络')
         : c.syncing
         ? tr('正在同步')
         : (backup['folders'] as num? ?? 0) > 0 &&
@@ -355,8 +358,10 @@ class TrayPanel extends StatelessWidget {
                         Padding(
                           padding: EdgeInsets.all(12),
                           child: Text(
-                            fallback
+                            endpointFallback
                                 ? tr('此设备连接已切换到系统网络。')
+                                : fallback
+                                ? tr('中继或设备发现的 TCP 连接正在使用系统网络。')
                                 : tr('部分辅助网络请求尝试使用系统网络。'),
                             style: TextStyle(
                               color: fallback
@@ -370,7 +375,7 @@ class TrayPanel extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.all(8),
                           child: Text(
-                            tr('以下连接已切换到系统网络：{arg0}', [otherFallbacks]),
+                            tr('以下设备正在使用系统网络：{arg0}', [otherFallbacks]),
                           ),
                         ),
                       if (issue != null)

@@ -67,27 +67,34 @@ impl Fixture {
     }
 }
 
+fn assert_share_volume(backend: &WebDavBackend, root: &std::path::Path) {
+    use twodrive_dev::provider::Provider;
+    let usage = backend
+        .storage_usage(&mut || Ok(()))
+        .unwrap()
+        .expect("share capacity");
+    assert_eq!(usage.scope, "share");
+    assert!(usage.total.unwrap() > 0);
+    assert_eq!(
+        usage.total,
+        usage.used.unwrap().checked_add(usage.free.unwrap())
+    );
+    let stat = fs2::statvfs(root).unwrap();
+    // The DAV total is used + caller-available; reserved filesystem blocks are excluded.
+    assert_eq!(
+        usage.total.unwrap(),
+        stat.total_space() - (stat.free_space() - stat.available_space())
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn readonly_share_reports_remote_filesystem_capacity() {
-    use twodrive_dev::provider::Provider;
     let fixture = Fixture::local(false, 1024).await;
     let backend = fixture.backend.clone();
     let root = fixture.root.clone();
-    tokio::task::spawn_blocking(move || {
-        let usage = backend
-            .storage_usage(&mut || Ok(()))
-            .unwrap()
-            .expect("share capacity");
-        assert_eq!(usage.scope, "share");
-        assert!(usage.total.unwrap() > 0);
-        assert_eq!(
-            usage.total,
-            usage.used.unwrap().checked_add(usage.free.unwrap())
-        );
-        assert!(usage.total.unwrap() <= fs2::total_space(root).unwrap());
-    })
-    .await
-    .unwrap();
+    tokio::task::spawn_blocking(move || assert_share_volume(&backend, &root))
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -524,6 +531,7 @@ async fn real_quic_pairing_streaming_webdav_and_revocation_on_existing_connectio
     let root_clone = root.clone();
     let working = backend.clone();
     tokio::task::spawn_blocking(move || {
+        assert_share_volume(&working, &root_clone);
         let data = vec![0xa5; 3 * 1024 * 1024];
         working.create_folder("/files").unwrap();
         working.upload("/files/content.bin", data.clone()).unwrap();

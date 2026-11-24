@@ -1,13 +1,17 @@
 //! Bounded safe transport diagnostics plus persistent connection route status.
 use std::sync::{
     Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+pub(super) const SYSTEM_TCP_OPEN: &str = "network: system TCP tunnel opened";
+pub(super) const SYSTEM_TCP_CLOSE: &str = "network: system TCP tunnel closed";
+
 #[derive(Default)]
 pub struct Diagnostics {
     lines: Mutex<Vec<String>>,
     fallback: AtomicBool,
     component_fallback: AtomicBool,
+    system_tunnels: AtomicUsize,
 }
 impl Diagnostics {
     pub fn record(&self, line: &str) {
@@ -16,7 +20,13 @@ impl Diagnostics {
         }
         // The owned peer CLI emits this exact protocol marker. Keep the route
         // flag independently of the bounded, human-readable diagnostic history.
-        if line.starts_with("network: route=system/proxy fallback; component=") {
+        if line == SYSTEM_TCP_OPEN {
+            self.system_tunnels.fetch_add(1, Ordering::Relaxed);
+        } else if line == SYSTEM_TCP_CLOSE {
+            let _ = self
+                .system_tunnels
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+        } else if line.starts_with("network: route=system/proxy fallback; component=") {
             self.component_fallback.store(true, Ordering::Relaxed);
         } else if matches!(
             line,
@@ -33,6 +43,9 @@ impl Diagnostics {
     }
     pub fn snapshot(&self) -> Vec<String> {
         self.lines.lock().unwrap().clone()
+    }
+    pub fn system_tunnel_active(&self) -> bool {
+        self.system_tunnels.load(Ordering::Relaxed) > 0
     }
     pub fn component_fallback(&self) -> bool {
         self.component_fallback.load(Ordering::Relaxed)
@@ -57,6 +70,13 @@ mod tests {
             "a discovery lookup cannot select the peer transport"
         );
         assert!(d.component_fallback());
+        d.record(SYSTEM_TCP_OPEN);
+        d.record(SYSTEM_TCP_OPEN);
+        d.record(SYSTEM_TCP_CLOSE);
+        assert!(d.system_tunnel_active());
+        d.record(SYSTEM_TCP_CLOSE);
+        assert!(!d.system_tunnel_active());
+        assert!(!d.fallback());
         d.record(
             "network: route=system/proxy fallback; physical setup or relay registration failed",
         );

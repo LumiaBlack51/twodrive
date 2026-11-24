@@ -535,7 +535,9 @@ class _OverviewPageState extends State<OverviewPage> {
           const SizedBox(height: 6),
           Text(
             total != null
-                ? tr('总量 {arg0}', [capacityBytes(total)])
+                ? tr(profile['kind'] == 'peer' ? '卷容量 {arg0}' : '总量 {arg0}', [
+                    capacityBytes(total),
+                  ])
                 : usage != null
                 ? tr('未提供总容量')
                 : !online

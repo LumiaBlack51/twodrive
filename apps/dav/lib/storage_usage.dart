@@ -59,10 +59,20 @@ class StorageUsageView extends StatelessWidget {
           children: [
             Tooltip(
               message: tr(
-                shareStorage ? '容量由共享端返回。' : '账号总空间可能与照片、邮件等服务共用；容量由网盘返回。',
+                shared
+                    ? '容量为共享目录所在文件系统的已用及可用空间。'
+                    : shareStorage
+                    ? '容量由共享端返回。'
+                    : '账号总空间可能与照片、邮件等服务共用；容量由网盘返回。',
               ),
               child: Text(
-                tr(shareStorage ? '共享空间' : '账号空间'),
+                tr(
+                  shared
+                      ? '共享所在卷'
+                      : shareStorage
+                      ? '共享空间'
+                      : '账号空间',
+                ),
                 style: TextStyle(fontSize: 12, color: Colors.blueGrey),
               ),
             ),

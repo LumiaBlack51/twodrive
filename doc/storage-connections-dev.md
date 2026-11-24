@@ -1,10 +1,10 @@
 # Development 存储连接 / Storage connections
 
-设备共享使用自动路由时，黄色托盘标记代表有已连接设备切换到系统网络。面板按设备说明回退，DNS、地址发布或中继探测使用系统网络的尝试单独作为提示。设备后续重连会重新判断。
+设备共享使用自动路由时，黄色托盘标记代表有设备整条连接回退，或仍有中继／设备发现连接正在使用系统网络。面板按设备说明回退，DNS、地址发布或中继探测使用系统网络的尝试单独作为提示。设备后续重连会重新判断。
 
 Development 0.3.1 通过根目录的 Depth 0 WebDAV 查询读取共享容量。TDLink 0.3.1 共享端报告共享目录所在文件系统的已用与可用空间。旧版共享端可能省略这些属性。两端更新后，可在托盘点「刷新状态」读取容量。此操作无需扫描目录。
 
-With automatic routing, the yellow tray badge identifies a connected device that switched to the system network. The panel names other affected devices separately. Background DNS, publication and relay connection attempts have their own informational message.
+With automatic routing, the yellow tray badge identifies a connected device that switched routes or has an active system-network relay or discovery connection. The panel names other affected devices separately. Background DNS, publication and relay connection attempts have their own informational message.
 
 Development 0.3.1 reads share capacity with a Depth 0 WebDAV request. TDLink 0.3.1 reports the space used and available on the filesystem containing the share. Older servers may omit these properties. After both ends are updated, use Refresh status in the tray to refresh capacity.
 
