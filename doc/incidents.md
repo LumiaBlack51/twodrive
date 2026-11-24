@@ -36,6 +36,8 @@
 
 Dot 复核最终提交后，修复合入 Development 分支。发布提交 `ea13c1d115cdb762b4972d477a524f6978a75c13` 的七项工作流通过。[Development 0.3.1](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.1) 发布前逐项核对了 16 个远端文件的状态、大小和 SHA-256，包括桌面安装包及 Debian 源码、二进制、调试包和构建清单。[构建与校验记录](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.1/verification.json)
 
+本机升级前的只读检查确认两个挂载在线，打开的写入句柄、活动传输、待写入队列均为零。正常退出先卸载 Google Drive，文件管理器仍持有 Windows 共享根目录的只读目录句柄，系统拒绝卸载该盘。等待释放目录期间，通过原引擎恢复了 Google Drive，并核对两个原挂载、配置、会话列表及挂载绑定。此时本机仍运行 0.3.0。
+
 ## TD-20261111-21：启动恢复绕过自动挂载偏好，断开与重启语义不明确
 
 - 日期：2026-11-11；状态：根因确认，旧实现回归失败、修复后完整 Flutter 验证通过；新提交托管 CI 待执行。
