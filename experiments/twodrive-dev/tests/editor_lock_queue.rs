@@ -201,11 +201,17 @@ fn editor_close_and_same_name_reopen_do_not_wait_for_slow_cloud_mutations() {
             .is_none()
     );
     drop(first_upload);
-    wait(|| {
-        p.get_metadata_by_path("/.~lock.book.xlsx#")
-            .unwrap()
-            .is_some_and(|m| p.download(&m.remote_id).unwrap() == b"second editor lock")
-    });
+    // The first generation may be deleted between a pathname lookup and an
+    // ID-based read. Inspect the replacement only after both jobs have settled.
+    wait(|| twodrive_dev::mount_write::recovery_status(&spool).unwrap()["editor_pending"] == 0);
+    let reopened = p
+        .get_metadata_by_path("/.~lock.book.xlsx#")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        p.download(&reopened.remote_id).unwrap(),
+        b"second editor lock"
+    );
     let last_delete = gate.lock().unwrap();
     assert_eq!(call(&c, &bridge, Method::DELETE, lock, "").status(), 204);
     assert!(
