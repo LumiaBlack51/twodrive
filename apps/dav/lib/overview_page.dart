@@ -473,6 +473,7 @@ class _OverviewPageState extends State<OverviewPage> {
     final usage = quota?['usage'] as Map?;
     final used = usage?['used'] as num?;
     final total = usage?['total'] as num?;
+    final free = usage?['free'] as num?;
     final valid =
         used != null &&
         used.isFinite &&
@@ -524,32 +525,39 @@ class _OverviewPageState extends State<OverviewPage> {
           ),
           const SizedBox(height: 16),
           Text(
-            used != null ? capacityBytes(used) : '—',
+            used != null
+                ? capacityBytes(used)
+                : free != null
+                ? tr('剩余 {arg0}', [capacityBytes(free)])
+                : '—',
             style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
           Text(
             total != null
                 ? tr('总量 {arg0}', [capacityBytes(total)])
+                : usage != null
+                ? tr('未提供总容量')
                 : !online
                 ? tr('连接后获取容量')
                 : quota?['state'] == 'unsupported'
-                ? tr('此网盘暂不提供容量')
+                ? tr(profile['kind'] == 'peer' ? '共享端未报告容量' : '此网盘暂不提供容量')
                 : quota?['state'] == 'unavailable'
                 ? tr('容量暂时无法获取')
                 : tr('容量尚未获取'),
             style: muted,
           ),
           const SizedBox(height: 9),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: valid ? (used / total).clamp(0.0, 1.0) : 0,
-              minHeight: 3,
-              color: color,
-              backgroundColor: const Color(0xffe7ecfb),
+          if (valid)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: (used / total).clamp(0.0, 1.0),
+                minHeight: 3,
+                color: color,
+                backgroundColor: const Color(0xffe7ecfb),
+              ),
             ),
-          ),
           if (quota?['stale'] == true) Text(tr('更新未完成，显示上次结果'), style: muted),
           const SizedBox(height: 6),
           Row(

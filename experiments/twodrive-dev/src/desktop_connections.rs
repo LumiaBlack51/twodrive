@@ -60,7 +60,7 @@ pub(super) fn aggregate_accounts(accounts: &[Value]) -> Value {
                 account["backup"]["state"].as_str(),
                 Some("starting" | "scanning")
             );
-        fallback |= account["route_fallback"] == true;
+        fallback |= account["connected"] == true && account["route_fallback"] == true;
         for (failed, message) in [
             (
                 account["mount_failed"] == true,
@@ -664,7 +664,7 @@ mod tests {
     fn aggregate_pending_and_errors_keep_equal_paths_separate_between_accounts() {
         let summary = aggregate_accounts(&[
             json!({"profile":"a","revision":"ra","name":"First","cache":{"pending":2,"waiting":[{"path":"/same"}]},"backup":{"state":"scanning"}}),
-            json!({"profile":"b","revision":"rb","name":"Second","cache":{"pending":3,"waiting":[{"path":"/same"}],"deletes_rejected":1},"mount_failed":true,"route_fallback":true}),
+            json!({"profile":"b","revision":"rb","name":"Second","connected":true,"cache":{"pending":3,"waiting":[{"path":"/same"}],"deletes_rejected":1},"mount_failed":true,"route_fallback":true}),
         ]);
         assert_eq!(summary["pending"], 5);
         assert_eq!(summary["syncing"], true);

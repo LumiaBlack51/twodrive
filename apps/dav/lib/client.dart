@@ -346,8 +346,7 @@ class StorageClient extends ChangeNotifier {
 
   String get trayState => error != null || syncError
       ? 'error'
-      : connected &&
-            (proxyFallback || status['overall']?['route_fallback'] == true)
+      : proxyFallback || status['overall']?['route_fallback'] == true
       ? 'warning'
       : paused
       ? 'paused'

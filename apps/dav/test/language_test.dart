@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/language.dart';
@@ -36,6 +37,13 @@ void main() {
       expect(find.text('Settings'), findsWidgets);
       expect(find.text('Language'), findsOneWidget);
       expect(find.text('设置'), findsNothing);
+      final label = tester.renderObject<RenderParagraph>(
+        find.descendant(
+          of: find.byKey(const ValueKey('navigation')),
+          matching: find.text('Connections'),
+        ),
+      );
+      expect(label.didExceedMaxLines, isFalse);
       await tester.tap(find.text('Connections').first);
       await tester.pumpAndSettle();
       expect(find.text('草稿'), findsOneWidget);

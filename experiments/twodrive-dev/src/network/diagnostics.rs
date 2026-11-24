@@ -7,6 +7,7 @@ use std::sync::{
 pub struct Diagnostics {
     lines: Mutex<Vec<String>>,
     fallback: AtomicBool,
+    component_fallback: AtomicBool,
 }
 impl Diagnostics {
     pub fn record(&self, line: &str) {
@@ -15,7 +16,13 @@ impl Diagnostics {
         }
         // The owned peer CLI emits this exact protocol marker. Keep the route
         // flag independently of the bounded, human-readable diagnostic history.
-        if line.starts_with("network: route=system/proxy fallback;") {
+        if line.starts_with("network: route=system/proxy fallback; component=") {
+            self.component_fallback.store(true, Ordering::Relaxed);
+        } else if matches!(
+            line,
+            "network: route=system/proxy fallback; physical setup or relay registration failed"
+                | "network: route=system/proxy fallback; peer transport connection failed; authorization has not been sent"
+        ) {
             self.fallback.store(true, Ordering::Relaxed);
         }
         let mut lines = self.lines.lock().unwrap();
@@ -26,6 +33,9 @@ impl Diagnostics {
     }
     pub fn snapshot(&self) -> Vec<String> {
         self.lines.lock().unwrap().clone()
+    }
+    pub fn component_fallback(&self) -> bool {
+        self.component_fallback.load(Ordering::Relaxed)
     }
     pub fn fallback(&self) -> bool {
         self.fallback.load(Ordering::Relaxed)
@@ -39,7 +49,17 @@ mod tests {
         let d = Diagnostics::default();
         d.record("network: unrelated text route=system/proxy fallback");
         assert!(!d.fallback());
-        d.record("network: route=system/proxy fallback; physical probe failed");
+        d.record(
+            "network: route=system/proxy fallback; component=DNS TXT; physical connection failed",
+        );
+        assert!(
+            !d.fallback(),
+            "a discovery lookup cannot select the peer transport"
+        );
+        assert!(d.component_fallback());
+        d.record(
+            "network: route=system/proxy fallback; physical setup or relay registration failed",
+        );
         for _ in 0..100 {
             d.record("network: route details");
         }

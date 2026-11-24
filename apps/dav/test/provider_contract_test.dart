@@ -299,6 +299,15 @@ void main() {
         icons.last,
         endsWith('cloud-warning.${Platform.isWindows ? 'ico' : 'svg'}'),
       );
+      c.status = {'connected': true, 'component_fallback': true};
+      c.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(icons.last, isNot(contains('cloud-warning')));
+      c.status['overall'] = {'route_fallback': true};
+      c.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(icons.last, contains('cloud-warning'));
+      c.status = {'connected': true, 'route_fallback': true};
       expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
       expect(find.byIcon(Icons.error_outline), findsNothing);
       await tester.pumpWidget(
@@ -324,6 +333,40 @@ void main() {
       c.dispose();
     },
   );
+  testWidgets('another account fallback does not label the selected drive', (
+    tester,
+  ) async {
+    final c = StorageClient()
+      ..selected = 'local'
+      ..status = {
+        'connected': true,
+        'route_fallback': false,
+        'overall': {'route_fallback': true},
+        'accounts': [
+          {
+            'profile': 'other',
+            'name': 'Other device',
+            'connected': true,
+            'route_fallback': true,
+          },
+        ],
+      };
+    expect(c.trayState, 'warning');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TrayPanel(
+          client: c,
+          onManage: ([int page = 0]) async {},
+          onOpenFolder: () async {},
+          onQuit: () async {},
+        ),
+      ),
+    );
+    expect(find.text('已连接 · 使用系统／代理兜底'), findsNothing);
+    expect(find.textContaining('Other device'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
   test('warning is connected fallback only; actual errors retain priority', () {
     final c = StorageClient();
     c.status = {'connected': true, 'route_fallback': true, 'paused': true};
