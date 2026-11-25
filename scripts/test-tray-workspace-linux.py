@@ -165,6 +165,14 @@ def exercise(bundle, engines, home, gnome, mutter):
         output("xdotool", "key", "Down", "Return")
         until(lambda: "Normal" in output("xprop", "-id", primary, "WM_STATE"), "explicit dashboard action")
         assert "IsUnMapped" in output("xwininfo", "-id", panel)
+        if mutter:
+            # The compositor fixture covers both shadow reveals and dismissal.
+            # Quit from the restored dashboard. The workspace regression below
+            # separately exercises Quit with a live secondary Flutter view.
+            output("xdotool", "key", "ctrl+q")
+            assert app.wait(timeout=15) == 0, "dashboard Quit failed"
+            print("Tray shadow stayed visible across opens on composited X11.")
+            return
         time.sleep(0.35)
         click_tray()
         until(lambda: "IsViewable" in output("xwininfo", "-id", panel), "tray before Quit")
