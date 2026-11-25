@@ -5,6 +5,7 @@ use crate::model::{CloudBackend, DeltaResult, MetadataEntry};
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
+    fs::File,
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
@@ -97,6 +98,18 @@ pub trait Provider: CloudBackend {
     /// Adapters without a persistent version/cache contract may forbid mounts.
     fn supports_mount(&self) -> bool {
         true
+    }
+    /// Materialize a mount entry obtained from a live lookup into an empty
+    /// private file. An adapter that implements this must cap the bytes and
+    /// confirm the same object and version again before returning success.
+    /// Return None only when the bridge should use its default read path.
+    fn download_mount_snapshot(
+        &self,
+        _entry: &MetadataEntry,
+        _destination: &mut File,
+        _progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<u64>> {
+        Ok(None)
     }
     fn capabilities(&self) -> Capabilities;
     fn versioned_backup(&self) -> bool {
@@ -405,6 +418,19 @@ impl Backend {
         ensure!(!entry.is_dir, "不能下载目录");
         self.download_to(&entry.remote_id, writer, progress)
     }
+    pub(crate) fn download_mount_snapshot(
+        &self,
+        entry: &MetadataEntry,
+        destination: &mut File,
+        progress: &mut dyn FnMut(u64) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Option<u64>> {
+        self.check_pause()?;
+        self.inner
+            .download_mount_snapshot(entry, destination, &mut |done| {
+                self.check_pause()?;
+                progress(done)
+            })
+    }
     pub fn rename_path(&self, path: &str, to: &str) -> anyhow::Result<MetadataEntry> {
         valid_path(to)?;
         ensure!(path != "/", "不能重命名共享根目录");
@@ -660,6 +686,14 @@ impl CloudBackend for Backend {
     fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
         self.check_pause()?;
         self.inner.get_metadata(id)
+    }
+    fn metadata_for_download(
+        &self,
+        remote_id: &str,
+        known: &MetadataEntry,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.check_pause()?;
+        self.inner.metadata_for_download(remote_id, known)
     }
     fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
         self.check_pause()?;

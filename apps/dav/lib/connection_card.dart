@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'package:flutter/material.dart';
 import 'client.dart';
 import 'storage_usage.dart';
@@ -10,6 +11,7 @@ class ConnectionCard extends StatelessWidget {
     required this.selected,
     required this.connectLabel,
     this.usage,
+    this.issue,
     this.onSelect,
     this.onDisconnect,
     this.onEdit,
@@ -25,6 +27,7 @@ class ConnectionCard extends StatelessWidget {
   final bool mountSupported, mounted;
   final String connectLabel;
   final Json? usage;
+  final String? issue;
   final VoidCallback? onSelect, onDisconnect, onEdit, onDelete, onRefresh;
   final VoidCallback? onMount, onOpenMount;
   @override
@@ -33,13 +36,13 @@ class ConnectionCard extends StatelessWidget {
         profile['provider_label'] as String? ?? profile['kind'] as String;
     final account = profile['account_name'] as String?;
     final description = [
-      provider,
-      if (online) '已连接',
+      tr(provider),
+      if (online) tr('已连接'),
       if (account != null &&
           account.isNotEmpty &&
           account != profile['name'] &&
           account != provider)
-        '${profile['account_label'] ?? '账号'}：$account',
+        '${tr(profile['account_label'] as String? ?? '账号')}：$account',
       if (profile['summary'] != null &&
           profile['summary'] != provider &&
           profile['summary'] != profile['name'])
@@ -66,7 +69,7 @@ class ConnectionCard extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: onOpenMount,
                 icon: const Icon(Icons.folder_open, size: 18),
-                label: const Text('打开挂载'),
+                label: Text(tr('打开挂载')),
               ),
             ],
           ],
@@ -80,22 +83,22 @@ class ConnectionCard extends StatelessWidget {
                 mounted ? Icons.eject_outlined : Icons.add_to_drive_outlined,
                 size: 18,
               ),
-              label: Text(mounted ? '卸载' : '挂载'),
+              label: Text(mounted ? tr('卸载') : tr('挂载')),
             ),
           ),
         if (online)
           IconButton(
-            tooltip: '断开此连接',
+            tooltip: tr('断开此连接'),
             onPressed: onDisconnect,
             icon: const Icon(Icons.link_off),
           ),
         IconButton(
-          tooltip: '编辑',
+          tooltip: tr('编辑'),
           onPressed: onEdit,
           icon: const Icon(Icons.edit_outlined),
         ),
         IconButton(
-          tooltip: '删除配置',
+          tooltip: tr('删除配置'),
           onPressed: onDelete,
           icon: const Icon(Icons.delete_outline),
         ),
@@ -114,13 +117,18 @@ class ConnectionCard extends StatelessWidget {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             if (selected)
-              const Chip(
+              Chip(
                 visualDensity: VisualDensity.compact,
                 avatar: Icon(Icons.check_circle, size: 18, color: Colors.blue),
-                label: Text('当前使用'),
+                label: Text(tr('当前使用')),
               ),
           ],
         ),
+        if (issue != null)
+          Text(
+            tr(issue!),
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
         const SizedBox(height: 3),
         Text(
           description,
@@ -129,7 +137,12 @@ class ConnectionCard extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 8),
-        StorageUsageView(value: usage, connected: online, onRefresh: onRefresh),
+        StorageUsageView(
+          value: usage,
+          shared: profile['kind'] == 'peer',
+          connected: online,
+          onRefresh: onRefresh,
+        ),
       ],
     );
     return Card(

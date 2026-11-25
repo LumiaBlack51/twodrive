@@ -10,6 +10,9 @@ const XML = `<node><interface name="app.twodrive.TrayAnchor1">
   <arg type="b" direction="out"/>
   ${'<arg type="i" direction="out"/>'.repeat(8)}
  </method>
+ <method name="PositionTray"><arg type="u" direction="in"/>
+  <arg type="b" direction="out"/>
+ </method>
  <method name="PositionPanel"><arg type="u" direction="in"/>
   <arg type="b" direction="out"/>
  </method>
@@ -81,7 +84,15 @@ export default class TwoDriveTrayAnchor extends Extension {
         return [false, 0, 0, 0, 0, 0, 0, 0, 0];
     }
 
+    PositionTrayAsync([pid], invocation) {
+        this._position(pid, invocation, true);
+    }
+
     PositionPanelAsync([pid], invocation) {
+        this._position(pid, invocation, false);
+    }
+
+    _position(pid, invocation, trayOnly) {
         // The caller may position only its own TwoDrive window. There is no
         // general window-control/evaluation interface or caller-supplied position.
         Gio.DBus.session.call('org.freedesktop.DBus', '/org/freedesktop/DBus',
@@ -94,7 +105,7 @@ export default class TwoDriveTrayAnchor extends Extension {
                     const [caller] = connection.call_finish(result).deep_unpack();
                     const anchor = this.GetAnchor(pid);
                     if (caller === pid && anchor[0]) {
-                        const window = this._ownWindow(pid);
+                        const window = this._ownWindow(pid, trayOnly);
                         if (window && !window.decorated) {
                             const rect = panelBounds(anchor.slice(1, 5), anchor.slice(5));
                             window.move_resize_frame(false, ...rect);
@@ -108,14 +119,14 @@ export default class TwoDriveTrayAnchor extends Extension {
             });
     }
 
-    _ownWindow(pid) {
+    _ownWindow(pid, trayOnly = false) {
         return global.get_window_actors().map(a => a.meta_window)
-            .find(w => w.get_pid() === pid &&
+            .find(w => w.get_pid() === pid && (!trayOnly || w.get_role() === 'twodrive-tray' || w.get_title() === 'TwoDrive Tray') &&
                 w.get_wm_class()?.toLowerCase() === 'app.twodrive.twodrive_dav');
     }
 
     GetPanel(pid) {
-        const window = this._ownWindow(pid);
+        const window = this._ownWindow(pid, true) ?? this._ownWindow(pid);
         if (!window || window.is_hidden()) return [false, 0, 0, 0, 0];
         const r = window.get_frame_rect();
         return [true, r.x, r.y, r.width, r.height];

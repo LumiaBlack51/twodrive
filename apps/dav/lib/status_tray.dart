@@ -5,8 +5,12 @@ class StatusTray {
   static const channel = MethodChannel('twodrive/status_tray');
   void Function(Offset)? onActivate;
   void Function()? onQuit;
+  void Function(bool visible)? onVisibility;
   StatusTray() {
     channel.setMethodCallHandler((call) async {
+      if (call.method == 'trayVisible' || call.method == 'trayHidden') {
+        onVisibility?.call(call.method == 'trayVisible');
+      }
       if (call.method == 'quit') {
         onQuit?.call();
       }

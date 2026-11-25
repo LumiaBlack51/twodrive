@@ -80,7 +80,7 @@ flowchart LR
 
 引擎 `status.multi_connection=true` 时，`connections` 列出全部在线 profile 与 revision，顶层 `profile` 仅表示当前浏览对象。再次 `connect` 已在线 profile 只选择该会话，不重新认证或枚举根目录；连接新账号失败保留原连接。每次文件操作必须显式带原 `profile/revision`；传输期间切换浏览不能改变任务归属。同名路径也不得跨账号解析。上传、下载、容量查询最多同时执行八项，使用独立任务；控制队列及取消仍有预算。断开指定账号不影响其他账号；该账号仍有传输时拒绝断开，退出也拒绝未完成传输。容量任务可取消后收尾。前端保留各账号上次浏览目录并提供逐任务取消。
 
-可选 Provider `storage_usage` 只返回数字 `total/used/free` 和 `scope=account`；全部未知返回不支持。IPC `quota` 同样绑定 profile/revision，错误只影响容量卡片。前端每账号缓存五分钟、合并重复请求，支持手动刷新；失败保留上次成功值并明确标记，revision 变更清空旧值。未知值不能显示为零，不能枚举整盘文件推算总额度。连接页用横条，托盘用小环形图，接近满额使用橙色；账号总空间可能与照片、邮件等共用。OneDrive 使用现有 Graph 权限读取 `/me/drive?$select=quota`，iCloud 复用既有加密 web session，详情见 [iCloud 指南](icloud-drive.md)。其他适配器未实现时明确显示不支持，不伪造容量。
+可选 Provider `storage_usage` 只返回数字 `total/used/free` 和作用域 `scope=account` 或 `scope=share`；全部未知返回不支持。IPC `quota` 同样绑定 profile/revision，错误只影响容量卡片。前端每账号缓存五分钟、合并重复请求，支持手动刷新；失败保留上次成功值并明确标记，revision 变更清空旧值。未知值不能显示为零，不能枚举整盘文件推算总额度。连接页用横条，托盘用小环形图，接近满额使用橙色；账号总空间可能与照片、邮件等共用。OneDrive 使用现有 Graph 权限读取 `/me/drive?$select=quota`，iCloud 复用既有加密 web session，详情见 [iCloud 指南](icloud-drive.md)。其他适配器未实现时明确显示不支持，不伪造容量。
 
 客户端启动后按 `startup_ready` 恢复所有具有匹配 kind/revision/binding 的已保存会话，并在支持的平台逐个挂载；原浏览账号最后恢复，以保持选择。新增 `resume {id,revision}` 只能使用现有凭据，账号身份改变时拒绝发布连接；不自动打开授权网页或导入新的配对邀请。新配置无已保存会话时等待手动登录。某个账号连接/挂载失败要注明归属并继续恢复其他账号；退出时取消启动恢复及其挂载，不取消正在写入的用户文件传输。启动恢复不改旧配置 revision，挂载仍使用每条配置原有路径；不自动启用系统开机自启动。实际 Windows 本地验证及真实云端边界见 [多网盘验证记录](multi-cloud-2026-10-28.md)。
 

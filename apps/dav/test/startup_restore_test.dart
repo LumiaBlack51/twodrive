@@ -289,7 +289,8 @@ void main() {
       final c = StartupClient()..failResume = 'a';
       await c.restoreOnStartup();
       expect(c.mounts.single['profile'], 'b');
-      expect(c.error, contains('Drive a：连接恢复失败'));
+      expect(c.connectionErrors, {'a': '授权需要处理'});
+      expect(c.error, isNull);
       expect(c.selected, 'b');
       c.dispose();
     },

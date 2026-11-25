@@ -95,6 +95,7 @@ mod startup_tests {
     #[derive(Clone)]
     struct DelayedMetadata {
         inner: Arc<MockBackend>,
+        slow_file: Option<(String, PathBuf)>,
         started: Arc<AtomicBool>,
         release: Arc<(Mutex<bool>, Condvar)>,
     }
@@ -112,6 +113,18 @@ mod startup_tests {
             self.inner.list_delta(cursor)
         }
         fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+            if let Some((blocked, dir)) = &self.slow_file
+                && id == blocked
+                && !dir.join("failed-once").exists()
+            {
+                std::fs::write(dir.join("started"), b"")?;
+                let deadline = std::time::Instant::now() + Duration::from_secs(12);
+                while !dir.join("unblock").exists() && std::time::Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                std::fs::write(dir.join("failed-once"), b"")?;
+                anyhow::bail!("transient synthetic download failure");
+            }
             self.inner.download(id)
         }
         fn upload(&self, path: &str, content: Vec<u8>) -> anyhow::Result<MetadataEntry> {
@@ -135,6 +148,75 @@ mod startup_tests {
             .is_ok_and(|s| s.success())
     }
     #[test]
+    #[ignore = "requires Linux FUSE; uses only temporary generated files"]
+    fn folder_pin_retry_does_not_block_release_or_unrelated_reads() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = State::new(temp.path().join("state")).unwrap();
+        let target = temp.path().join("mount");
+        let inner = Arc::new(MockBackend::new());
+        let mut slow = None;
+        for i in 0..4 {
+            inner.create_folder(&format!("/batch{i}")).unwrap();
+            let f = inner
+                .upload(&format!("/batch{i}/sample"), b"generated".to_vec())
+                .unwrap();
+            if i == 0 {
+                slow = Some((f.remote_id, temp.path().into()));
+            }
+        }
+        let backend = DelayedMetadata {
+            inner,
+            slow_file: slow,
+            started: Arc::default(),
+            release: Arc::new((Mutex::new(true), Condvar::new())),
+        };
+        let db = Database::new(state.dir.join("mount.sqlite3"));
+        db.init().unwrap();
+        twodrive_fs::sync_metadata(&db, &backend).unwrap();
+        let path = target.clone();
+        let runner = thread::spawn(move || mount(state, path, backend, "fixture".into(), true));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !mounted(&target) && !runner.is_finished() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let test = std::process::Command::new("python3").arg("-c").arg(r#"
+import os, pathlib, sqlite3, sys, time
+mount, private = map(pathlib.Path, sys.argv[1:])
+def action(name, item):
+    os.setxattr(mount, 'user.twodrive.dav-controls', f'{name}:{(mount/item).stat().st_ino}'.encode())
+def wait(predicate, seconds):
+    end = time.monotonic() + seconds
+    while not predicate():
+        assert time.monotonic() < end, 'fixture deadline exceeded'
+        time.sleep(.05)
+for i in range(4):
+    action('pin', 'batch'+str(i))
+wait(lambda: (private/'started').exists(), 5)
+assert (mount/'README-cloud.txt').read_bytes().startswith(b'Welcome')
+action('release', 'batch2')
+assert not (private/'failed-once').exists(), 'foreground work waited for the stalled pin'
+(private/'unblock').touch()
+with sqlite3.connect(private/'state/mount.sqlite3') as db:
+    def cached(path):
+        return db.execute('select cache_path is not null from files where path=?',(path,)).fetchone()[0]
+    wait(lambda: cached('/batch0/sample'), 40)
+    assert not cached('/batch2/sample')
+"#).arg(&target).arg(temp.path()).status();
+        std::fs::write(temp.path().join("unblock"), b"").unwrap();
+        if mounted(&target) {
+            assert!(
+                std::process::Command::new("fusermount3")
+                    .arg("-u")
+                    .arg(&target)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        runner.join().unwrap().unwrap();
+        assert!(test.unwrap().success());
+    }
+    #[test]
     #[ignore = "requires /dev/fuse; uses only private synthetic metadata"]
     fn writable_mount_does_not_wait_for_cloud_metadata() {
         let temp = tempfile::tempdir().unwrap();
@@ -144,6 +226,7 @@ mod startup_tests {
         let release = Arc::new((Mutex::new(false), Condvar::new()));
         let backend = DelayedMetadata {
             inner: Arc::new(MockBackend::new()),
+            slow_file: None,
             started: started.clone(),
             release: release.clone(),
         };

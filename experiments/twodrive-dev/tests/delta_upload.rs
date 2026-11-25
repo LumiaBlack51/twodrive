@@ -138,7 +138,7 @@ async fn conditional_delta_full_fallback_corruption_locks_and_interruption_over_
                         }
                         source = cause.source();
                     }
-                    assert!(closed, "unexpected oversized-upload failure: {error}");
+                    assert!(closed, "unexpected oversized-upload failure: {error:?}");
                 }
             }
             assert_eq!(fs::read(root.join("new.pptx")).unwrap(), current);

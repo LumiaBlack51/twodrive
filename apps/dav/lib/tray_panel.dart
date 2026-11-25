@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'package:flutter/material.dart';
 import 'workspace_navigation.dart';
 import 'client.dart';
@@ -27,14 +28,29 @@ class TrayPanel extends StatelessWidget {
     final backup = c.status['backup'] as Map? ?? {};
     final overall = c.status['overall'] as Map?;
     final issues = (overall?['issues'] as List?) ?? [];
-    final fallback = c.proxyFallback || overall?['route_fallback'] == true;
+    final fallback = c.proxyFallback;
+    final otherFallbacks = ((c.status['accounts'] as List?) ?? [])
+        .whereType<Map>()
+        .where(
+          (a) =>
+              a['profile'] != c.selected &&
+              a['connected'] == true &&
+              a['route_fallback'] == true,
+        )
+        .map((a) => a['name'])
+        .whereType<String>()
+        .join(', ');
     final issue =
         c.error ??
         (issues.isNotEmpty
-            ? issues.map((v) => '${v['account']} · ${v['message']}').join('\n')
+            ? issues
+                  .map(
+                    (v) => '${v['account']} · ${tr(v['message'].toString())}',
+                  )
+                  .join('\n')
             : null) ??
         (c.status['backup_failed'] == true
-            ? '备份进程已退出，请重新连接'
+            ? tr('备份进程已退出，请重新连接')
             : backup['state'] == 'error'
             ? backup['error']?.toString()
             : null);
@@ -65,19 +81,19 @@ class TrayPanel extends StatelessWidget {
           .map((v) => Map<String, dynamic>.from(v as Map)),
     ];
     final status = !c.connected
-        ? '未连接'
+        ? tr('未连接')
         : c.paused
-        ? '同步已暂停'
+        ? tr('同步已暂停')
         : issue != null
-        ? '需要处理'
+        ? tr('需要处理')
         : fallback
-        ? '已连接 · 使用系统／代理兜底'
+        ? tr('已连接 · 使用系统／代理兜底')
         : c.syncing
-        ? '正在同步'
+        ? tr('正在同步')
         : (backup['folders'] as num? ?? 0) > 0 &&
               backup['completed_scan'] == true
-        ? '已备份和同步'
-        : '文件已就绪';
+        ? tr('已备份和同步')
+        : tr('文件已就绪');
     final color = issue != null
         ? Colors.deepOrange
         : fallback
@@ -129,7 +145,7 @@ class TrayPanel extends StatelessWidget {
                                           minWidth: 260,
                                           maxWidth: 360,
                                         ),
-                                        tooltip: '切换网盘',
+                                        tooltip: tr('切换网盘'),
                                         enabled: !c.busy && c.available,
                                         onSelected: (id) async {
                                           final profile = c.profiles
@@ -170,12 +186,12 @@ class TrayPanel extends StatelessWidget {
                                                   const SizedBox(width: 10),
                                                   Text(
                                                     p['id'] == c.selected
-                                                        ? '当前浏览'
+                                                        ? tr('当前浏览')
                                                         : c.isProfileConnected(
                                                             p['id'] as String,
                                                           )
-                                                        ? '已连接'
-                                                        : '未连接',
+                                                        ? tr('已连接')
+                                                        : tr('未连接'),
                                                     style: const TextStyle(
                                                       fontSize: 11,
                                                       color: Colors.blueGrey,
@@ -229,7 +245,7 @@ class TrayPanel extends StatelessWidget {
                                   ),
                                 ),
                                 PopupMenuButton<String>(
-                                  tooltip: '设置',
+                                  tooltip: tr('设置'),
                                   popUpAnimationStyle:
                                       AnimationStyle.noAnimation,
                                   icon: const Icon(Icons.settings_outlined),
@@ -269,17 +285,19 @@ class TrayPanel extends StatelessWidget {
                                     PopupMenuItem(
                                       value: 'pause',
                                       enabled: c.connected && !c.busy,
-                                      child: Text(c.paused ? '恢复同步' : '暂停同步'),
+                                      child: Text(
+                                        c.paused ? tr('恢复同步') : tr('暂停同步'),
+                                      ),
                                     ),
                                     if (c.connected)
-                                      const PopupMenuItem(
+                                      PopupMenuItem(
                                         value: 'signout',
-                                        child: Text('退出登录…'),
+                                        child: Text(tr('退出登录…')),
                                       ),
                                     const PopupMenuDivider(),
-                                    const PopupMenuItem(
+                                    PopupMenuItem(
                                       value: 'quit',
-                                      child: Text('退出 TwoDrive'),
+                                      child: Text(tr('退出 TwoDrive')),
                                     ),
                                   ],
                                 ),
@@ -315,7 +333,7 @@ class TrayPanel extends StatelessWidget {
                                 ),
                                 if (onRefresh != null)
                                   IconButton(
-                                    tooltip: '刷新状态',
+                                    tooltip: tr('刷新状态'),
                                     onPressed:
                                         c.available && !c.busy && !c.quitting
                                         ? onRefresh
@@ -328,26 +346,29 @@ class TrayPanel extends StatelessWidget {
                             const SizedBox(height: 8),
                             StorageUsageView(
                               ring: true,
+                              shared: c.profile?['kind'] == 'peer',
                               value: c.quotas[c.selected],
                               connected: c.connected,
-                              onRefresh: c.connected
-                                  ? () {
-                                      c.refreshQuota(c.selected!, force: true);
-                                    }
-                                  : null,
                             ),
                           ],
                         ),
                       ),
                       if (fallback)
-                        const Padding(
-                          padding: EdgeInsets.all(12),
+                        Padding(
+                          padding: const EdgeInsets.all(12),
                           child: Text(
-                            '直连未能完成部分请求，已使用系统／代理兜底。',
-                            style: TextStyle(
+                            tr('此设备连接已切换到系统网络。'),
+                            style: const TextStyle(
                               color: Color(0xff985800),
                               fontSize: 12,
                             ),
+                          ),
+                        ),
+                      if (otherFallbacks.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            tr('以下设备正在使用系统网络：{arg0}', [otherFallbacks]),
                           ),
                         ),
                       if (issue != null)
@@ -364,10 +385,10 @@ class TrayPanel extends StatelessWidget {
                           ),
                         ),
                       if (c.paused)
-                        const Padding(
+                        Padding(
                           padding: EdgeInsets.all(12),
                           child: Text(
-                            '新同步请求已暂停；正在执行的请求可能完成。',
+                            tr('新同步请求已暂停；正在执行的请求可能完成。'),
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.blueGrey,
@@ -382,7 +403,7 @@ class TrayPanel extends StatelessWidget {
                     hasScrollBody: false,
                     child: Center(
                       child: Text(
-                        c.connected ? '暂无传输记录' : '连接账号后查看文件与备份状态',
+                        c.connected ? tr('暂无传输记录') : tr('连接账号后查看文件与备份状态'),
                         style: const TextStyle(
                           color: Colors.blueGrey,
                           fontSize: 13,
@@ -402,7 +423,7 @@ class TrayPanel extends StatelessWidget {
                         final total = (item['bytes_total'] as num?) ?? 0;
                         final done = (item['bytes_done'] as num?) ?? 0;
                         final state = item['state']?.toString();
-                        final active = state == null || state == '传输中';
+                        final active = state == null || state == tr('传输中');
                         return Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 18,
@@ -423,7 +444,7 @@ class TrayPanel extends StatelessWidget {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      item['name']?.toString() ?? '文件',
+                                      item['name']?.toString() ?? tr('文件'),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -444,13 +465,13 @@ class TrayPanel extends StatelessWidget {
                                     const SizedBox(height: 5),
                                     Text(
                                       item['error'] != null
-                                          ? '未完成'
+                                          ? tr('未完成')
                                           : state ??
                                                 (item['kind']
                                                         .toString()
                                                         .contains('download')
-                                                    ? '正在下载'
-                                                    : '正在上传'),
+                                                    ? tr('正在下载')
+                                                    : tr('正在上传')),
                                       style: const TextStyle(
                                         fontSize: 11,
                                         color: Colors.blueGrey,
@@ -468,7 +489,7 @@ class TrayPanel extends StatelessWidget {
                                       Text(
                                         total > 0
                                             ? '${(done / total * 100).clamp(0, 100).toStringAsFixed(0)}%'
-                                            : '准备中',
+                                            : tr('准备中'),
                                         style: const TextStyle(
                                           fontSize: 10,
                                           color: Colors.blueGrey,
@@ -505,21 +526,30 @@ class TrayPanel extends StatelessWidget {
                 TextButton.icon(
                   onPressed: c.connected && !c.busy ? onOpenFolder : null,
                   icon: const Icon(Icons.folder_open, size: 20),
-                  label: const Text('打开文件夹'),
+                  label: Text(tr('打开文件夹')),
                 ),
                 TextButton.icon(
                   onPressed: () => onManage(0),
                   icon: const Icon(Icons.grid_view, size: 18),
-                  label: const Text('查看文件'),
+                  label: Text(tr('查看文件')),
                 ),
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.only(bottom: 8),
-            child: Text(
-              'TwoDrive',
-              style: TextStyle(fontSize: 10, color: Colors.blueGrey),
+          const RepaintBoundary(
+            child: ColoredBox(
+              color: Color(0xfffafbfe),
+              child: SizedBox(
+                width: double.infinity,
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'TwoDrive',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 10, color: Colors.blueGrey),
+                  ),
+                ),
+              ),
             ),
           ),
         ],

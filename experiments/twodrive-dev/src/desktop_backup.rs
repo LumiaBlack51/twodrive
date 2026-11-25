@@ -77,7 +77,7 @@ pub fn folders(state: &State, p: &Profile) -> anyhow::Result<Vec<Folder>> {
 pub fn save_folders(state: &State, p: &Profile, folders: &[Folder]) -> anyhow::Result<()> {
     directory(state, p)?.save("folders.json", &folders)
 }
-pub fn reset_report(state: &State, p: &Profile, binding: Option<&str>) -> anyhow::Result<()> {
+pub fn prepare_worker(state: &State, p: &Profile, binding: Option<&str>) -> anyhow::Result<bool> {
     let folders = folders(state, p)?;
     let count = folders.iter().filter(|f| f.enabled).count();
     let s = directory(state, p)?;
@@ -97,7 +97,8 @@ pub fn reset_report(state: &State, p: &Profile, binding: Option<&str>) -> anyhow
         "report.json",
         &json!({"state":if count == 0 { "idle" } else { "starting" },"active":[],"recent":recent,"folders":count,
             "completed_scan":false,"confirmed_files":confirmed_files}),
-    )
+    )?;
+    Ok(count > 0)
 }
 
 fn confirmed_item(path: &str, record: &Record, folders: &[Folder]) -> Option<Value> {
@@ -502,7 +503,7 @@ pub fn run(
     let mut confirmed_files = manifest.confirmed_files();
     let mut scanned = false;
     loop {
-        let selected = folders(state, p)?;
+        let mut selected = folders(state, p)?;
         let count = selected.iter().filter(|f| f.enabled).count();
         let mut status = json!({"state":"scanning","active":[],"recent":recent,"folders":count,"completed_scan":scanned,"confirmed_files":confirmed_files});
         let result = (|| -> anyhow::Result<()> {
@@ -510,12 +511,29 @@ pub fn run(
                 status["state"] = json!("paused");
                 return Ok(());
             }
+            let policy = backend.sync_policy();
+            let mut excluded = policy.canonical_backup_exclusions();
+            excluded.extend(policy.exclude_directory_paths.iter().cloned());
+            let is_excluded = |path: &Path| excluded.iter().any(|dir| path.starts_with(dir));
+            status["unavailable_exclusion_paths"] = json!(
+                policy
+                    .exclude_directory_paths
+                    .iter()
+                    .filter(|p| !p.is_dir())
+                    .collect::<Vec<_>>()
+            );
+            selected.retain(|f| {
+                f.enabled && !is_excluded(&twodrive_dev::sync_policy::backup_path_key(&f.local))
+            });
             validate(&selected, p, state, &protected)?;
             s.save("report.json", &status)?;
             let mut seen = 0;
             let mut checked_version_directories = BTreeSet::new();
-            for folder in selected.iter().filter(|f| f.enabled) {
+            for folder in &selected {
                 let root = folder.local.canonicalize()?;
+                if is_excluded(&root) {
+                    continue;
+                }
                 let mut queue = vec![(root.clone(), folder.remote.clone())];
                 while let Some((local, remote)) = queue.pop() {
                     ensure!(!paused.exists(), "同步已暂停");
@@ -544,6 +562,9 @@ pub fn run(
                         ensure!(!name.contains(['\\', '\0']), "文件名不能映射到远端路径");
                         let source = item.path().canonicalize()?;
                         ensure!(source.starts_with(&root), "备份路径离开所选目录");
+                        if is_excluded(&source) {
+                            continue;
+                        }
                         let dest = format!("{remote}/{name}");
                         if kind.is_dir() {
                             has_content = true;
@@ -727,7 +748,7 @@ mod tests {
             id: "empty".into(),
             ..Default::default()
         };
-        reset_report(&state, &profile, None).unwrap();
+        prepare_worker(&state, &profile, None).unwrap();
         let report = report(&state, &profile).unwrap();
         assert_eq!(report["state"], "idle");
         assert_eq!(report["folders"], 0);
@@ -765,7 +786,7 @@ mod tests {
             &json!({"active":[{"name":"stopped upload"}],"recent":[]}),
         )
         .unwrap();
-        reset_report(&state, &profile, Some("bound")).unwrap();
+        prepare_worker(&state, &profile, Some("bound")).unwrap();
         let started = report(&state, &profile).unwrap();
         assert_eq!(started["confirmed_files"], 2);
         assert_eq!(started["active"], json!([]));
@@ -779,7 +800,7 @@ mod tests {
             json!(local.join("last.txt"))
         );
 
-        reset_report(&state, &profile, Some("other")).unwrap();
+        prepare_worker(&state, &profile, Some("other")).unwrap();
         let different = report(&state, &profile).unwrap();
         assert_eq!(different["confirmed_files"], 0);
         assert_eq!(different["recent"], json!([]));
@@ -809,6 +830,35 @@ mod tests {
         assert_eq!(restored[0]["state"], "已备份");
         assert!(restored[0].get("completed_at").is_none());
         assert!(restored[0].get("local_path").is_none());
+    }
+
+    #[test]
+    fn disabled_backup_stays_idle_on_connect_and_when_the_last_source_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = State::new(temp.path().join("state")).unwrap();
+        let profile = Profile {
+            id: "fixture".into(),
+            ..Default::default()
+        };
+        let mut source = Folder {
+            local: temp.path().join("source"),
+            remote: "/saved".into(),
+            enabled: false,
+        };
+        for sources in [vec![], vec![source.clone()]] {
+            save_folders(&state, &profile, &sources).unwrap();
+            assert!(!prepare_worker(&state, &profile, None).unwrap());
+            let idle = report(&state, &profile).unwrap();
+            assert_eq!(idle["state"], "idle");
+            assert_eq!(idle["folders"], 0);
+        }
+        source.enabled = true;
+        save_folders(&state, &profile, &[source]).unwrap();
+        assert!(prepare_worker(&state, &profile, None).unwrap());
+        assert_eq!(report(&state, &profile).unwrap()["state"], "starting");
+        save_folders(&state, &profile, &[]).unwrap();
+        assert!(!prepare_worker(&state, &profile, None).unwrap());
+        assert_eq!(report(&state, &profile).unwrap()["state"], "idle");
     }
 
     #[test]
