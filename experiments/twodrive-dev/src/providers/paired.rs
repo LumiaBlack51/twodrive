@@ -125,7 +125,7 @@ pub fn action(action: &str, args: &Value, cancel: &AtomicBool) -> anyhow::Result
     ensure!(action == "discover", "unsupported device action");
     let devices = twodrive_dev::discovery::scan(cancel)?;
     Ok(
-        json!({"message":if devices.is_empty(){"未发现设备。确认对方已开启可发现共享；跨网络可直接导入邀请。"}else{"发现不等于已授权；选择设备后仍需导入它的配对邀请。"},"selection_message":"已选择设备，导入它的配对邀请后保存连接。","items":devices.into_iter().map(|d|json!({"label":d.name,"detail":d.fingerprint,"options":{"expected_device":d.id,"writable":d.writable}})).collect::<Vec<_>>() }),
+        json!({"message":if devices.is_empty(){"未发现设备。确认对方已开启可发现共享；跨网络可直接导入邀请。"}else{"选择设备并导入配对邀请。"},"selection_message":"已选择设备，导入它的配对邀请后保存连接。","items":devices.into_iter().map(|d|json!({"label":d.name,"detail":d.fingerprint,"options":{"expected_device":d.id,"writable":d.writable}})).collect::<Vec<_>>() }),
     )
 }
 fn backend(p: &Profile, url: &str) -> anyhow::Result<Backend> {

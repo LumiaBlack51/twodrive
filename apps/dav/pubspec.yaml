@@ -1,11 +1,13 @@
 name: twodrive_dav
 description: TwoDrive Development for Linux and Windows, with extensible storage providers.
 publish_to: none
-version: 0.2.24+10
+version: 0.3.3+16
 environment:
   sdk: ^3.11.5
 dependencies:
   flutter:
+    sdk: flutter
+  flutter_localizations:
     sdk: flutter
   window_manager: 0.5.1
   file_selector: 1.1.0

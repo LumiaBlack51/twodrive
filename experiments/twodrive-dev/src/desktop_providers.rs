@@ -208,9 +208,10 @@ pub fn connect(
     args: &Args,
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
+    expected: Option<&str>,
 ) -> anyhow::Result<Connection> {
     let effective = effective_access(p);
-    let mut connection = connect_raw(&effective, args, cancel, network)?;
+    let mut connection = connect_raw(&effective, args, cancel, network, expected)?;
     connection.backend = connection
         .backend
         .with_write_access(effective.writable, None)
@@ -236,12 +237,13 @@ fn connect_raw(
     args: &Args,
     cancel: &AtomicBool,
     network: Arc<twodrive_dev::network::Diagnostics>,
+    expected: Option<&str>,
 ) -> anyhow::Result<Connection> {
     validate(p)?;
     match p.kind.as_str() {
         "dav" => dav::connect(p, cancel, network),
         "peer" => paired::connect(p, args, cancel, network),
-        "google" => google::connect(p, cancel, network),
+        "google" => google::connect(p, cancel, network, expected),
         "onedrive" => onedrive::connect(p, cancel, network),
         "icloud" => icloud::connect(p, cancel, network),
         "baidu" => baidu::connect(p, cancel, network),
@@ -311,7 +313,7 @@ pub fn resume(
             );
             paired::connect(p, args, cancel, network)?
         }
-        _ => connect_raw(p, args, cancel, network)?,
+        _ => connect_raw(p, args, cancel, network, Some(expected))?,
     };
     ensure!(
         connection.binding == expected,

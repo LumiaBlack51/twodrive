@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 class DesktopPreferences {
+  String language = 'zh';
   bool autoMountOnConnect = true;
   bool restoreConnectionsOnStartup = true;
   File? _file;
@@ -11,6 +12,7 @@ class DesktopPreferences {
     _file = file;
     if (!await file.exists()) return;
     final saved = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    language = saved['language'] == 'en' ? 'en' : 'zh';
     autoMountOnConnect = saved['auto_mount_on_connect'] != false;
     restoreConnectionsOnStartup =
         saved['restore_connections_on_startup'] != false;
@@ -21,7 +23,9 @@ class DesktopPreferences {
   Future<void> setRestoreConnectionsOnStartup(bool value) =>
       _save(restore: value);
 
-  Future<void> _save({bool? autoMount, bool? restore}) {
+  Future<void> setLanguage(String value) => _save(locale: value);
+
+  Future<void> _save({bool? autoMount, bool? restore, String? locale}) {
     // Serialize switches so overlapping writes retain both choices and do not
     // race on the temporary file. A failed save must not change either value.
     final result = _saving.then((_) async {
@@ -33,6 +37,7 @@ class DesktopPreferences {
         final temporary = File('${file.path}.tmp');
         await temporary.writeAsString(
           jsonEncode({
+            'language': locale ?? language,
             'auto_mount_on_connect': nextAutoMount,
             'restore_connections_on_startup': nextRestore,
           }),
@@ -40,6 +45,7 @@ class DesktopPreferences {
         );
         await temporary.rename(file.path);
       }
+      language = locale ?? language;
       autoMountOnConnect = nextAutoMount;
       restoreConnectionsOnStartup = nextRestore;
     });

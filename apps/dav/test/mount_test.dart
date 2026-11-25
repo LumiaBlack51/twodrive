@@ -108,7 +108,7 @@ void main() {
     final setting = find.widgetWithText(SwitchListTile, '启动时恢复已登录账号');
     expect(setting, findsOneWidget);
     expect(find.text('连接后自动挂载'), findsNothing);
-    expect(find.textContaining('“断开”仅对本次运行生效'), findsOneWidget);
+    expect(find.textContaining('“断开”仅对本次运行生效'), findsNothing);
     await tester.ensureVisible(setting);
     await tester.tap(setting);
     await tester.pumpAndSettle();
@@ -278,29 +278,30 @@ void main() {
       c.dispose();
     },
   );
-  testWidgets('mount card explains editing and disables absent driver', (
-    tester,
-  ) async {
-    final c = MountClient(installed: false);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SingleChildScrollView(
-            child: MountCard(client: c, onOpen: () {}),
+  testWidgets(
+    'mount card offers recovery without technical prose and disables absent driver',
+    (tester) async {
+      final c = MountClient(installed: false);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: MountCard(client: c, onOpen: () {}),
+            ),
           ),
         ),
-      ),
-    );
-    expect(find.text('文件管理器挂载'), findsOneWidget);
-    final button = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, '挂载'),
-    );
-    expect(button.onPressed, isNull);
-    expect(find.textContaining('网盘回收站'), findsOneWidget);
-    expect(find.textContaining('待上传完成'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-    c.dispose();
-  });
+      );
+      expect(find.text('文件管理器挂载'), findsOneWidget);
+      final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '挂载'),
+      );
+      expect(button.onPressed, isNull);
+      expect(find.text('打开写入恢复目录'), findsOneWidget);
+      expect(find.textContaining('待上传完成'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    },
+  );
   testWidgets(
     'a retained mount can still be unmounted when its connection fails',
     (tester) async {

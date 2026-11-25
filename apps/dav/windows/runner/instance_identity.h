@@ -41,7 +41,8 @@ inline std::wstring CanonicalDesktopState(const std::filesystem::path& input) {
 }
 
 inline std::wstring InstanceName(const std::vector<std::string>& arguments) {
-  const std::wstring base = L"Local\\TwoDriveDevelopmentDesktop";
+  const bool server = std::find(arguments.begin(), arguments.end(), "--tdlink-server") != arguments.end();
+  const std::wstring base = server ? L"Local\\TDLinkServer" : L"Local\\TwoDriveDevelopmentDesktop";
   const auto default_path = CanonicalDesktopState(DefaultDesktopState());
   if (default_path.empty()) return L"";
   auto state = std::find(arguments.begin(), arguments.end(), "--state");

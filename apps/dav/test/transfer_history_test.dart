@@ -1,3 +1,4 @@
+import 'package:twodrive_dav/language.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -80,14 +81,14 @@ void main() {
       };
     addTearDown(c.dispose);
     final download = Transfer(10, 'download', {'path': '/saved.docx'})
-      ..state = '已完成';
+      ..phase = TransferPhase.completed;
     c.transfers.add(download);
     expect(c.transferRows.map((row) => row.info['name']), [
       'saved.docx',
       'backup.txt',
     ]);
     expect(c.transferShowsProgress(c.transferInfo(download)), isFalse);
-    download.state = '传输中';
+    download.phase = TransferPhase.running;
     expect(c.transferShowsProgress(c.transferInfo(download)), isTrue);
   });
 
@@ -99,6 +100,9 @@ void main() {
       final engine = await stubEngine(temp);
       final first = HistoryClient();
       await first.start(engine.path, temp.path, '', '');
+      final language = desktopLocale.value;
+      addTearDown(() => desktopLocale.value = language);
+      desktopLocale.value = 'en';
       final local = '${temp.path}/上传 #.txt';
       final output = '${temp.path}/下载 #.txt';
       await first.transfer('upload', {
@@ -125,6 +129,11 @@ void main() {
       expect(await first.shutdown(), isTrue);
       first.dispose();
 
+      expect(
+        first.transfers.every((task) => task.phase == TransferPhase.completed),
+        isTrue,
+      );
+      desktopLocale.value = 'zh';
       final second = HistoryClient()..revision = 'two';
       addTearDown(() async {
         await second.shutdown();

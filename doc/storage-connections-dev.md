@@ -1,5 +1,14 @@
 # Development 存储连接 / Storage connections
 
+设备共享使用自动路由时，只有整条设备连接切换到系统网络才显示黄色路由提醒。面板会指明发生回退的设备。中继、设备发现和 DNS 可以独立使用系统网络，这些事件保留在连接诊断中。单个后台连接的出口不能确定某次文件传输的路径。
+
+Development 0.3.1 通过根目录的 Depth 0 WebDAV 查询读取共享容量。TDLink 0.3.1 共享端报告共享目录所在文件系统的已用与可用空间。旧版共享端可能省略这些属性。两端更新后，可在托盘点「刷新状态」读取容量。此操作无需扫描目录。
+
+In automatic mode, the tray shows a yellow route warning when a whole device connection switches to the system network. The panel identifies affected devices. Relay, discovery and DNS activity remains available in connection diagnostics. A background connection alone cannot establish which path a file transfer used.
+
+Development 0.3.1 reads share capacity with a Depth 0 WebDAV request. TDLink 0.3.1 reports the space used and available on the filesystem containing the share. Older servers may omit these properties. After both ends are updated, use Refresh status in the tray to refresh capacity.
+
+
 2026-10-15（Development 0.1.4）：`dev` 的 Development 桌面“连接 → 添加连接”可在已有连接在线时使用。可新增、修改、删除其他连接；正在使用的连接需先断开才能编辑或删除。每条已保存连接提供“登录并使用”或“切换使用”，活动连接明确标为“当前使用”；行点击保留为快捷操作，切换仍受待上传缓存保护。当前为单个活动连接，配置列表可保存多个账号。
 
 ## SMB2/3（本地只读候选）
@@ -87,3 +96,20 @@ Google 使用服务返回的账号名称（现有探测优先邮箱）；OneDriv
 队列保留 32 项上限，满时拒绝新增工作而不阻塞取消通道；已经取消但尚未执行的任务不会再运行。文件传输和 FUSE 持久待办仍使用原有恢复机制，不能将 desktop IPC 队列与云端持久同步待办混为一谈。
 
 English: Status refreshes are single-flight, completion events synchronize account/connection state, and shallow directory polling runs every 15 seconds or on focus. Transient polling errors recover automatically; action failures remain visible. Native tray tooltips and connection screens show adapter-provided account names. The bounded IPC queue keeps cancellation available and skips queued cancelled work; it is separate from durable mount synchronization.
+
+### Development 0.2.25
+
+TwoDrive Client imports TDLink invitations under Connections. Open **TDLink Server**
+to publish a folder, export invitations or revoke a device. It uses a separate
+engine process and lock and reads the existing hosting configuration and device
+identities. Closing the server ends its share. Closing the client leaves the
+server running. Portable installations can start the server with
+`twodrive_dav --tdlink-server` (Windows: `twodrive_dav.exe --tdlink-server`).
+
+Desktop settings include Chinese and English. Exclusions accept a literal
+filename, extension, backup folder, backup folder name, wildcard or regex.
+A specific folder applies only to that local path; a folder-name rule applies
+throughout backup sources. An Office owner file remains local. Reconnect after
+saving the rules. Network diagnostics are available in the desktop engine's
+JSON-lines `status` response (`network`). On a supported engine the CLI IPC
+operation `local_preflight` checks file metadata without importing a file.

@@ -69,7 +69,7 @@ pub(super) fn aggregate_accounts(accounts: &[Value]) -> Value {
                 account["backup"]["state"].as_str(),
                 Some("starting" | "scanning")
             );
-        fallback |= account["route_fallback"] == true;
+        fallback |= account["connected"] == true && account["route_fallback"] == true;
         for (failed, message) in [
             (
                 account["mount_failed"] == true,
@@ -625,6 +625,7 @@ mod tests {
         two.upload("/same.txt", b"account-two".to_vec()).unwrap();
         let mut app = App {
             args: Args {
+                tdlink_server: false,
                 state: state.dir.clone(),
                 peer_bin: PathBuf::new(),
                 launcher: PathBuf::new(),
@@ -643,7 +644,6 @@ mod tests {
             mounted: None,
             backup: None,
             network: Arc::default(),
-            hosting: sharing::Hosting::default(),
             native_fixture: local_files::NativeFixture::default(),
             native_runtime: cfapi_runtime::Runtime::default(),
             inactive: HashMap::new(),
@@ -682,10 +682,33 @@ mod tests {
     }
 
     #[test]
+    fn tray_only_reports_endpoint_fallback_across_accounts() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = fixture(root.path());
+        let parked = app.inactive["a"].network.clone();
+        for network in [&app.network, &parked] {
+            network.record("network: system TCP tunnel opened");
+        }
+        let status = app.status().unwrap();
+        assert_eq!(status["system_tunnel_active"], true);
+        assert_eq!(status["overall"]["route_fallback"], false);
+        for account in status["accounts"].as_array().unwrap() {
+            assert_eq!(account["route_fallback"], false);
+        }
+
+        parked.record(
+            "network: route=system/proxy fallback; physical setup or relay registration failed",
+        );
+        let status = app.status().unwrap();
+        assert_eq!(status["route_fallback"], false);
+        assert_eq!(status["overall"]["route_fallback"], true);
+    }
+
+    #[test]
     fn aggregate_pending_and_errors_keep_equal_paths_separate_between_accounts() {
         let summary = aggregate_accounts(&[
             json!({"profile":"a","revision":"ra","name":"First","cache":{"pending":2,"waiting":[{"path":"/same"}]},"backup":{"state":"scanning"}}),
-            json!({"profile":"b","revision":"rb","name":"Second","cache":{"pending":3,"waiting":[{"path":"/same"}],"deletes_rejected":1},"mount_failed":true,"route_fallback":true}),
+            json!({"profile":"b","revision":"rb","name":"Second","connected":true,"cache":{"pending":3,"waiting":[{"path":"/same"}],"deletes_rejected":1},"mount_failed":true,"route_fallback":true}),
         ]);
         assert_eq!(summary["pending"], 5);
         assert_eq!(summary["syncing"], true);

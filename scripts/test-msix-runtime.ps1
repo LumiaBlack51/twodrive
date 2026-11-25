@@ -72,7 +72,10 @@ namespace TwoDriveMsixSmoke {
         return name.ToString();
       } finally { CloseHandle(process); }
     }
-    public static void Close(uint target) {
+    [DllImport("user32.dll", SetLastError=true)] static extern bool PostMessage(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
+    public static void Close(uint target) { CloseWindow(target, false); }
+    public static void RequestClose(uint target) { CloseWindow(target, true); }
+    static void CloseWindow(uint target, bool requestClose) {
       bool found=false;
       EnumWindows((window, data) => {
         uint pid; uint thread=GetWindowThreadProcessId(window, out pid);
@@ -83,7 +86,8 @@ namespace TwoDriveMsixSmoke {
         // COM/OLE helper windows may precede the Flutter runner and live on
         // other threads. Only the runner owns the GUI message loop under test.
         if (name.ToString()!="FLUTTER_RUNNER_WIN32_WINDOW") return true;
-        if (!PostThreadMessage(thread, 0x12, UIntPtr.Zero, IntPtr.Zero)) throw new System.ComponentModel.Win32Exception();
+        bool sent = requestClose ? PostMessage(window, 0x10, UIntPtr.Zero, IntPtr.Zero) : PostThreadMessage(thread, 0x12, UIntPtr.Zero, IntPtr.Zero);
+        if (!sent) throw new System.ComponentModel.Win32Exception();
         found=true;
         return false;
       }, IntPtr.Zero);
@@ -96,6 +100,7 @@ $beforeDependencies = @(Get-AppxPackage -Name $dependencyName | ForEach-Object P
 $installed = $null
 $applicationPid = 0
 $enginePid = 0
+$serverProcess = $null
 $addedDependency = $null
 $result = [ordered]@{platform='Windows 11 native'; package_version=[string]$manifest.Package.Identity.Version; signed=$false; certificates_modified=$false; checks=@{}; passed=$false}
 try {
@@ -126,6 +131,25 @@ try {
     $enginePid = $engine.ProcessId
     if ([TwoDriveMsixSmoke.Native]::Identity($applicationPid) -ne $installed.PackageFullName) { throw 'GUI does not have the installed MSIX identity.' }
     if ([TwoDriveMsixSmoke.Native]::Identity($enginePid) -ne $installed.PackageFullName) { throw 'Engine child lost the package identity.' }
+    $serverAppId = $installed.PackageFamilyName + '!TDLinkServer'
+    $serverPid = [TwoDriveMsixSmoke.Native]::Activate($serverAppId, ('--state "' + $state + '"'))
+    if ($serverPid -eq $applicationPid -or [TwoDriveMsixSmoke.Native]::Identity($serverPid) -ne $installed.PackageFullName) {
+        throw 'TDLink did not start an independent packaged process.'
+    }
+    $serverProcess = Get-Process -Id $serverPid
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    while (-not (Test-Path -LiteralPath (Join-Path $state 'tdlink-server/run.lock'))) {
+        if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue) -or [DateTime]::UtcNow -ge $deadline) {
+            throw 'The TDLink launcher did not reach the server role.'
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    [TwoDriveMsixSmoke.Native]::RequestClose($serverPid)
+    if (-not $serverProcess.WaitForExit(15000)) { throw 'TDLink did not close normally.' }
+    if (-not (Get-Process -Id $applicationPid -ErrorAction SilentlyContinue) -or -not (Get-Process -Id $enginePid -ErrorAction SilentlyContinue)) {
+        throw 'Closing TDLink also closed the client.'
+    }
+    $result.checks.separate_start_menu_entries = $true
     if (-not (Test-Path -LiteralPath (Join-Path $installed.InstallLocation 'distribution-msix'))) { throw 'MSIX update-channel marker missing.' }
     $result.checks.packaged_gui_and_engine_identity = $true
     $result.checks.managed_update_marker = $true
@@ -158,6 +182,9 @@ try {
     if ($contextResult.exit_code -ne 0) { throw 'Packaged-context IPC/QUIC sharing regression failed; inspect msix-installed-sharing.json.' }
     $result.checks.installed_engine_sharing = $true
 } finally {
+    if ($serverProcess -and -not $serverProcess.HasExited) {
+        $serverProcess.Kill()
+    }
     if ($applicationPid -and (Get-Process -Id $applicationPid -ErrorAction SilentlyContinue)) {
         [TwoDriveMsixSmoke.Native]::Close($applicationPid)
         $deadline = [DateTime]::UtcNow.AddSeconds(10)
@@ -176,7 +203,7 @@ try {
     $result.checks.uninstall = @(Get-AppxPackage -AllUsers -Name $packageName).Count -eq 0
     if ($addedDependency) { Remove-AppxPackage -Package $addedDependency.PackageFullName }
     $result.checks.dependency_registration_restored = @(Get-AppxPackage -Name $dependencyName | Where-Object { $_.PackageFullName -notin $beforeDependencies }).Count -eq 0
-    $result.passed = $result.checks.Count -ge 7 -and -not @($result.checks.Values | Where-Object { $_ -ne $true }).Count
+    $result.passed = $result.checks.separate_start_menu_entries -eq $true -and $result.checks.Count -ge 8 -and -not @($result.checks.Values | Where-Object { $_ -ne $true }).Count
     $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Report -Encoding utf8
 }
 if (-not $result.passed) { throw 'An MSIX runtime or cleanup assertion failed.' }

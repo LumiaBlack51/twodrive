@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'dart:async';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
@@ -106,23 +107,20 @@ class _CfapiPageState extends State<CfapiPage> {
                 color: Color(0xff326bd6),
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Windows 原生按需同步',
+              Text(
+                tr('Windows 原生按需同步'),
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'CFAPI 将 OneDrive 普通文件和文件夹显示为 Explorer 原生占位文件。打开文件时下载，并支持“始终保留在此设备上”和“释放空间”。',
-              ),
               const SizedBox(height: 12),
               Text(
                 state['supported'] == true
                     ? (running
-                          ? '● 原生同步运行中'
+                          ? tr('● 原生同步运行中')
                           : configured
-                          ? '● 原生目录已就绪'
-                          : '● CFAPI 组件已安装')
-                    : '当前引擎未包含 CFAPI 运行组件',
+                          ? tr('● 原生目录已就绪')
+                          : tr('● 可用'))
+                    : tr('按需同步不可用'),
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ],
@@ -137,7 +135,7 @@ class _CfapiPageState extends State<CfapiPage> {
               children: [
                 DropdownButtonFormField<String>(
                   initialValue: selected,
-                  decoration: const InputDecoration(labelText: 'OneDrive 账户'),
+                  decoration: InputDecoration(labelText: tr('OneDrive 账户')),
                   items: profiles
                       .map(
                         (p) => DropdownMenuItem(
@@ -155,8 +153,8 @@ class _CfapiPageState extends State<CfapiPage> {
                   TextField(
                     controller: root,
                     enabled: !working && (!preparing || retryPrepare),
-                    decoration: const InputDecoration(
-                      labelText: '新的原生同步目录',
+                    decoration: InputDecoration(
+                      labelText: tr('新的原生同步目录'),
                       hintText: r'D:\TwoDrive\OneDrive-Native',
                     ),
                   ),
@@ -165,7 +163,7 @@ class _CfapiPageState extends State<CfapiPage> {
                         ? null
                         : () async {
                             final parent = await getDirectoryPath(
-                              confirmButtonText: '选择父目录',
+                              confirmButtonText: tr('选择父目录'),
                             );
                             if (parent != null && mounted) {
                               setState(
@@ -174,10 +172,12 @@ class _CfapiPageState extends State<CfapiPage> {
                             }
                           },
                     icon: const Icon(Icons.folder_open),
-                    label: const Text('选择父目录'),
+                    label: Text(tr('选择父目录')),
                   ),
-                  const Text(
-                    '使用新的本机目录，仅同步普通文件和文件夹。特殊服务对象继续通过原挂载访问。准备只获取目录信息，文件内容按需下载。',
+                  Text(
+                    tr(
+                      '使用新的本机目录，仅同步普通文件和文件夹。特殊服务对象继续通过原挂载访问。准备只获取目录信息，文件内容按需下载。',
+                    ),
                   ),
                   const SizedBox(height: 12),
                   FilledButton(
@@ -189,7 +189,7 @@ class _CfapiPageState extends State<CfapiPage> {
                         ? null
                         : () => run('native_prepare', selected),
                     child: Text(
-                      retryPrepare ? '重试准备 CFAPI 原生目录' : '准备 CFAPI 原生目录',
+                      retryPrepare ? tr('重试设置按需同步目录') : tr('设置按需同步目录'),
                     ),
                   ),
                   if (preparing && !retryPrepare)
@@ -197,7 +197,7 @@ class _CfapiPageState extends State<CfapiPage> {
                       onPressed: working || selected == null
                           ? null
                           : () => run('native_start', selected),
-                      child: const Text('继续准备现有原生目录'),
+                      child: Text(tr('继续准备现有原生目录')),
                     ),
                 ] else ...[
                   SelectableText(state['root'] as String? ?? ''),
@@ -206,7 +206,10 @@ class _CfapiPageState extends State<CfapiPage> {
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(
-                        '此独立原生目录有 ${state['exclusions']['excluded_objects']} 项特殊对象或子项未纳入；仍可通过原挂载或 OneDrive 网页访问。',
+                        tr(
+                          '此独立原生目录有 {arg0} 项特殊对象或子项未纳入；仍可通过原挂载或 OneDrive 网页访问。',
+                          [state['exclusions']['excluded_objects']],
+                        ),
                       ),
                     ),
                   const SizedBox(height: 12),
@@ -226,13 +229,13 @@ class _CfapiPageState extends State<CfapiPage> {
                               ? Icons.stop_circle_outlined
                               : Icons.play_arrow,
                         ),
-                        label: Text(running ? '安全停止原生同步' : '启动原生同步'),
+                        label: Text(running ? tr('安全停止原生同步') : tr('启动原生同步')),
                       ),
                       OutlinedButton.icon(
                         onPressed: () =>
                             openLocalDirectory(state['root'] as String),
                         icon: const Icon(Icons.folder_open),
-                        label: const Text('在 Explorer 中打开'),
+                        label: Text(tr('在 Explorer 中打开')),
                       ),
                     ],
                   ),
@@ -241,37 +244,37 @@ class _CfapiPageState extends State<CfapiPage> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        '本轮同步待重试：$syncIssue',
+                        tr('本轮同步待重试：{arg0}', [syncIssue]),
                         style: const TextStyle(color: Colors.deepOrange),
                       ),
                     ),
                   Text(
                     workLabel ??
                         (progress['phase'] == 'paused'
-                            ? '已暂停自动同步'
+                            ? tr('已暂停自动同步')
                             : running
-                            ? '正在监测本地与云端变化'
-                            : '原生目录保留，等待启动'),
+                            ? tr('正在监测本地与云端变化')
+                            : tr('原生目录保留，等待启动')),
                   ),
-                  if (workLabel != null) const Text('本轮尚未完成，统计来自最近一次检查。'),
                   const SizedBox(height: 8),
                   Text(
-                    '文件 ${summary['catalogue_files'] ?? '—'} · 目录 ${summary['catalogue_directories'] ?? '—'} · 待处理 ${summary['durable_work_items'] ?? '—'}',
+                    tr('文件 {arg0} · 目录 {arg1} · 待处理 {arg2}', [
+                      summary['catalogue_files'] ?? '—',
+                      summary['catalogue_directories'] ?? '—',
+                      summary['durable_work_items'] ?? '—',
+                    ]),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    '云端变化每 30 秒检查；固定与释放空间每 10 秒检查。文件打开时的写入会等待可一致捕获的时机。冲突版本保留在恢复状态中。',
-                  ),
                 ],
                 if (preparing)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
                       working
-                          ? '原生目录正在后台准备，原有挂载继续运行。'
+                          ? tr('原生目录正在后台准备，原有挂载继续运行。')
                           : retryPrepare
-                          ? '上次准备在所有者建立前中断，可保留诊断并重试。'
-                          : '准备尚未完成，可继续校验现有原生目录。',
+                          ? tr('上次准备在所有者建立前中断，可保留诊断并重试。')
+                          : tr('准备尚未完成，可继续校验现有原生目录。'),
                     ),
                   ),
                 if (working)
@@ -280,9 +283,9 @@ class _CfapiPageState extends State<CfapiPage> {
                     child: LinearProgressIndicator(),
                   ),
                 if (working)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(top: 8),
-                    child: Text('正在校验账户和原生目录，大型账户可能需要几分钟。'),
+                    child: Text(tr('正在校验账户和原生目录，大型账户可能需要几分钟。')),
                   ),
                 if (error != null)
                   Padding(

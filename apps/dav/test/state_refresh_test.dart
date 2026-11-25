@@ -41,6 +41,48 @@ class IdleClient extends StorageClient {
 
 void main() {
   test(
+    'tray status refresh rechecks cached quotas for connected accounts',
+    () async {
+      final c = DelayedClient()
+        ..available = true
+        ..profiles = [
+          for (final id in ['a', 'b', 'offline']) {'id': id, 'revision': 'r'},
+        ];
+      addTearDown(c.dispose);
+      c.setView(visible: true, quota: true);
+      final status = {
+        'connected': true,
+        'profile': 'a',
+        'multi_connection': true,
+        'connections': [
+          {'id': 'a'},
+          {'id': 'b'},
+        ],
+        'storage_usage': true,
+      };
+      final first = c.refreshView();
+      c.replies[0].complete(status);
+      await first;
+      expect(c.calls, ['status', 'quota', 'quota']);
+      c.replies[1].complete({'state': 'ready'});
+      c.replies[2].complete({'state': 'ready'});
+      await Future<void>.delayed(Duration.zero);
+      final passive = c.refreshView();
+      c.replies[3].complete(status);
+      await passive;
+      expect(c.calls.length, 4);
+      final manual = c.refreshView(forceQuota: true);
+      final duplicate = c.refreshView(forceQuota: true);
+      c.replies[4].complete(status);
+      await Future.wait([manual, duplicate]);
+      expect(c.calls.skip(4), ['status', 'quota', 'quota']);
+      expect(c.quotas.keys, unorderedEquals(['a', 'b']));
+      c.replies[5].complete({'state': 'ready'});
+      c.replies[6].complete({'state': 'ready'});
+      await Future<void>.delayed(Duration.zero);
+    },
+  );
+  test(
     'idle desktop sends no status, directory, or quota requests',
     () async {
       final temp = await Directory.systemTemp.createTemp('twodrive-idle-');

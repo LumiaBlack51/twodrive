@@ -64,9 +64,9 @@ class _TransferHistory {
     if (task.account != null) 'account': task.account,
     'done': task.done,
     'total': task.total,
-    'result': switch (task.state) {
-      '已完成' => 'complete',
-      '未完成' => 'failed',
+    'result': switch (task.phase) {
+      TransferPhase.completed => 'complete',
+      TransferPhase.failed => 'failed',
       _ => 'unconfirmed',
     },
   };
@@ -101,10 +101,10 @@ class _TransferHistory {
       )
       ..done = row['done'] as int
       ..total = row['total'] as int
-      ..state = switch (row['result']) {
-        'complete' => '已完成',
-        'failed' => '未完成',
-        _ => '结果未确认',
+      ..phase = switch (row['result']) {
+        'complete' => TransferPhase.completed,
+        'failed' => TransferPhase.failed,
+        _ => TransferPhase.unconfirmed,
       };
   }
 }

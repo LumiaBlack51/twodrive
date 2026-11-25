@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -109,17 +110,17 @@ class UpdateChecker extends ChangeNotifier {
         request.headers.set('User-Agent', 'TwoDrive-Development-update-check');
         final response = await request.close();
         if (response.statusCode != 200) {
-          throw const HttpException('更新服务暂不可用，请稍后重试');
+          throw HttpException(tr('更新服务暂不可用，请稍后重试'));
         }
         final bytes = <int>[];
         await for (final chunk in response) {
           if (bytes.length + chunk.length > 2 * 1024 * 1024) {
-            throw const FormatException('更新响应超过大小限制');
+            throw FormatException(tr('更新响应超过大小限制'));
           }
           bytes.addAll(chunk);
         }
         final value = jsonDecode(utf8.decode(bytes));
-        if (value is! List) throw const FormatException('更新响应格式无效');
+        if (value is! List) throw FormatException(tr('更新响应格式无效'));
         return value;
       })().timeout(const Duration(seconds: 15));
     } finally {
@@ -169,7 +170,7 @@ class UpdateChecker extends ChangeNotifier {
       );
       await temporary.rename(file.path);
     } catch (_) {
-      error = '无法保存更新检查偏好，请检查本地状态目录的权限';
+      error = tr('无法保存更新检查偏好，请检查本地状态目录的权限');
     }
   }
 
@@ -215,11 +216,11 @@ class UpdateChecker extends ChangeNotifier {
         if (entries.length < 100) break;
       }
       final release = DevelopmentRelease.newest(all, _platform);
-      if (release == null) throw const FormatException('没有可用的 Development 发布包');
+      if (release == null) throw FormatException(tr('没有可用的 Development 发布包'));
       latest = release;
       lastSuccess = _now();
     } catch (_) {
-      if (!_disposed) error = '暂时无法检查更新；文件连接与同步不受影响，可稍后重试';
+      if (!_disposed) error = tr('暂时无法检查更新；文件连接与同步不受影响，可稍后重试');
     } finally {
       _checking = null;
       _notify();
@@ -238,7 +239,7 @@ class UpdateChecker extends ChangeNotifier {
           : await Process.run('xdg-open', [url]);
       if (result.exitCode != 0) throw const FileSystemException();
     } catch (_) {
-      error = '无法打开浏览器，请复制发布地址打开';
+      error = tr('无法打开浏览器，请复制发布地址打开');
       _notify();
     }
   }

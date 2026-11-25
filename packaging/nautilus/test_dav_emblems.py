@@ -253,6 +253,25 @@ class DavEmblemTests(unittest.TestCase):
         with patch.object(ext, "bridge_status", side_effect=AssertionError("invalid routing")):
             self.assertEqual(ext.db_states_for(bad), dict.fromkeys(bad, "unknown"))
 
+    def test_actions_require_a_live_capability_and_the_current_binding(self):
+        p = self.profile("cloud", "google")
+        db, mount = self.native(p)
+        db.execute("INSERT INTO files(path,state) VALUES('/item.pdf','online_only')")
+        db.commit()
+        key = ext.dav_key(p, "/item.pdf")
+        controls = set()
+        with patch.object(ext.os, "getxattr", return_value=b"1", create=True):
+            ext.dav_states_for([key], controls=controls)
+            self.assertEqual(controls, {key})
+            with patch.dict(ext.STATUS_CACHE, {key: (0, {"state": "online_only"})}), patch.object(ext, "DAV_CONTROL_KEYS", controls):
+                items = ext.TwoDriveExtension().dav_items([(key, object())])
+                self.assertEqual(len(items), 5)
+                controls.clear()
+                self.assertEqual(len(ext.TwoDriveExtension().dav_items([(key, object())])), 1)
+            (mount / "binding.json").write_text(json.dumps({"provider": "replacement"}))
+            with patch.object(ext, "apply_dav_action", side_effect=AssertionError("stale binding")):
+                self.assertIn("no longer supports", ext.dav_action({"keys": [key], "action": "release"})["messages"][0])
+
     def test_legacy_cli_actions_excluded_for_dav_items(self):
         p = self.profile("baidu", "baidu")
         key = ext.dav_key(p, "/song.mp3")

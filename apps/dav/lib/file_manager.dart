@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'language.dart';
 
 Future<void> _launchFileManager(String executable, List<String> args) async {
   await Process.start(executable, args, mode: ProcessStartMode.detached);
@@ -31,7 +32,7 @@ Future<void> openLocalFile(String path) async {
     _ => throw UnsupportedError('Unsupported desktop file opener'),
   };
   final result = await Process.run(executable, args);
-  if (result.exitCode != 0) throw StateError('无法打开本机查看副本');
+  if (result.exitCode != 0) throw StateError(tr('无法打开本机查看副本'));
 }
 
 /// Returns false if the desktop can only open the containing folder.

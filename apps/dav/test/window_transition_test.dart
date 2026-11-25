@@ -5,7 +5,30 @@ import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/main.dart';
 import 'package:twodrive_dav/status_tray.dart';
 import 'package:twodrive_dav/workspace.dart';
+import 'package:twodrive_dav/workspace_navigation.dart';
 import 'package:twodrive_dav/tray_panel.dart';
+
+class _ViewInterestClient extends StorageClient {
+  bool requestsFiles = false;
+  bool requestsQuota = false;
+
+  @override
+  void setView({
+    required bool visible,
+    bool files = false,
+    bool quota = false,
+    bool transfers = false,
+  }) {
+    super.setView(
+      visible: visible,
+      files: files,
+      quota: quota,
+      transfers: transfers,
+    );
+    requestsFiles = files;
+    requestsQuota = quota;
+  }
+}
 
 void main() {
   testWidgets('tray to management never exposes native reconfiguration', (
@@ -19,7 +42,7 @@ void main() {
     const screens = MethodChannel('dev.leanflutter.plugins/screen_retriever');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    final client = StorageClient();
+    final client = _ViewInterestClient();
     bool visible = true;
     double opacity = 1;
     bool record = false;
@@ -96,11 +119,37 @@ void main() {
     await tester.pumpWidget(DavApp(client: client, desktop: true));
     await tester.pumpAndSettle();
     dynamic state = tester.state(find.byType(Workspace));
+    state.onWindowFocus();
+    state.navigateTo(WorkspacePage.files.index);
+    expect(client.requestsFiles, isTrue);
+    state.tray.onVisibility(true);
+    state.onWindowMinimize();
+    (state.buildTray() as TrayPanel).onRefresh!();
+    expect(client.requestsFiles, isFalse);
+    expect(client.requestsQuota, isTrue);
+    state.onWindowBlur();
+    expect(client.viewVisible, isTrue);
+    state.tray.onVisibility(false);
+    expect(client.viewVisible, isFalse);
+    record = true;
+    await state.showPanel(Offset.zero);
+    await tester.pumpAndSettle();
+    expect(find.byType(TrayPanel), findsOneWidget);
+    expect(visible, isTrue);
+    expect(events, isNot(contains('hide')));
+    await state.showPanel(Offset.zero);
+    await tester.pumpAndSettle();
+    expect(find.byType(TrayPanel), findsNothing);
+    // A hidden main window still opens the tray-sized native surface.
+    visible = false;
+    record = false;
     final panel = state.showPanel(Offset.zero) as Future<void>;
     await tester.pumpAndSettle();
     await panel;
+    events.clear();
     record = true;
-    final management = state.showManagement(5) as Future<void>;
+    final management =
+        state.showManagement(WorkspacePage.settings.index) as Future<void>;
     await tester.pumpAndSettle();
     await management;
     expect(
@@ -145,7 +194,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Dashboard'));
     await tester.pump();
-    expect(destination, 7);
+    expect(destination, WorkspacePage.overview.index);
     await tester.pump();
     expect(find.byType(PopupMenuItem<String>), findsNothing);
     await tester.pumpWidget(const SizedBox());

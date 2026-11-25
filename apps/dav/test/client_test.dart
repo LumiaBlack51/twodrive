@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -131,9 +132,19 @@ void main() {
       messenger.setMockMethodCallHandler(window, null);
       messenger.setMockMethodCallHandler(tray, null);
     });
-    await tester.runAsync(
-      () => desktop.main(['--engine', 'missing-twodrive-test-engine']),
-    );
+    await tester.runAsync(() async {
+      final state = await Directory.systemTemp.createTemp('twodrive-startup-');
+      try {
+        await desktop.main([
+          '--state',
+          state.path,
+          '--engine',
+          'missing-twodrive-test-engine',
+        ]);
+      } finally {
+        await state.delete(recursive: true);
+      }
+    });
     await tester.pumpAndSettle();
     expect(calls.indexOf('waitUntilReadyToShow'), greaterThanOrEqualTo(0));
     expect(

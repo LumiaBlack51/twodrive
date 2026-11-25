@@ -1,18 +1,18 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'language.dart';
 import 'dart:async';
+import 'desktop_typography.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
 import 'status_tray.dart';
 import 'tray_panel.dart';
 import 'backup_page.dart';
-import 'sharing_page.dart';
 import 'package:window_manager/window_manager.dart';
 import 'client.dart';
-import 'desktop_typography.dart';
 import 'profile_dialog.dart';
-import 'local_file_preflight.dart';
-import 'native_local_files.dart';
 import 'connection_card.dart';
 import 'mount_card.dart';
 import 'workspace_navigation.dart';
@@ -72,10 +72,14 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> with WindowListener {
+class _WorkspaceState extends State<Workspace>
+    with WindowListener, WidgetsBindingObserver {
   StorageClient get c => widget.client;
   final tray = StatusTray();
   bool panel = false;
+  bool nativeTrayVisible = false;
+  bool dashboardFocused = false;
+  DialogRoute<void>? foregroundPanel;
   bool presenting = false;
   bool _windowHidden = false;
   bool _directoryReadQueued = false;
@@ -90,11 +94,23 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     super.initState();
     c.addListener(changed);
     if (widget.desktop) {
+      WidgetsBinding.instance.addObserver(this);
       windowManager.addListener(this);
+      dashboardFocused = c.viewVisible;
+      tray.onVisibility = (visible) {
+        nativeTrayVisible = visible;
+        updateViewInterests();
+        if (visible) unawaited(c.refreshView());
+      };
       tray.onQuit = () => unawaited(quit());
       tray.onActivate = (position) => unawaited(showPanel(position));
       unawaited(initTray());
     }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (mounted && Platform.isLinux) setState(() {});
   }
 
   Future<void> initTray() async {
@@ -104,7 +120,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       await windowManager.setPreventClose(true);
       await updateTray();
     } catch (_) {
-      c.error = '系统托盘不可用，关闭窗口将退出客户端。';
+      c.error = tr('系统托盘不可用，关闭窗口将退出客户端。');
       changed();
     }
   }
@@ -119,28 +135,42 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   }
 
   Future<void> updateTray() async {
-    final signature =
-        '${c.connected}:${c.busy}:${c.error}:${c.mounted}:${c.proxyFallback}:${c.paused}:${c.syncing}:${c.syncError}:${c.trayTitle}';
+    final icon = c.trayState;
+    final title = c.trayTitle;
+    final signature = '$icon:$title';
     if (_traySignature == signature) {
       return;
     }
+    await tray.icon(icon, title: title);
     _traySignature = signature;
-    final icon = c.trayState;
-    await tray.icon(icon, title: c.trayTitle);
   }
 
-  void refreshWorkspace({bool forceDirectory = false}) {
-    _windowHidden = false;
+  void updateViewInterests() {
     c.setView(
-      visible: true,
-      files: !panel && page == WorkspacePage.files.index,
-      transfers: !panel && page == WorkspacePage.transfers.index,
+      visible:
+          dashboardFocused ||
+          nativeTrayVisible ||
+          (!_windowHidden && !panel && page == WorkspacePage.files.index),
+      files: !_windowHidden && !panel && page == WorkspacePage.files.index,
+      transfers:
+          dashboardFocused && !panel && page == WorkspacePage.transfers.index,
       quota:
-          panel ||
-          page == WorkspacePage.connections.index ||
-          page == WorkspacePage.overview.index,
+          nativeTrayVisible ||
+          (dashboardFocused &&
+              (panel ||
+                  page == WorkspacePage.connections.index ||
+                  page == WorkspacePage.overview.index)),
     );
-    unawaited(c.refreshView(forceDirectory: forceDirectory));
+  }
+
+  void refreshWorkspace({
+    bool forceDirectory = false,
+    bool forceQuota = false,
+  }) {
+    updateViewInterests();
+    unawaited(
+      c.refreshView(forceDirectory: forceDirectory, forceQuota: forceQuota),
+    );
   }
 
   void navigateTo(int destination) {
@@ -150,6 +180,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
 
   @override
   void onWindowFocus() {
+    _windowHidden = false;
+    dashboardFocused = true;
     if (!presenting) refreshWorkspace(forceDirectory: true);
   }
 
@@ -158,7 +190,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
 
   void hideWorkspace() {
     _windowHidden = true;
-    c.setView(visible: false);
+    dashboardFocused = false;
+    updateViewInterests();
   }
 
   @override
@@ -170,9 +203,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
 
   @override
   void onWindowBlur() {
-    // A visible Files window may lose focus during account selection. The
-    // selection still needs to load its directory; hiding is handled separately.
-    if (panel || page != WorkspacePage.files.index) c.setView(visible: false);
+    dashboardFocused = false;
+    updateViewInterests();
     if (!Platform.isLinux && !Platform.isWindows && panel && !presenting) {
       unawaited(windowManager.hide());
     }
@@ -180,36 +212,92 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
 
   Future<void> showPanel(Offset position) async {
     if (presenting) return;
-    if (panel && await windowManager.isVisible()) {
-      hideWorkspace();
-      await windowManager.hide();
+    final existing = foregroundPanel;
+    if (existing != null) {
+      existing.navigator?.removeRoute(existing);
       return;
     }
     presenting = true;
-    hideWorkspace();
-    await windowManager.hide();
-    setState(() => panel = true);
-    await windowManager.setFullScreen(false);
-    await windowManager.unmaximize();
-    for (var i = 0; i < 20 && await windowManager.isMaximized(); i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+    try {
+      if (!panel &&
+          await windowManager.isVisible() &&
+          !await windowManager.isMinimized()) {
+        if (!mounted || foregroundPanel != null) return;
+        final popup = DialogRoute<void>(
+          context: context,
+          builder: (context) => Dialog(
+            alignment: Alignment.bottomRight,
+            child: SizedBox(
+              width: 390,
+              height: 570,
+              child: ListenableBuilder(
+                listenable: c,
+                builder: (_, _) => buildTray(),
+              ),
+            ),
+          ),
+        );
+        await windowManager.focus();
+        if (mounted) {
+          foregroundPanel = popup;
+          unawaited(
+            Navigator.of(context).push(popup).whenComplete(() {
+              if (identical(foregroundPanel, popup)) foregroundPanel = null;
+            }),
+          );
+        }
+        return;
+      }
+      if (panel && await windowManager.isVisible()) {
+        hideWorkspace();
+        await windowManager.hide();
+        return;
+      }
+      hideWorkspace();
+      await windowManager.hide();
+      setState(() => panel = true);
+      await windowManager.setFullScreen(false);
+      await windowManager.unmaximize();
+      for (var i = 0; i < 20 && await windowManager.isMaximized(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+      await windowManager.setSkipTaskbar(true);
+      await windowManager.setAlwaysOnTop(true);
+      if (Platform.isWindows) {
+        await windowManager.setMinimumSize(const Size(390, 570));
+      }
+      await tray.panel(true);
+      if (!Platform.isLinux && !Platform.isWindows) {
+        await windowManager.show();
+        await windowManager.focus();
+      }
+      if (mounted) refreshWorkspace();
+    } finally {
+      presenting = false;
     }
-    await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
-    await windowManager.setSkipTaskbar(true);
-    await windowManager.setAlwaysOnTop(true);
-    if (Platform.isWindows) {
-      await windowManager.setMinimumSize(const Size(390, 570));
-    }
-    await tray.panel(true);
-    if (!Platform.isLinux && !Platform.isWindows) {
+  }
+
+  Future<void> openDashboardFromTray([int? destination]) async {
+    if (Platform.isLinux) {
+      await tray.panel(false);
+      if (!mounted) return;
+      if (destination != null) navigateTo(destination);
       await windowManager.show();
       await windowManager.focus();
+      return;
     }
-    presenting = false;
-    if (mounted) refreshWorkspace();
+    await showManagement(destination);
   }
 
   Future<void> showManagement([int? destination]) async {
+    final popup = foregroundPanel;
+    if (popup != null) {
+      popup.navigator?.removeRoute(popup);
+      if (destination != null) navigateTo(destination);
+      await windowManager.focus();
+      return;
+    }
     if (presenting) return;
     presenting = true;
     hideWorkspace();
@@ -262,8 +350,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   }
 
   Future<void> signOut() async {
-    await showManagement(2);
-    if (await confirm('退出登录？', '断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。')) {
+    await openDashboardFromTray(2);
+    if (await confirm(
+      tr('退出登录？'),
+      tr('断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。'),
+    )) {
       await c.signOut();
     }
   }
@@ -325,14 +416,16 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         context: context,
         builder: (context) => AlertDialog(
           scrollable: true,
-          title: const Text('挂载目录正在使用'),
+          title: Text(tr('挂载目录正在使用')),
           content: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 closePrograms.isNotEmpty
-                    ? '请先保存工作并处理标记为手动关闭的程序。确认后 TwoDrive 会请求其余列出的程序退出。未保存的内容可能丢失。'
-                    : '请关闭仍在使用这些目录的文件、窗口或终端，再重试退出。',
+                    ? tr(
+                        '请先保存工作并处理标记为手动关闭的程序。确认后 TwoDrive 会请求其余列出的程序退出。未保存的内容可能丢失。',
+                      )
+                    : tr('请关闭仍在使用这些目录的文件、窗口或终端，再重试退出。'),
               ),
               for (final blocker in c.quitBlockers) ...[
                 const SizedBox(height: 12),
@@ -342,7 +435,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                     in (blocker['programs'] as List).cast<Json>())
                   Text(
                     '${program['name']}（PID ${program['pid']}）'
-                    '${closePrograms.contains((program['pid'], program['start_time'])) ? '' : ' · 请手动关闭或离开挂载目录'}',
+                    '${closePrograms.contains((program['pid'], program['start_time'])) ? '' : " · ${tr('请手动关闭或离开挂载目录')}"}',
                   ),
               ],
             ],
@@ -350,11 +443,13 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
+              child: Text(tr('取消')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(closePrograms.isNotEmpty ? '关闭程序并退出' : '重试退出'),
+              child: Text(
+                closePrograms.isNotEmpty ? tr('关闭程序并退出') : tr('重试退出'),
+              ),
             ),
           ],
         ),
@@ -365,7 +460,9 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   void dispose() {
     c.removeListener(changed);
     if (widget.desktop) {
+      WidgetsBinding.instance.removeObserver(this);
       windowManager.removeListener(this);
+      tray.onVisibility = null;
       tray.onActivate = null;
     }
     super.dispose();
@@ -385,7 +482,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
               controller: text,
               autofocus: true,
               decoration: InputDecoration(
-                labelText: '名称',
+                labelText: tr('名称'),
                 errorText: validation,
               ),
             ),
@@ -393,7 +490,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
+              child: Text(tr('取消')),
             ),
             FilledButton(
               onPressed: () {
@@ -402,12 +499,12 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                     value == '.' ||
                     value == '..' ||
                     value.contains(RegExp(r'[/\\\x00]'))) {
-                  update(() => validation = '请输入有效的单个文件名');
+                  update(() => validation = tr('请输入有效的单个文件名'));
                   return;
                 }
                 Navigator.pop(context, value);
               },
-              child: const Text('确定'),
+              child: Text(tr('确定')),
             ),
           ],
         ),
@@ -427,11 +524,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
+              child: Text(tr('取消')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('确认'),
+              child: Text(tr('确认')),
             ),
           ],
         ),
@@ -440,7 +537,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   Future<void> upload() async {
     final identity = c.target;
     final directory = c.path;
-    final files = await openFiles(confirmButtonText: '上传');
+    final files = await openFiles(confirmButtonText: tr('上传'));
     for (final file in files) {
       if (!c.connected || c.busy) {
         break;
@@ -459,7 +556,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
   Future<void> download(Json file) async {
     final target = await getSaveLocation(
       suggestedName: file['name'] as String,
-      confirmButtonText: '下载',
+      confirmButtonText: tr('下载'),
     );
     if (target != null) {
       await c.transfer('download', {
@@ -479,7 +576,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       case 'download':
         await download(file);
       case 'rename':
-        final name = await nameDialog('重命名', file['name'] as String);
+        final name = await nameDialog(tr('重命名'), file['name'] as String);
         if (name != null) {
           await c.mutate('rename', {
             'profile': file['profile'],
@@ -490,8 +587,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         }
       case 'delete':
         if (await confirm(
-          '删除 ${file['name']}？',
-          file['directory'] == true ? '文件夹及其内容将从服务器删除。' : '此文件将从服务器删除。',
+          tr('删除 {arg0}？', [file['name']]),
+          file['directory'] == true ? tr('文件夹及其内容将从服务器删除。') : tr('此文件将从服务器删除。'),
         )) {
           await c.mutate('delete', {
             'path': file['path'],
@@ -500,9 +597,12 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           });
         }
       case 'replace':
-        final source = await openFile(confirmButtonText: '选择新内容');
+        final source = await openFile(confirmButtonText: tr('选择新内容'));
         if (source != null &&
-            await confirm('替换 ${file['name']}？', '仅在服务器版本未发生变化时覆盖。')) {
+            await confirm(
+              tr('替换 {arg0}？', [file['name']]),
+              tr('仅在服务器版本未发生变化时覆盖。'),
+            )) {
           await c.transfer('upload', {
             'profile': file['profile'],
             'revision': file['revision'],
@@ -514,27 +614,52 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     }
   }
 
+  Widget buildTray() => TrayPanel(
+    client: c,
+    onManage: openDashboardFromTray,
+    onRefresh: () => refreshWorkspace(forceQuota: true),
+    onOpenFolder: () async {
+      if (!c.canMount) {
+        await openDashboardFromTray(0);
+        return;
+      }
+      if (!c.mounted) {
+        await c.mountToggle();
+      }
+      await openMount();
+    },
+    onQuit: quit,
+    onSignOut: signOut,
+  );
+
   @override
   Widget build(BuildContext context) {
-    if (panel) {
-      return TrayPanel(
-        client: c,
-        onManage: showManagement,
-        onRefresh: refreshWorkspace,
-        onOpenFolder: () async {
-          if (!c.canMount) {
-            await showManagement(0);
-            return;
-          }
-          if (!c.mounted) {
-            await c.mountToggle();
-          }
-          await openMount();
-        },
-        onQuit: quit,
-        onSignOut: signOut,
-      );
-    }
+    if (panel) return buildTray();
+    final workspace = buildWorkspace();
+    if (!widget.desktop || !Platform.isLinux) return workspace;
+    final primary = View.of(context);
+    final secondary = WidgetsBinding.instance.platformDispatcher.views
+        .where((view) => view.viewId != primary.viewId)
+        .firstOrNull;
+    return ViewAnchor(
+      view: secondary == null
+          ? null
+          : View(
+              view: secondary,
+              child: MaterialApp(
+                locale: Localizations.localeOf(context),
+                supportedLocales: const [Locale('zh'), Locale('en')],
+                localizationsDelegates: GlobalMaterialLocalizations.delegates,
+                debugShowCheckedModeBanner: false,
+                theme: Theme.of(context),
+                home: buildTray(),
+              ),
+            ),
+      child: workspace,
+    );
+  }
+
+  Widget buildWorkspace() {
     return Scaffold(
       body: Row(
         children: [
@@ -577,19 +702,16 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                       Padding(
                         padding: EdgeInsets.only(bottom: 12, top: 3),
                         child: Text(
-                          c.status['build']?['core_version'] is String
-                              ? 'Windows · ${c.status['build']['core_version']}'
-                              : '文件与同步',
+                          c.status['version'] is String
+                              ? 'Development · ${c.status['version']}'
+                              : tr('文件与同步'),
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.blueGrey),
                         ),
                       ),
                       for (final destination in WorkspacePage.sidebar)
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 2),
                           margin: const EdgeInsets.symmetric(horizontal: 8),
                           decoration: BoxDecoration(
                             color: page == destination.index
@@ -599,6 +721,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           ),
                           child: ListTile(
                             dense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                            ),
+                            minLeadingWidth: 24,
+                            horizontalTitleGap: 10,
                             selected: page == destination.index,
                             selectedTileColor: const Color(0xffd2dbef),
                             selectedColor: const Color(0xff2472df),
@@ -625,8 +752,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   padding: const EdgeInsets.all(20),
                   child: Text(
                     c.connectedProfiles.isNotEmpty
-                        ? '● ${c.connectedProfiles.length} 个账号已连接'
-                        : '○ 未连接',
+                        ? tr('● {arg0} 个账号已连接', [c.connectedProfiles.length])
+                        : tr('○ 未连接'),
                     style: TextStyle(
                       color: c.connected ? Colors.teal : Colors.blueGrey,
                     ),
@@ -636,7 +763,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   TextButton.icon(
                     onPressed: c.quitting ? null : quit,
                     icon: const Icon(Icons.power_settings_new, size: 18),
-                    label: Text(c.quitting ? '正在退出…' : '退出客户端'),
+                    label: Text(c.quitting ? tr('正在退出…') : tr('退出客户端')),
                   ),
                 const SizedBox(height: 18),
               ],
@@ -660,15 +787,14 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                       const Spacer(),
                       if (page != WorkspacePage.files.index)
                         IconButton(
-                          tooltip: '刷新状态',
+                          tooltip: tr('刷新状态'),
                           onPressed: !c.available || c.busy || c.quitting
                               ? null
                               : () => refreshWorkspace(),
                           icon: const Icon(Icons.refresh),
                         ),
                       const SizedBox(width: 12),
-                      if (page != WorkspacePage.cfapi.index &&
-                          page != WorkspacePage.overview.index)
+                      if (page == WorkspacePage.files.index)
                         FilledButton.tonalIcon(
                           onPressed:
                               c.busy || c.selected == null || !c.available
@@ -677,42 +803,15 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                               ? c.disconnect
                               : c.connect,
                           icon: Icon(c.connected ? Icons.link_off : Icons.link),
-                          label: Text(c.connected ? '断开' : '连接'),
+                          label: Text(c.connected ? tr('断开') : tr('连接')),
                         ),
                     ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6, bottom: 20),
-                    child: Text(
-                      page == WorkspacePage.overview.index
-                          ? '${c.profile?['name'] ?? 'TwoDrive'} · 账户与同步状态'
-                          : page == WorkspacePage.cfapi.index
-                          ? 'OneDrive · Windows CFAPI'
-                          : c.connected
-                          ? '${c.profile?['name'] ?? c.providerLabel} · ${c.account}'
-                          : c.profile?['name'] as String? ?? '添加存储账号或已配对设备',
-                      style: const TextStyle(color: Colors.blueGrey),
+                  if (page == WorkspacePage.files.index && c.connected)
+                    Text(
+                      '${c.profile?['name'] ?? c.providerLabel} · ${c.account}',
                     ),
-                  ),
-                  if (c.proxyFallback)
-                    const Card(
-                      color: Color(0xfffff2cd),
-                      child: Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.warning_amber_rounded,
-                              color: Color(0xffe0a000),
-                            ),
-                            SizedBox(width: 8),
-                            Expanded(
-                              child: Text('直连未能完成，已使用系统／代理兜底。可在设置中查看网络路径。'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  const SizedBox(height: 12),
                   if (c.error != null)
                     Container(
                       margin: const EdgeInsets.only(bottom: 12),
@@ -737,7 +836,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                             ),
                           ),
                           IconButton(
-                            tooltip: '关闭提示',
+                            tooltip: tr('关闭提示'),
                             onPressed: () {
                               c.error = null;
                               changed();
@@ -764,7 +863,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                             if (!c.quitting && c.activeId != null)
                               TextButton(
                                 onPressed: c.cancel,
-                                child: const Text('取消'),
+                                child: Text(tr('取消')),
                               ),
                           ],
                         ),
@@ -786,7 +885,6 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                         ),
                         client: c,
                       ),
-                      WorkspacePage.sharing => SharingPage(client: c),
                       WorkspacePage.settings => settingsPage(),
                       WorkspacePage.cfapi => CfapiPage(client: c),
                     },
@@ -795,22 +893,16 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.system_update_alt),
-                      title: Text('TwoDrive ${c.updates.latest!.version} 可用'),
+                      title: Text(
+                        tr('TwoDrive {arg0} 可用', [c.updates.latest!.version]),
+                      ),
                       trailing: TextButton(
                         onPressed: c.updates.openRelease,
-                        child: const Text('查看更新'),
+                        child: Text(tr('查看更新')),
                       ),
                     ),
                   const SizedBox(height: 10),
-                  if (page == WorkspacePage.overview.index)
-                    Text(
-                      'TwoDrive ${c.status['build']?['core_version'] ?? ''} · Windows CFAPI',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.blueGrey,
-                      ),
-                    )
-                  else if (c.mounts.isNotEmpty)
+                  if (c.mounts.isNotEmpty)
                     ConstrainedBox(
                       key: const ValueKey('mounted-folders'),
                       constraints: const BoxConstraints(maxHeight: 100),
@@ -820,7 +912,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           children: [
                             for (final mount in c.mounts)
                               Text(
-                                '${mount['name']} · ${mount['path']}${mount['failed'] == true ? ' · 需要处理' : ''}',
+                                '${mount['name']} · ${mount['path']}${mount['failed'] == true ? tr(' · 需要处理') : ''}',
                                 style: const TextStyle(
                                   fontSize: 12,
                                   color: Colors.blueGrey,
@@ -829,11 +921,6 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           ],
                         ),
                       ),
-                    )
-                  else
-                    const Text(
-                      '文件浏览 · 关闭窗口后可从云朵托盘打开',
-                      style: TextStyle(fontSize: 12, color: Colors.blueGrey),
                     ),
                 ],
               ),
@@ -882,11 +969,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     if (!c.connected) {
       return empty(
         Icons.cloud_outlined,
-        '连接你的文件',
-        '选择存储提供者并连接你的账号或设备。',
+        tr('连接你的文件'),
+        tr('选择存储提供者并连接你的账号或设备。'),
         OutlinedButton(
           onPressed: () => navigateTo(WorkspacePage.connections.index),
-          child: const Text('管理连接'),
+          child: Text(tr('管理连接')),
         ),
       );
     }
@@ -904,7 +991,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         Row(
           children: [
             IconButton(
-              tooltip: '上一级',
+              tooltip: tr('上一级'),
               onPressed: c.busy || c.path == '/'
                   ? null
                   : () => c.browse(parentPath(c.path)),
@@ -912,7 +999,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
             ),
             Expanded(child: SelectableText(c.path, maxLines: 2)),
             IconButton(
-              tooltip: '刷新',
+              tooltip: tr('刷新'),
               onPressed: c.busy || c.directoryLoading
                   ? null
                   : () => c.browse(c.path),
@@ -921,13 +1008,13 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
             if (c.canMkdir || c.canUpload) ...[
               if (c.canMkdir)
                 IconButton(
-                  tooltip: '新建文件夹',
+                  tooltip: tr('新建文件夹'),
                   onPressed: !canActOnFiles
                       ? null
                       : () async {
                           final identity = c.target;
                           final directory = c.path;
-                          final name = await nameDialog('新建文件夹');
+                          final name = await nameDialog(tr('新建文件夹'));
                           if (name != null) {
                             await c.mutate('mkdir', {
                               'path': childPath(directory, name),
@@ -941,16 +1028,16 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                 FilledButton.icon(
                   onPressed: canActOnFiles ? upload : null,
                   icon: const Icon(Icons.upload_outlined),
-                  label: const Text('上传'),
+                  label: Text(tr('上传')),
                 ),
             ],
           ],
         ),
         const SizedBox(height: 12),
         TextField(
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             prefixIcon: Icon(Icons.search),
-            hintText: '筛选当前目录',
+            hintText: tr('筛选当前目录'),
           ),
           onChanged: (value) => setState(() => filter = value),
         ),
@@ -958,7 +1045,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         Expanded(
           child: !c.directoryLoaded
               ? directoryError != null
-                    ? empty(Icons.error_outline, '无法读取目录', directoryError)
+                    ? empty(Icons.error_outline, tr('无法读取目录'), directoryError)
                     : Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
@@ -967,15 +1054,15 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                               const CircularProgressIndicator(),
                               const SizedBox(height: 16),
                             ],
-                            const Text('正在加载目录'),
+                            Text(tr('正在加载目录')),
                           ],
                         ),
                       )
               : entries.isEmpty
               ? empty(
                   Icons.folder_open,
-                  c.entries.isEmpty ? '当前目录为空' : '没有匹配的文件',
-                  c.entries.isNotEmpty ? '请调整筛选条件。' : '',
+                  c.entries.isEmpty ? tr('当前目录为空') : tr('没有匹配的文件'),
+                  c.entries.isNotEmpty ? tr('请调整筛选条件。') : '',
                 )
               : Card(
                   margin: EdgeInsets.zero,
@@ -998,10 +1085,10 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                         title: Text(file['name'] as String),
                         subtitle: Text(
                           directory
-                              ? '文件夹'
+                              ? tr('文件夹')
                               : size is int
                               ? bytes(size)
-                              : '文件',
+                              : tr('文件'),
                         ),
                         onTap: c.busy
                             ? null
@@ -1015,31 +1102,31 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                           onSelected: (action) => fileAction(action, file),
                           itemBuilder: (_) => [
                             if (!directory) ...[
-                              const PopupMenuItem(
+                              PopupMenuItem(
                                 value: 'view',
-                                child: Text('查看'),
+                                child: Text(tr('查看')),
                               ),
-                              const PopupMenuItem(
+                              PopupMenuItem(
                                 value: 'download',
-                                child: Text('下载'),
+                                child: Text(tr('下载')),
                               ),
                             ],
                             if (c.canRename)
-                              const PopupMenuItem(
+                              PopupMenuItem(
                                 value: 'rename',
-                                child: Text('重命名'),
+                                child: Text(tr('重命名')),
                               ),
                             if (c.canUpload &&
                                 !directory &&
                                 (file['etag'] as String).isNotEmpty)
-                              const PopupMenuItem(
+                              PopupMenuItem(
                                 value: 'replace',
-                                child: Text('替换内容'),
+                                child: Text(tr('替换内容')),
                               ),
                             if (c.canDelete)
-                              const PopupMenuItem(
+                              PopupMenuItem(
                                 value: 'delete',
-                                child: Text('删除'),
+                                child: Text(tr('删除')),
                               ),
                           ],
                         ),
@@ -1055,11 +1142,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
             child: Text(
               directoryError != null
                   ? c.directoryFromMount
-                        ? '刷新失败，正在显示挂载目录。$directoryError'
-                        : '刷新失败，正在显示上次读取的目录。$directoryError'
+                        ? tr('刷新失败，正在显示挂载目录。{arg0}', [directoryError])
+                        : tr('刷新失败，正在显示上次读取的目录。{arg0}', [directoryError])
                   : c.directoryLoading
-                  ? '${entries.length} 项 · 正在刷新'
-                  : '${entries.length} 项',
+                  ? tr('{arg0} 项 · 正在刷新', [entries.length])
+                  : tr('{arg0} 项', [entries.length]),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.blueGrey),
@@ -1106,7 +1193,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           child: SegmentedButton<_TransferSection>(
             segments: [
               for (final section in sections)
-                ButtonSegment(value: section, label: Text(section.label)),
+                ButtonSegment(value: section, label: Text(tr(section.label))),
             ],
             showSelectedIcon: false,
             selected: {selected},
@@ -1128,7 +1215,11 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           ),
         Expanded(
           child: rows.isEmpty
-              ? empty(Icons.swap_vert, '暂无${selected.label}记录', '')
+              ? empty(
+                  Icons.swap_vert,
+                  tr('暂无{arg0}记录', [tr(selected.label)]),
+                  '',
+                )
               : transferList(selected, rows),
         ),
       ],
@@ -1169,7 +1260,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     final download = info['kind'] == 'download';
     final hasLocalPath = info['local_path'] is String;
     final canReveal = hasLocalPath || c.mountedTransferPath(info) != null;
-    final name = info['name']?.toString() ?? '传输任务';
+    final name = info['name']?.toString() ?? tr('传输任务');
     final state = c.transferState(info);
     final done = info['bytes_done'] as num? ?? 0;
     final total = info['bytes_total'] as num? ?? 0;
@@ -1223,15 +1314,17 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
               ),
             ),
             const SizedBox(width: 12),
-            if (task != null && task.state == '传输中')
+            if (task != null && task.phase == TransferPhase.running)
               IconButton(
-                tooltip: '取消传输',
+                tooltip: tr('取消传输'),
                 onPressed: () => c.cancelTransfer(task.id),
                 icon: const Icon(Icons.close, size: 18),
               ),
-            if (task != null && task.state == '未完成' && !task.view)
+            if (task != null &&
+                task.phase == TransferPhase.failed &&
+                !task.view)
               IconButton(
-                tooltip: '重试传输',
+                tooltip: tr('重试传输'),
                 onPressed: c.canRetryTransfer(task)
                     ? () => c.transfer(task.operation, task.args)
                     : null,
@@ -1243,7 +1336,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    state,
+                    tr(state),
                     textAlign: TextAlign.right,
                     style: TextStyle(
                       fontSize: 12,
@@ -1285,16 +1378,20 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
               width: 40,
               child: canReveal
                   ? IconButton(
-                      tooltip: '打开所在位置',
+                      tooltip: tr('打开所在位置'),
                       onPressed: () =>
                           revealTransferLocation(info, cloud: !hasLocalPath),
                       icon: const Icon(Icons.folder_open_outlined, size: 18),
                     )
                   : null,
             ),
-            const Tooltip(
-              message: '查看传输详情',
-              child: Icon(Icons.chevron_right, size: 18, color: _transferMuted),
+            Tooltip(
+              message: tr('查看传输详情'),
+              child: const Icon(
+                Icons.chevron_right,
+                size: 18,
+                color: _transferMuted,
+              ),
             ),
           ],
         ),
@@ -1307,12 +1404,12 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
     String? message;
     try {
       if (path is! String) {
-        message = '该文件所在位置暂不可用';
+        message = tr('该文件所在位置暂不可用');
       } else if (!await c.revealTransferFile(path)) {
-        message = '已打开所在文件夹，当前文件管理器无法自动选中文件';
+        message = tr('已打开所在文件夹，当前文件管理器无法自动选中文件');
       }
     } catch (_) {
-      message = '无法定位文件。文件可能已移动或所在位置暂不可用';
+      message = tr('无法定位文件。文件可能已移动或所在位置暂不可用');
     }
     if (mounted && message != null) {
       ScaffoldMessenger.of(
@@ -1331,9 +1428,9 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
       final info = row.info;
       final paths = [
         if (info['local_path'] case final String path)
-          (download ? '本地目标' : '本地来源', path, false),
+          (download ? tr('本地目标') : tr('本地来源'), path, false),
         if (info['path'] case final String path)
-          (download ? '云端来源' : '云端目标', path, true),
+          (download ? tr('云端来源') : tr('云端目标'), path, true),
       ];
       return AlertDialog(
         constraints: const BoxConstraints(maxWidth: 600),
@@ -1359,7 +1456,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   ),
                   if (!cloud || c.mountedTransferPath(info) != null)
                     IconButton(
-                      tooltip: cloud ? '在挂载目录中定位文件' : '定位本地文件',
+                      tooltip: cloud ? tr('在挂载目录中定位文件') : tr('定位本地文件'),
                       onPressed: () =>
                           revealTransferLocation(info, cloud: cloud),
                       icon: const Icon(Icons.folder_open_outlined, size: 18),
@@ -1387,7 +1484,7 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
+            child: Text(tr('关闭')),
           ),
         ],
       );
@@ -1406,14 +1503,14 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   ? null
                   : () async {
                       if (await confirm(
-                        '退出登录？',
-                        '断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。',
+                        tr('退出登录？'),
+                        tr('断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。'),
                       )) {
                         await c.signOut();
                       }
                     },
               icon: const Icon(Icons.logout),
-              label: const Text('退出登录'),
+              label: Text(tr('退出登录')),
             ),
           ),
         ),
@@ -1422,14 +1519,16 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         child: FilledButton.icon(
           onPressed: c.busy || !c.available ? null : () => editProfile(),
           icon: const Icon(Icons.add),
-          label: const Text('添加连接'),
+          label: Text(tr('添加连接')),
         ),
       ),
       const SizedBox(height: 16),
       if (c.connectedProfiles.length > 1)
         Padding(
           padding: const EdgeInsets.only(bottom: 12),
-          child: Text('已连接 ${c.connectedProfiles.length} 个网盘 · 点击卡片切换浏览'),
+          child: Text(
+            tr('已连接 {arg0} 个网盘 · 点击卡片切换浏览', [c.connectedProfiles.length]),
+          ),
         ),
       for (final p in c.profiles)
         ConnectionCard(
@@ -1461,11 +1560,14 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           },
           online: c.isProfileConnected(p['id'] as String),
           selected: c.connected && c.status['profile'] == p['id'],
-          connectLabel: c.isProfileConnected(p['id'] as String)
-              ? '查看文件'
+          issue: c.connectionErrors[p['id']],
+          connectLabel: c.needsAuthorization.contains(p['id'])
+              ? tr('重新授权')
+              : c.isProfileConnected(p['id'] as String)
+              ? tr('查看文件')
               : c.connected
-              ? '切换使用'
-              : '登录并使用',
+              ? tr('切换使用')
+              : tr('登录并使用'),
           usage: c.quotas[p['id']],
           onSelect: c.busy || !c.available
               ? null
@@ -1484,33 +1586,55 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
               c.busy || !c.available || c.isProfileConnected(p['id'] as String)
               ? null
               : () async {
-                  if (await confirm('删除连接配置？', '服务器文件和已有配对状态会保留。')) {
+                  if (await confirm(tr('删除连接配置？'), tr('服务器文件和已有配对状态会保留。'))) {
                     await c.remove(p['id'] as String);
                   }
                 },
         ),
+      if (defaultTargetPlatform == TargetPlatform.windows &&
+          c.status['cfapi']?['supported'] == true &&
+          c.profiles.any((p) => p['kind'] == 'onedrive'))
+        ListTile(
+          title: Text(tr('OneDrive 按需同步')),
+          onTap: () => navigateTo(WorkspacePage.cfapi.index),
+        ),
       if (c.profiles.isEmpty)
-        const Padding(
+        Padding(
           padding: EdgeInsets.all(24),
-          child: Text('选择存储提供者并填写连接信息。'),
+          child: Text(tr('选择存储提供者并填写连接信息。')),
         ),
     ],
   );
   Widget settingsPage() {
     final cache = c.status['cache'] as Json?;
-    final network = (c.status['network'] as List?)?.cast<String>() ?? [];
     return ListView(
       children: [
-        if (c.status['build'] is Map)
+        if (c.status['version'] is String)
           Card(
             child: ListTile(
               leading: const Icon(Icons.verified_outlined),
-              title: Text('共享引擎 ${c.status['build']['core_version']}'),
-              subtitle: Text(
-                '${c.status['build']['edition']}\n构建 ${c.status['build']['revision']}',
+              title: Text(
+                'TwoDrive Development ${c.status['version']} · ${Platform.operatingSystem == 'windows'
+                    ? 'Windows'
+                    : Platform.operatingSystem == 'linux'
+                    ? 'Linux'
+                    : Platform.operatingSystem}',
               ),
             ),
           ),
+        ListTile(
+          title: Text(tr('语言')),
+          trailing: DropdownButton<String>(
+            value: c.preferences.language,
+            items: const [
+              DropdownMenuItem(value: 'zh', child: Text('简体中文')),
+              DropdownMenuItem(value: 'en', child: Text('English')),
+            ],
+            onChanged: (value) {
+              if (value != null) c.setLanguage(value);
+            },
+          ),
+        ),
         if (c.status['sync_policy'] is Map) SyncPolicyCard(client: c),
         Card(
           color: Colors.white,
@@ -1520,23 +1644,19 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Windows 开发通道 · ${c.updates.current}',
+                  tr('软件更新'),
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 if (c.updates.managed)
-                  const Text(
-                    '此 MSIX 安装包通过其分发渠道更新。商店安装请在 Microsoft Store 中检查更新。',
-                  )
+                  Text(tr('请通过安装渠道检查更新。'))
                 else ...[
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('自动检查更新'),
-                    subtitle: const Text(
-                      '每 24 小时向 GitHub 检查 Development 新版本，不自动下载或安装。',
-                    ),
+                    title: Text(tr('自动检查更新')),
+                    subtitle: Text(tr('每天检查一次')),
                     value: c.updates.enabled,
                     onChanged: c.updates.checking ? null : c.updates.setEnabled,
                   ),
@@ -1544,8 +1664,8 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                   if (c.updates.lastSuccess != null && c.updates.error == null)
                     Text(
                       c.updates.available
-                          ? '发现新版本 ${c.updates.latest!.version}'
-                          : '本次检查未发现更新版本',
+                          ? tr('发现新版本 {arg0}', [c.updates.latest!.version])
+                          : tr('本次检查未发现更新版本'),
                     ),
                   if (c.updates.latest != null)
                     SelectableText(c.updates.latest!.url),
@@ -1558,12 +1678,14 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
                             c.updates.checking || c.updates.current.isEmpty
                             ? null
                             : () => c.updates.check(manual: true),
-                        child: Text(c.updates.checking ? '检查中…' : '立即检查'),
+                        child: Text(
+                          c.updates.checking ? tr('检查中…') : tr('立即检查'),
+                        ),
                       ),
                       if (c.updates.available)
                         FilledButton.tonal(
                           onPressed: c.updates.openRelease,
-                          child: const Text('打开发布页面'),
+                          child: Text(tr('打开发布页面')),
                         ),
                     ],
                   ),
@@ -1575,11 +1697,9 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         Card(
           color: Colors.white,
           child: SwitchListTile(
-            title: const Text('登录后自动启动'),
+            title: Text(tr('登录后自动启动')),
             subtitle: Text(
-              c.updates.managed
-                  ? 'MSIX 自启动尚待适配；请从开始菜单启动。'
-                  : '默认关闭。开启后在托盘中运行；连接和挂载遵循下方设置。',
+              c.updates.managed ? tr('请从开始菜单启动。') : tr('启动时显示托盘图标'),
             ),
             value: c.status['autostart'] == true,
             onChanged: c.busy || !c.available || c.updates.managed
@@ -1590,39 +1710,26 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
         Card(
           color: Colors.white,
           child: SwitchListTile(
-            title: const Text('启动时恢复已登录账号'),
-            subtitle: const Text(
-              '默认恢复全部已保存登录的账号。“断开”仅对本次运行生效；关闭此项后，下次启动不自动连接，仍可手动连接。',
-            ),
+            title: Text(tr('启动时恢复已登录账号')),
             value: c.restoreConnectionsOnStartup,
             onChanged: c.busy ? null : c.setRestoreConnectionsOnStartup,
           ),
         ),
-        if (c.canPreflightLocalFile) LocalFilePreflightCard(client: c),
-        if (c.canInspectNativeItems) NativeLocalFilesCard(client: c),
-        if (c.nativeItemCapabilities['owner_unavailable'] == true)
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(20),
-              child: Text('本机文件所有者不可用。原生操作已关闭，请保留目录与恢复日志。'),
-            ),
-          ),
         if (c.mountSupported)
           Card(
             color: Colors.white,
             child: SwitchListTile(
-              title: const Text('连接后自动挂载'),
-              subtitle: const Text('手动连接或启动恢复成功后自动挂载到文件管理器。关闭不会卸载已有挂载。'),
+              title: Text(tr('连接后自动挂载')),
               value: c.autoMountOnConnect,
               onChanged: c.busy ? null : c.setAutoMountOnConnect,
             ),
           ),
         if (c.mountSupported) ...[
-          const Padding(padding: EdgeInsets.all(12), child: Text('文件管理器挂载')),
+          Padding(padding: EdgeInsets.all(12), child: Text(tr('文件管理器挂载'))),
           if (c.mounts.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.all(12),
-              child: Text('尚未挂载网盘，请在“连接”页点击对应网盘的“挂载”。'),
+              child: Text(tr('尚未挂载网盘，请在“连接”页点击对应网盘的“挂载”。')),
             ),
           for (final mount in c.mounts)
             MountCard(
@@ -1634,18 +1741,22 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           if (c.mountDriverMissing)
             TextButton(
               onPressed: () => showMountHelp(context, client: c),
-              child: const Text('查看挂载组件安装说明'),
+              child: Text(tr('查看挂载组件安装说明')),
             ),
         ],
         if (c.canMount && !c.readOnlyMount)
           Card(
             color: Colors.white,
             child: ListTile(
-              title: Text('挂载缓存 · ${bytes(cache?['bytes'] as num? ?? 0)}'),
-              subtitle: Text('待处理或冲突：${cache?['pending'] ?? 0} 项。清理保留尚未上传的数据。'),
+              title: Text(
+                tr('挂载缓存 · {arg0}', [bytes(cache?['bytes'] as num? ?? 0)]),
+              ),
+              subtitle: Text(
+                tr('待处理或冲突：{arg0} 项。清理保留尚未上传的数据。', [cache?['pending'] ?? 0]),
+              ),
               trailing: OutlinedButton(
                 onPressed: c.busy || c.selected == null ? null : c.clearCache,
-                child: const Text('释放已同步缓存'),
+                child: Text(tr('释放已同步缓存')),
               ),
             ),
           ),
@@ -1653,55 +1764,19 @@ class _WorkspaceState extends State<Workspace> with WindowListener {
           Card(
             color: Colors.white,
             child: ListTile(
-              title: Text('云端删除待确认：${cache?['deletes_pending']} 项'),
+              title: Text(tr('云端删除待确认：{arg0} 项', [cache?['deletes_pending']])),
               subtitle: Text(
-                '本地已删除。被拒绝：${cache?['deletes_rejected'] ?? 0} 项，等待重试：${cache?['deletes_deferred'] ?? 0} 项。任务已保留；修复权限或登录后可重新尝试。',
+                tr('本地已删除。被拒绝：{arg0} 项，等待重试：{arg1} 项。任务已保留；修复权限或登录后可重新尝试。', [
+                  cache?['deletes_rejected'] ?? 0,
+                  cache?['deletes_deferred'] ?? 0,
+                ]),
               ),
               trailing: OutlinedButton(
                 onPressed: c.busy || c.selected == null ? null : c.retryDeletes,
-                child: const Text('重新尝试'),
+                child: Text(tr('重新尝试')),
               ),
             ),
           ),
-        Card(
-          color: Colors.white,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '网络路径',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 12),
-                Text(switch (c.profile?['network_route']) {
-                  'direct' => '仅直连：绑定物理网卡并绕过代理；失败时停止连接。',
-                  'system' => '使用系统路由及系统配置的代理。',
-                  _ => '优先直连，失败时明确提示并允许系统／代理兜底。',
-                }),
-                const SizedBox(height: 12),
-                for (final line in network)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: SelectableText(
-                      line,
-                      style: TextStyle(
-                        fontFamily: DesktopTypography.monospace,
-                        fontFamilyFallback: DesktopTypography.fallback,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                if (network.isEmpty)
-                  const Text(
-                    '当前没有网络路径报告。',
-                    style: TextStyle(color: Colors.blueGrey),
-                  ),
-              ],
-            ),
-          ),
-        ),
       ],
     );
   }

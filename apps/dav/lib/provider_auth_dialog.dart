@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'package:flutter/material.dart';
 import 'client.dart';
 
@@ -31,7 +32,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
   Widget build(BuildContext context) {
     final question = widget.question;
     return AlertDialog(
-      title: Text(question['title'] as String? ?? '账号登录'),
+      title: Text(tr(question['title'] as String? ?? '账号登录')),
       content: SizedBox(
         width: 400,
         child: Form(
@@ -42,12 +43,12 @@ class _AuthQuestionState extends State<_AuthQuestion> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (question['help'] is String) ...[
-                  Text(question['help'] as String),
+                  Text(tr(question['help'] as String)),
                   const SizedBox(height: 16),
                 ],
                 if ((question['message'] as String? ?? '').isNotEmpty) ...[
                   Text(
-                    question['message'] as String,
+                    tr(question['message'] as String),
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
@@ -79,13 +80,13 @@ class _AuthQuestionState extends State<_AuthQuestion> {
                     enableSuggestions: false,
                     maxLength: 4096,
                     decoration: InputDecoration(
-                      labelText: question['label'] as String? ?? '输入信息',
+                      labelText: tr(question['label'] as String? ?? '输入信息'),
                       counterText: '',
                     ),
                     validator: (value) =>
                         question['required'] == true &&
                             (value == null || value.isEmpty)
-                        ? '请填写此项'
+                        ? tr('请填写此项')
                         : null,
                     onFieldSubmitted: (_) {
                       if (form.currentState!.validate()) {
@@ -98,7 +99,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
                   TextButton(
                     onPressed: () =>
                         Navigator.pop(context, alternative['value'] as String),
-                    child: Text(alternative['label'] as String),
+                    child: Text(tr(alternative['label'] as String)),
                   ),
               ],
             ),
@@ -108,7 +109,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('取消登录'),
+          child: Text(tr('取消登录')),
         ),
         FilledButton(
           onPressed: () {
@@ -116,7 +117,7 @@ class _AuthQuestionState extends State<_AuthQuestion> {
               Navigator.pop(context, answer.text);
             }
           },
-          child: Text(question['submit_label'] as String? ?? '下一步'),
+          child: Text(tr(question['submit_label'] as String? ?? '下一步')),
         ),
       ],
     );
