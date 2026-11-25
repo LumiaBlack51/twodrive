@@ -31,13 +31,15 @@
 
 Linux 桌面 CI 同时运行 Openbox 和带合成的 Mutter 界面测试。从面板展开起采样，并继续校验页脚、最小化、菜单和退出。X11 的图标定位回归按 GTK 边距换算成内容矩形。
 
-### 同次退出验证
-
-新增的合成器用例还在退出时观察到 GTK 向已经销毁的 Flutter 视图请求重绘，一次进程异常结束。旧版 GNOME 退出日志也有无效视图告警。Flutter 3.41 的 `fl_view_present_layers` 给 GTK idle 回调传入未持有引用的视图。主、次视图销毁时撤销该视图尚未执行的 idle，复跑 GNOME Shell 和 Mutter 均正常退出，日志中未再出现该无效指针告警。
-
 ### 交付记录
 
-Development 实现与回归见 [PR #92](https://github.com/LumiaBlack51/twodrive/pull/92)。正式制品及本机安装结果待补充。
+[Development PR #92](https://github.com/LumiaBlack51/twodrive/pull/92)。正式制品及本机安装结果待补充。
+
+## TD-20261125-04：隔离合成桌面退出时 Flutter 仍有待处理重绘
+
+- 日期、症状与触发：2026-11-25，Linux Development。在私有 X11 桌面上从托盘退出，0.3.3 的日志可见无效视图告警；0.3.4 候选的一次独立 Mutter 测试还发生进程异常退出。与 TD-20261123-09 的 OpenGL 清理有关联。未观察到用户数据受损。
+- 证据与边界：Flutter 3.41 的渲染回调临时持有视图，`fl_view_present_layers` 给 GTK idle 回调传入未持有引用的视图。异常退出日志还出现互斥锁清理错误，二者因果关系尚未证实。该问题独立于 TD-20261125-03 已复现的阴影不同帧。
+- 处理与防复发：测试过在视图销毁通知中移除仍排队的 idle，两次复跑正常退出且无相关告警。[审查](https://github.com/LumiaBlack51/twodrive/pull/92#issuecomment-7161775797) 指出 GTK 已分派的回调仍可与最后一个引用释放并发。已撤回该试验。后续需在 embedder 回调本身保证视图引用有效，并单独验证两个视图仍在渲染时反复退出。原有退出用例继续执行，本轮仅交付阴影修复。
 
 ## 记录模板
 
