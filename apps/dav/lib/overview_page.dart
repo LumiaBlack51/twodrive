@@ -344,13 +344,15 @@ class _OverviewPageState extends State<OverviewPage> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             );
             return constraints.maxWidth >= fourColumnWidth
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: transfers),
-                      const SizedBox(width: 12),
-                      Expanded(child: backup),
-                    ],
+                ? IntrinsicHeight(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: transfers),
+                        const SizedBox(width: 12),
+                        Expanded(child: backup),
+                      ],
+                    ),
                   )
                 : Column(
                     children: [transfers, const SizedBox(height: 12), backup],

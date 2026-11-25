@@ -17,8 +17,14 @@ class _ViewInterestClient extends StorageClient {
     required bool visible,
     bool files = false,
     bool quota = false,
+    bool transfers = false,
   }) {
-    super.setView(visible: visible, files: files, quota: quota);
+    super.setView(
+      visible: visible,
+      files: files,
+      quota: quota,
+      transfers: transfers,
+    );
     requestsFiles = files;
     requestsQuota = quota;
   }

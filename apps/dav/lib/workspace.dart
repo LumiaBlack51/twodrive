@@ -1,3 +1,5 @@
+import 'desktop_typography.dart';
+import 'cloud_target_picker.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'language.dart';
 import 'dart:async';
@@ -41,6 +43,28 @@ String parentPath(String path) {
 
 bool trayReady = false;
 
+const _transferInset = Color(0xffeaeefb);
+const _transferAccent = Color(0xff236ed5);
+const _transferMuted = Color(0xff707987);
+const _transferSuccess = Color(0xff328352);
+
+enum _TransferSection {
+  upload('上传'),
+  backup('备份'),
+  download('下载'),
+  mount('挂载同步');
+
+  const _TransferSection(this.label);
+  final String label;
+
+  static _TransferSection forRow(TransferRow row) {
+    if (row.manual != null) {
+      return row.info['kind'] == 'download' ? download : upload;
+    }
+    return row.info['source'] == 'backup' ? backup : mount;
+  }
+}
+
 class Workspace extends StatefulWidget {
   const Workspace({super.key, required this.client, required this.desktop});
   final StorageClient client;
@@ -58,14 +82,21 @@ class _WorkspaceState extends State<Workspace>
   bool dashboardFocused = false;
   DialogRoute<void>? foregroundPanel;
   bool presenting = false;
+  bool _windowHidden = false;
+  bool _directoryReadQueued = false;
   int page = WorkspacePage.overview.index;
-  String filter = '';
+  _TransferSection? transferSection;
+  final fileFilter = TextEditingController();
+  (String?, Object?)? _filterOwner;
+  (String?, Object?) get fileOwner => (c.selected, c.profile?['revision']);
+  bool _switchingFileTarget = false;
   String _traySignature = '';
   Future<void> _trayWork = Future.value();
   Future<void>? _quitWork;
   @override
   void initState() {
     super.initState();
+    _filterOwner = fileOwner;
     c.addListener(changed);
     if (widget.desktop) {
       WidgetsBinding.instance.addObserver(this);
@@ -100,6 +131,10 @@ class _WorkspaceState extends State<Workspace>
   }
 
   void changed() {
+    if (_filterOwner != fileOwner) {
+      _filterOwner = fileOwner;
+      fileFilter.clear();
+    }
     if (mounted) {
       setState(() {});
     }
@@ -123,6 +158,8 @@ class _WorkspaceState extends State<Workspace>
     c.setView(
       visible: dashboardFocused || nativeTrayVisible,
       files: dashboardFocused && !panel && page == WorkspacePage.files.index,
+      transfers:
+          dashboardFocused && !panel && page == WorkspacePage.transfers.index,
       quota:
           nativeTrayVisible ||
           (dashboardFocused &&
@@ -150,14 +187,18 @@ class _WorkspaceState extends State<Workspace>
   @override
   void onWindowFocus() {
     dashboardFocused = true;
+    _windowHidden = false;
     if (!presenting) refreshWorkspace(forceDirectory: true);
   }
 
-  @override
-  void onWindowMinimize() {
+  void hideWorkspace() {
+    _windowHidden = true;
     dashboardFocused = false;
     updateViewInterests();
   }
+
+  @override
+  void onWindowMinimize() => hideWorkspace();
 
   @override
   void onWindowClose() {
@@ -168,7 +209,8 @@ class _WorkspaceState extends State<Workspace>
 
   @override
   void onWindowBlur() {
-    onWindowMinimize();
+    dashboardFocused = false;
+    updateViewInterests();
     if (!Platform.isLinux && !Platform.isWindows && panel && !presenting) {
       unawaited(windowManager.hide());
     }
@@ -264,7 +306,7 @@ class _WorkspaceState extends State<Workspace>
     }
     if (presenting) return;
     presenting = true;
-    c.setView(visible: false);
+    hideWorkspace();
     final fromPanel = panel;
     var veiled = false;
     try {
@@ -274,8 +316,10 @@ class _WorkspaceState extends State<Workspace>
       if (!mounted) return;
       setState(() {
         panel = false;
+        _windowHidden = false;
         page = destination ?? WorkspacePage.overview.index;
       });
+      loadVisibleDirectory();
       await windowManager.setAlwaysOnTop(false);
       await windowManager.setSkipTaskbar(false);
       await tray.panel(false);
@@ -325,39 +369,80 @@ class _WorkspaceState extends State<Workspace>
 
   Future<void> _quitOnce() async {
     try {
-      if (widget.desktop) {
-        // Keep the visible window independent of mount/pipe cleanup latency.
-        // A refused shutdown must restore it instead of hiding unsaved writes.
-        c.setView(visible: false);
-        try {
-          await windowManager.hide();
-        } catch (_) {}
-      }
-      if (await c.shutdown()) {
-        if (trayReady) {
-          await _trayWork;
-          await tray.destroy();
-          trayReady = false;
-        }
+      while (mounted) {
         if (widget.desktop) {
-          await windowManager.setPreventClose(false);
-          await windowManager.destroy();
-        } else {
-          await SystemNavigator.pop();
+          hideWorkspace();
+          try {
+            await windowManager.hide();
+          } catch (_) {}
         }
-      } else if (widget.desktop) {
-        // Preserve the current page, window size and panel mode on refusal.
-        await windowManager.show();
-        await windowManager.focus();
+        if (await c.shutdown()) break;
+        if (widget.desktop) {
+          await windowManager.show();
+          _windowHidden = false;
+          await windowManager.focus();
+        }
+        if (!mounted || c.quitBlockers.isEmpty) return;
+        if (!await _confirmQuitWithOpenMounts()) return;
+      }
+      if (!mounted) return;
+      if (trayReady) {
+        await _trayWork;
+        await tray.destroy();
+        trayReady = false;
+      }
+      if (widget.desktop) {
+        await windowManager.setPreventClose(false);
+        await windowManager.destroy();
+      } else {
+        await SystemNavigator.pop();
       }
     } finally {
       _quitWork = null;
     }
   }
 
+  Future<bool> _confirmQuitWithOpenMounts() async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          scrollable: true,
+          title: const Text('挂载目录正在使用'),
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('请保存工作，正常关闭仍在使用这些目录的文件、窗口或终端，再重试退出。'),
+              for (final blocker in c.quitBlockers) ...[
+                const SizedBox(height: 12),
+                Text(blocker['name'] as String),
+                Text(blocker['path'] as String),
+                for (final program
+                    in (blocker['programs'] as List).cast<Json>())
+                  Text(
+                    '${program['name']}（PID ${program['pid']}）'
+                    ' · 请手动关闭或离开挂载目录',
+                  ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('重试退出'),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+
   @override
   void dispose() {
     c.removeListener(changed);
+    fileFilter.dispose();
     if (widget.desktop) {
       WidgetsBinding.instance.removeObserver(this);
       windowManager.removeListener(this);
@@ -470,6 +555,12 @@ class _WorkspaceState extends State<Workspace>
 
   Future<void> fileAction(String action, Json file) async {
     switch (action) {
+      case 'view':
+        if (c.isProfileMounted(file['profile'] as String)) {
+          await c.viewCloudFile(file);
+        } else {
+          await download(file);
+        }
       case 'download':
         await download(file);
       case 'rename':
@@ -856,24 +947,80 @@ class _WorkspaceState extends State<Workspace>
         ),
       );
   Widget filesPage() {
-    if (!c.connected) {
-      return empty(
-        Icons.cloud_outlined,
-        tr('连接你的文件'),
-        tr('选择存储提供者并连接你的账号或设备。'),
-        OutlinedButton(
-          onPressed: () => navigateTo(WorkspacePage.connections.index),
-          child: Text(tr('管理连接')),
-        ),
-      );
+    if (!_windowHidden && c.needsDirectoryRead && !_directoryReadQueued) {
+      _directoryReadQueued = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _directoryReadQueued = false;
+        if (mounted) loadVisibleDirectory();
+      });
     }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: CloudTargetPicker(
+            fieldKey: const ValueKey('files-target'),
+            label: tr('查看网盘'),
+            client: c,
+            onSelect:
+                c.available && !c.busy && !c.quitting && !_switchingFileTarget
+                ? (profile) => unawaited(selectFileTarget(profile))
+                : null,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _switchingFileTarget
+                ? const Center(child: CircularProgressIndicator())
+                : c.connected
+                ? fileDirectory()
+                : empty(
+                    Icons.cloud_outlined,
+                    '连接你的文件',
+                    c.profiles.isEmpty
+                        ? '前往连接页选择存储提供者，再添加账号或设备。'
+                        : '选择上方的网盘，或前往连接页添加新账号。',
+                    OutlinedButton(
+                      onPressed: () =>
+                          navigateTo(WorkspacePage.connections.index),
+                      child: Text(tr('管理连接')),
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> selectFileTarget(Json profile) async {
+    if (_switchingFileTarget ||
+        !c.available ||
+        c.busy ||
+        c.quitting ||
+        (c.connected && c.selected == profile['id'])) {
+      return;
+    }
+    setState(() => _switchingFileTarget = true);
+    try {
+      await connectProfile(profile);
+    } finally {
+      if (mounted) setState(() => _switchingFileTarget = false);
+    }
+  }
+
+  Widget fileDirectory() {
     final entries = c.entries
         .where(
           (e) => (e['name'] as String).toLowerCase().contains(
-            filter.toLowerCase(),
+            fileFilter.text.toLowerCase(),
           ),
         )
         .toList();
+    final canActOnFiles = !c.busy && c.directoryReady;
+    final directoryError = c.directoryError;
     return Column(
       children: [
         Row(
@@ -888,19 +1035,21 @@ class _WorkspaceState extends State<Workspace>
             Expanded(child: SelectableText(c.path, maxLines: 2)),
             IconButton(
               tooltip: tr('刷新'),
-              onPressed: c.busy ? null : () => c.browse(c.path),
+              onPressed: c.busy || c.directoryLoading
+                  ? null
+                  : () => c.browse(c.path),
               icon: const Icon(Icons.refresh),
             ),
             if (c.canMkdir || c.canUpload) ...[
               if (c.canMkdir)
                 IconButton(
                   tooltip: tr('新建文件夹'),
-                  onPressed: c.busy
+                  onPressed: !canActOnFiles
                       ? null
                       : () async {
                           final identity = c.target;
                           final directory = c.path;
-                          final name = await nameDialog(tr('新建文件夹'));
+                          final name = await nameDialog('新建文件夹');
                           if (name != null) {
                             await c.mutate('mkdir', {
                               'path': childPath(directory, name),
@@ -912,7 +1061,7 @@ class _WorkspaceState extends State<Workspace>
                 ),
               if (c.canUpload)
                 FilledButton.icon(
-                  onPressed: c.busy ? null : upload,
+                  onPressed: canActOnFiles ? upload : null,
                   icon: const Icon(Icons.upload_outlined),
                   label: Text(tr('上传')),
                 ),
@@ -921,164 +1070,457 @@ class _WorkspaceState extends State<Workspace>
         ),
         const SizedBox(height: 12),
         TextField(
+          controller: fileFilter,
           decoration: InputDecoration(
             prefixIcon: Icon(Icons.search),
             hintText: tr('筛选当前目录'),
           ),
-          onChanged: (value) => setState(() => filter = value),
+          onChanged: (_) => setState(() {}),
         ),
         const SizedBox(height: 12),
         Expanded(
-          child: entries.isEmpty
-              ? empty(
-                  Icons.folder_open,
-                  tr('当前目录为空'),
-                  filter.isEmpty ? tr('上传文件或新建文件夹即可开始。') : tr('没有匹配的文件。'),
-                )
-              : Card(
-                  margin: EdgeInsets.zero,
-                  color: Colors.white,
-                  clipBehavior: Clip.antiAlias,
-                  child: ListView.separated(
-                    itemCount: entries.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final file = entries[index];
-                      final directory = file['directory'] == true;
-                      return ListTile(
-                        leading: Icon(
-                          directory ? Icons.folder : Icons.description_outlined,
-                          color: directory
-                              ? const Color(0xffe7b448)
-                              : Colors.blueGrey,
-                        ),
-                        title: Text(file['name'] as String),
-                        subtitle: Text(
-                          directory ? tr('文件夹') : bytes(file['size'] as int),
-                        ),
-                        onTap: c.busy
-                            ? null
-                            : directory
-                            ? () => c.browse(file['path'] as String)
-                            : () => download(file),
-                        trailing: PopupMenuButton<String>(
-                          enabled: !c.busy,
-                          onSelected: (action) => fileAction(action, file),
-                          itemBuilder: (_) => [
-                            if (!directory)
-                              PopupMenuItem(
-                                value: 'download',
-                                child: Text(tr('下载')),
-                              ),
-                            if (c.canRename)
-                              PopupMenuItem(
-                                value: 'rename',
-                                child: Text(tr('重命名')),
-                              ),
-                            if (c.canUpload &&
-                                !directory &&
-                                (file['etag'] as String).isNotEmpty)
-                              PopupMenuItem(
-                                value: 'replace',
-                                child: Text(tr('替换内容')),
-                              ),
-                            if (c.canDelete)
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Text(tr('删除')),
-                              ),
+          child: !c.directoryLoaded
+              ? directoryError != null
+                    ? empty(Icons.error_outline, '无法读取目录', directoryError)
+                    : Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (c.directoryLoading) ...[
+                              const CircularProgressIndicator(),
+                              const SizedBox(height: 16),
+                            ],
+                            Text(tr('正在加载目录')),
                           ],
                         ),
-                      );
-                    },
-                  ),
+                      )
+              : entries.isEmpty
+              ? empty(
+                  Icons.folder_open,
+                  c.entries.isEmpty ? '当前目录为空' : '没有匹配的文件',
+                  c.entries.isNotEmpty ? '请调整筛选条件。' : '',
+                )
+              : ListView.separated(
+                  key: ValueKey((fileOwner, c.path)),
+                  itemCount: entries.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final file = entries[index];
+                    final directory = file['directory'] == true;
+                    final size = file['size'];
+                    return ListTile(
+                      leading: Icon(
+                        directory ? Icons.folder : Icons.description_outlined,
+                        color: directory
+                            ? const Color(0xffe7b448)
+                            : Colors.blueGrey,
+                      ),
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                      ),
+                      title: Tooltip(
+                        message: file['name'] as String,
+                        child: Text(
+                          file['name'] as String,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      subtitle: Text(
+                        directory
+                            ? '文件夹'
+                            : size is int
+                            ? bytes(size)
+                            : '文件',
+                      ),
+                      onTap: c.busy
+                          ? null
+                          : directory
+                          ? () => c.browse(file['path'] as String)
+                          : canActOnFiles
+                          ? () => download(file)
+                          : null,
+                      trailing: PopupMenuButton<String>(
+                        enabled: canActOnFiles,
+                        onSelected: (action) => fileAction(action, file),
+                        itemBuilder: (_) => [
+                          if (!directory)
+                            PopupMenuItem(value: 'view', child: Text(tr('查看'))),
+                          if (!directory)
+                            PopupMenuItem(
+                              value: 'download',
+                              child: Text(tr('下载')),
+                            ),
+                          if (c.canRename)
+                            PopupMenuItem(
+                              value: 'rename',
+                              child: Text(tr('重命名')),
+                            ),
+                          if (c.canUpload &&
+                              !directory &&
+                              (file['etag'] as String?)?.isNotEmpty == true)
+                            PopupMenuItem(
+                              value: 'replace',
+                              child: Text(tr('替换内容')),
+                            ),
+                          if (c.canDelete)
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: Text(tr('删除')),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
         ),
-        const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            tr('{arg0} 项', [entries.length]),
-            style: const TextStyle(color: Colors.blueGrey),
+        if (c.directoryLoaded) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              directoryError != null
+                  ? '刷新失败，正在显示上次读取的目录。$directoryError'
+                  : c.directoryLoading
+                  ? '${entries.length} 项 · 正在刷新'
+                  : '${entries.length} 项',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.blueGrey),
+            ),
           ),
+        ],
+      ],
+    );
+  }
+
+  void loadVisibleDirectory() {
+    if (!_windowHidden &&
+        !panel &&
+        page == WorkspacePage.files.index &&
+        c.needsDirectoryRead) {
+      unawaited(c.browse(c.path));
+    }
+  }
+
+  Widget transfersPage() {
+    final grouped = {
+      for (final section in _TransferSection.values) section: <TransferRow>[],
+    };
+    for (final row in c.transferRows) {
+      grouped[_TransferSection.forRow(row)]!.add(row);
+    }
+    final selected = transferSection ?? _TransferSection.upload;
+    final sections = _TransferSection.values
+        .where(
+          (section) =>
+              section == _TransferSection.upload ||
+              section == _TransferSection.backup ||
+              section == _TransferSection.download ||
+              section == selected ||
+              grouped[section]!.isNotEmpty,
+        )
+        .toList();
+    final rows = grouped[selected]!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: sections.length * 132),
+          child: SegmentedButton<_TransferSection>(
+            segments: [
+              for (final section in sections)
+                ButtonSegment(value: section, label: Text(section.label)),
+            ],
+            showSelectedIcon: false,
+            selected: {selected},
+            onSelectionChanged: (selection) => setState(() {
+              transferSection = selection.single;
+            }),
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (c.transferHistoryError case final String message
+            when selected == _TransferSection.upload ||
+                selected == _TransferSection.download)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              message,
+              style: const TextStyle(color: Colors.deepOrange),
+            ),
+          ),
+        Expanded(
+          child: rows.isEmpty
+              ? empty(Icons.swap_vert, '暂无${selected.label}记录', '')
+              : transferList(selected, rows),
         ),
       ],
     );
   }
 
-  Widget transfersPage() => c.transfers.isEmpty
-      ? empty(Icons.swap_vert, tr('暂无传输'), tr('上传和下载的进度、结果与重试会显示在这里。'))
-      : ListView.builder(
-          itemCount: c.transfers.length,
-          itemBuilder: (context, index) {
-            final task = c.transfers[index];
-            return Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          task.operation == 'upload'
-                              ? Icons.upload
-                              : Icons.download,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(child: Text(task.name)),
-                        Text(task.state),
-                        if (task.phase == TransferPhase.running)
-                          IconButton(
-                            tooltip: tr('取消传输'),
-                            onPressed: () => c.cancelTransfer(task.id),
-                            icon: const Icon(Icons.close),
-                          ),
-                        if (task.phase == TransferPhase.failed)
-                          TextButton(
-                            onPressed:
-                                c.busy ||
-                                    !c.isProfileConnected(
-                                      task.args['profile'] as String,
-                                    )
-                                ? null
-                                : () => c.transfer(task.operation, task.args),
-                            child: Text(tr('重试')),
-                          ),
-                      ],
+  Widget transferList(_TransferSection section, List<TransferRow> rows) =>
+      Align(
+        alignment: Alignment.topCenter,
+        child: Card(
+          margin: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Material(
+            type: MaterialType.transparency,
+            child: ListView.separated(
+              key: PageStorageKey(section),
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: rows.length,
+              separatorBuilder: (_, _) => const Divider(
+                height: 1,
+                indent: 16,
+                endIndent: 16,
+                color: _transferInset,
+              ),
+              itemBuilder: (_, index) => transferRow(rows[index]),
+            ),
+          ),
+        ),
+      );
+
+  Widget transferRow(TransferRow row) {
+    final info = row.info;
+    final task = row.manual;
+    final download = info['kind'] == 'download';
+    final hasLocalPath = info['local_path'] is String;
+    final canReveal = hasLocalPath || c.mountedTransferPath(info) != null;
+    final name = info['name']?.toString() ?? '传输任务';
+    final state = c.transferState(info);
+    final done = info['bytes_done'] as num? ?? 0;
+    final total = info['bytes_total'] as num? ?? 0;
+    final active = state == '正在备份' || state == '传输中';
+    final statusWidth = MediaQuery.textScalerOf(
+      context,
+    ).scale(112).clamp(112.0, 210.0).toDouble();
+    final color = switch (state) {
+      '已备份' || '已完成' => _transferSuccess,
+      '未完成' || '需要处理' || '结果未确认' => const Color(0xffa74721),
+      _ => active ? _transferAccent : _transferMuted,
+    };
+    return InkWell(
+      onTap: () => showTransferDetails(row, name, download: download),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: _transferInset,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                download ? Icons.south_rounded : Icons.north_rounded,
+                size: 18,
+                color: active ? _transferAccent : _transferMuted,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    c.transferLabel(info),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: _transferMuted),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            if (task != null && task.phase == TransferPhase.running)
+              IconButton(
+                tooltip: '取消传输',
+                onPressed: () => c.cancelTransfer(task.id),
+                icon: const Icon(Icons.close, size: 18),
+              ),
+            if (task != null &&
+                task.phase == TransferPhase.failed &&
+                !task.view)
+              IconButton(
+                tooltip: '重试传输',
+                onPressed: c.canRetryTransfer(task)
+                    ? () => c.transfer(task.operation, task.args)
+                    : null,
+                icon: const Icon(Icons.refresh, size: 18),
+              ),
+            SizedBox(
+              width: statusWidth,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    state,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: color,
+                      fontWeight: FontWeight.w600,
                     ),
-                    const SizedBox(height: 10),
-                    LinearProgressIndicator(
-                      value: task.phase == TransferPhase.completed
-                          ? 1
-                          : task.total == 0
-                          ? null
-                          : task.done / task.total,
-                    ),
-                    const SizedBox(height: 8),
+                  ),
+                  if (total > 0 || done > 0)
                     Text(
-                      c.profiles
-                                  .where((p) => p['id'] == task.args['profile'])
-                                  .firstOrNull?['name']
-                              as String? ??
-                          tr('原连接'),
+                      active && total > 0 && done < total
+                          ? '${bytes(done)} / ${bytes(total)}'
+                          : bytes(total > 0 ? total : done),
+                      textAlign: TextAlign.right,
                       style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.blueGrey,
+                        fontSize: 11,
+                        color: _transferMuted,
                       ),
                     ),
-                    Text('${bytes(task.done)} / ${bytes(task.total)}'),
-                    if (task.error != null)
-                      SelectableText(
-                        task.error!,
-                        style: const TextStyle(color: Colors.deepOrange),
+                  if (c.transferShowsProgress(info)) ...[
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      width: 84,
+                      child: LinearProgressIndicator(
+                        minHeight: 3,
+                        borderRadius: BorderRadius.circular(3),
+                        backgroundColor: _transferInset,
+                        color: _transferAccent,
+                        value: total <= 0
+                            ? null
+                            : (done / total).clamp(0, 1).toDouble(),
                       ),
+                    ),
                   ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 40,
+              child: canReveal
+                  ? IconButton(
+                      tooltip: '打开所在位置',
+                      onPressed: () =>
+                          revealTransferLocation(info, cloud: !hasLocalPath),
+                      icon: const Icon(Icons.folder_open_outlined, size: 18),
+                    )
+                  : null,
+            ),
+            const Tooltip(
+              message: '查看传输详情',
+              child: Icon(Icons.chevron_right, size: 18, color: _transferMuted),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> revealTransferLocation(Json info, {required bool cloud}) async {
+    final path = cloud ? c.mountedTransferPath(info) : info['local_path'];
+    String? message;
+    try {
+      if (path is! String) {
+        message = '该文件所在位置暂不可用';
+      } else if (!await c.revealTransferFile(path)) {
+        message = '已打开所在文件夹，当前文件管理器无法自动选中文件';
+      }
+    } catch (_) {
+      message = '无法定位文件。文件可能已移动或所在位置暂不可用';
+    }
+    if (mounted && message != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<void> showTransferDetails(
+    TransferRow row,
+    String name, {
+    required bool download,
+  }) => showDialog<void>(
+    context: context,
+    builder: (context) {
+      final info = row.info;
+      final paths = [
+        if (info['local_path'] case final String path)
+          (download ? '本地目标' : '本地来源', path, false),
+        if (info['path'] case final String path)
+          (download ? '云端来源' : '云端目标', path, true),
+      ];
+      return AlertDialog(
+        constraints: const BoxConstraints(maxWidth: 600),
+        scrollable: true,
+        title: SelectableText(name),
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              c.transferLabel(info),
+              style: const TextStyle(color: _transferMuted),
+            ),
+            for (final (label, path, cloud) in paths) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  if (!cloud || c.mountedTransferPath(info) != null)
+                    IconButton(
+                      tooltip: cloud ? '在挂载目录中定位文件' : '定位本地文件',
+                      onPressed: () =>
+                          revealTransferLocation(info, cloud: cloud),
+                      icon: const Icon(Icons.folder_open_outlined, size: 18),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 5),
+              SelectableText(
+                path,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontFamily: DesktopTypography.monospace,
                 ),
               ),
-            );
-          },
-        );
+            ],
+            if (row.manual?.error case final String error) ...[
+              const SizedBox(height: 18),
+              SelectableText(
+                error,
+                style: const TextStyle(color: Colors.deepOrange),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      );
+    },
+  );
+
   Widget connectionsPage() => ListView(
     children: [
       if (c.connected)
