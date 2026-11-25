@@ -81,7 +81,8 @@ def exercise(bundle, engines, home, gnome, mutter, quit_from_tray):
             errors = app_log.read_text(errors="replace")
             for diagnostic in ("invalid unclassed pointer in cast to 'FlView'",
                                "gtk_widget_queue_draw: assertion", "g_mutex_clear() called",
-                               "Failed to shutdown Flutter engine"):
+                               "Failed to shutdown Flutter engine", "GLib-GObject-CRITICAL",
+                               "GLib-CRITICAL", "Gtk-CRITICAL"):
                 assert diagnostic not in errors, f"Flutter teardown emitted {diagnostic}"
 
         def named(title):
@@ -240,7 +241,7 @@ if __name__ == "__main__":
             runtime.mkdir(mode=0o700)
             env = dict(os.environ, HOME=directory, XDG_RUNTIME_DIR=str(runtime), XDG_SESSION_TYPE="x11",
                        XDG_CONFIG_HOME=str(home / "config"), XDG_DATA_HOME=str(home / "data"),
-                       XDG_CACHE_HOME=str(home / "cache"), GDK_BACKEND="x11", GDK_SCALE="1",
+                       XDG_CACHE_HOME=str(home / "cache"), GDK_BACKEND="x11", GDK_SCALE="1", GTK_IM_MODULE="gtk-im-context-simple",
                        TWODRIVE_TRAY_BACKEND="sni")
             env.pop("WAYLAND_DISPLAY", None)
             if args.gnome:

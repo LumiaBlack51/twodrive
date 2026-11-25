@@ -32,6 +32,7 @@ struct Tray {
   std::string title = "TwoDrive";
   twodrive::TrayAnchor anchor;
   bool host_anchor = false;
+  bool quitting = false;
   GtkStatusIcon* legacy = nullptr;
   guint32 activation_time = GDK_CURRENT_TIME;
   bool panel = false;
@@ -389,6 +390,7 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
     auto* app = g_application_get_default();
     // The engine owns render threads shared by the tray and dashboard. Stop
     // them once GTK stops dispatching, before process-wide Skia cleanup runs.
+    tray->quitting = true;
     g_signal_connect_object(app, "shutdown", G_CALLBACK(stop_flutter_engine),
                             fl_view_get_engine(tray->primary), G_CONNECT_DEFAULT);
     fl_method_call_respond_success(request, nullptr, nullptr);
@@ -458,7 +460,12 @@ void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
 }
 void dispose(gpointer data) {
   auto* tray = static_cast<Tray*>(data);
+  // The messenger closes its channels after FlutterEngineShutdown joins the
+  // workers and before FlEngine releases its cursor and input handlers.
+  g_autoptr(GtkWindow) dashboard = tray->quitting && tray->dashboard
+      ? GTK_WINDOW(g_object_ref(tray->dashboard)) : nullptr;
   stop(tray);
+  if (dashboard) gtk_widget_destroy(GTK_WIDGET(dashboard));
   if (tray->info) g_dbus_node_info_unref(tray->info);
   g_clear_object(&tray->bus);
   delete tray;
