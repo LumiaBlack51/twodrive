@@ -1,5 +1,11 @@
 # TwoDrive 故障记录
 
+## TD-20261125-DAV-PACKAGE：独立 DAV Debian 开发测试包
+
+- 将 #72 的 DAV 开发测试包按维护者要求从客户端功能中拆出。通过现有 debhelper 与 dpkg-buildpackage、独立构建 profile 生成 twodrive-dav，保留便携 payload；稳定 twodrive 包不改变。
+- 测试包校验覆盖依赖、原始文件摘要及 .buildinfo/.changes。完整发布仍须另行生成并校验源码包、二进制/调试包，不能用此测试包代替。说明测试包不安装便携安装器的 Nautilus 徽标资产。
+- 本机 Debian policy 和九项合成包校验回归通过；正式 CI 构建及安装结果以 PR 为准，合成包不代表实机安装。
+
 ## TD-20261125-05：Windows 客户端的网盘查看动作直接调用文件关联
 
 - 范围：开发中的 PR #72，审查 Windows 下载后查看的代码路径时发现。普通列表点击和“查看”均能进入该路径。
