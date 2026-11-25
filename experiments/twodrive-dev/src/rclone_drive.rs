@@ -699,6 +699,15 @@ impl Provider for RcloneDrive {
     ) -> anyhow::Result<()> {
         self.put_backup_version(path, source, progress)
     }
+    fn resume_manual_upload(
+        &self,
+        path: &str,
+        source: &Path,
+        version: Option<&str>,
+        progress: Progress,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.resume_manual(path, source, version, progress)
+    }
     fn manual_upload(
         &self,
         path: &str,

@@ -31,6 +31,18 @@ impl RcloneDrive {
         )?;
         Ok(())
     }
+    pub(super) fn resume_manual(
+        &self,
+        path: &str,
+        source: &Path,
+        version: Option<&str>,
+        progress: Progress,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        let (root, _lock) = self.mutation_lock()?;
+        valid_path(path)?;
+        ensure!(path != "/", "不能写入根目录");
+        crate::recoverable_replace::resume(self, &root, path, source, version, progress)
+    }
     pub(super) fn put_manual(
         &self,
         path: &str,

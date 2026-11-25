@@ -174,6 +174,18 @@ pub trait Provider: CloudBackend {
     fn manual_upload_supported(&self) -> bool {
         false
     }
+    /// Resume only a matching durable replacement intent, before checking a
+    /// fresh target pathname which may be absent during that replacement.
+    /// Returning None must perform no mutation or adopt any remote content.
+    fn resume_manual_upload(
+        &self,
+        _path: &str,
+        _source: &Path,
+        _version: Option<&str>,
+        _progress: Progress,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        Ok(None)
+    }
     fn manual_upload(
         &self,
         _path: &str,
@@ -502,6 +514,17 @@ impl Backend {
         self.check_write()?;
         valid_path(path)?;
         ensure!(self.manual_upload_supported(), "此连接不支持手动写入");
+        let guard = self.clone();
+        let progress: Progress = Arc::new(move |done, total| {
+            guard.check_write()?;
+            progress(done, total)
+        });
+        if let Some(recovered) =
+            self.inner
+                .resume_manual_upload(path, source, version, progress.clone())?
+        {
+            return Ok(recovered);
+        }
         let current = self.get_metadata_by_path(path)?;
         crate::provider_guard::snapshot(
             self,
@@ -509,11 +532,6 @@ impl Backend {
             current.as_ref().map(|m| m.remote_id.as_str()),
             version,
         )?;
-        let guard = self.clone();
-        let progress: Progress = Arc::new(move |done, total| {
-            guard.check_write()?;
-            progress(done, total)
-        });
         self.inner.manual_upload(
             path,
             source,
@@ -705,12 +723,7 @@ impl CloudBackend for Backend {
     fn directory_metadata(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
         self.check_pause()?;
         valid_path(path)?;
-        if path == "/"
-            && let Some((at, entries)) = self.inner.initial_directory_listing()
-            && at.elapsed() < std::time::Duration::from_secs(15)
-        {
-            return Ok(entries);
-        }
+        // Startup listings are display seeds, not a newly fetched snapshot.
         self.inner.directory_metadata(path)
     }
 

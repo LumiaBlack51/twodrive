@@ -609,6 +609,12 @@ def native_states(mount, paths, *, offline=False):
     states = {}
     with sqlite3.connect((mount / "mount.sqlite3").as_uri() + "?mode=ro", uri=True, timeout=0.05) as conn:
         for key, path in paths:
+            # Native FUSE owns a synthetic root; it need not be a files row.
+            # Root badges still reflect pending/error work, never full hydration.
+            if path == "/":
+                state = directory_state_for(conn, path, "online_only")
+                states[key] = state if state in {"error", "uploading", "uploading_release_pending", "pin_pending"} and not offline else "online_only"
+                continue
             row = conn.execute("""SELECT state,is_dir,release_pending,pin_explicit,
                                   pin_origin_remote_id,cache_path,size FROM files WHERE path=?""",
                                (path,)).fetchone()

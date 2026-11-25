@@ -149,6 +149,23 @@ class DavEmblemTests(unittest.TestCase):
             self.assertIsNone(ext.running_dav_engine_directory(self.state))
             self.assertEqual(list(ext.bridge_candidates(cache)), [])
 
+    def test_native_mount_root_has_badge_without_a_synthetic_root_row(self):
+        for kind in ("onedrive", "google", "baidu", "icloud"):
+            p = self.profile(kind, kind)
+            db, mount = self.native(p)
+            key = ext.dav_key(p, "/")
+            self.assertEqual(ext.db_states_for([key])[key], "online_only")
+            cache = mount / "cache/child"
+            cache.write_bytes(b"1234")
+            db.execute("INSERT INTO files(path,state,cache_path) VALUES('/child','cached',?)", (str(cache),))
+            db.commit()
+            self.assertEqual(ext.db_states_for([key])[key], "online_only")
+            db.execute("UPDATE files SET state='dirty' WHERE path='/child'")
+            db.commit()
+            self.assertEqual(ext.db_states_for([key])[key], "uploading")
+            (mount / "binding.json").write_text(json.dumps({"provider":"foreign"}))
+            self.assertEqual(ext.db_states_for([key])[key], "unknown")
+
     def test_native_states_and_missing_cache_are_honest(self):
         p = self.profile("onedrive")
         db, mount = self.native(p)

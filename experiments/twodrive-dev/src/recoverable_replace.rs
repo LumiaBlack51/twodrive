@@ -43,6 +43,43 @@ fn digest(source: &Path) -> anyhow::Result<String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+/// A saved intent carries the original identity even when its public pathname
+/// is temporarily absent. Never infer that identity from a new object there.
+pub(crate) fn resume<B: Operations>(
+    backend: &B,
+    root: &State,
+    path: &str,
+    source: &Path,
+    version: Option<&str>,
+    progress: Progress,
+) -> anyhow::Result<Option<MetadataEntry>> {
+    let key = format!("replace-{:x}.json", Sha256::digest(path.as_bytes()));
+    if !root.dir.join(&key).exists() {
+        return Ok(None);
+    }
+    let journal: Journal = root.read(&key)?;
+    let matching = journal.path == path
+        && journal.hash == digest(source)?
+        && journal.expected.as_ref().map(|m| m.etag.as_str()) == version;
+    if !matching && journal.completed {
+        return Ok(None);
+    }
+    ensure!(
+        matching,
+        crate::provider_guard::VersionConflict("存在不同代次的未完成替换，恢复内容已保留")
+    );
+    replace(
+        backend,
+        root,
+        path,
+        source,
+        journal.expected.as_ref().map(|m| m.remote_id.as_str()),
+        version,
+        progress,
+    )
+    .map(Some)
+}
+
 pub(crate) fn replace<B: Operations>(
     backend: &B,
     root: &State,
@@ -312,6 +349,217 @@ mod tests {
             })
         }
     }
+    struct BackupProvider {
+        fixture: Arc<Fixture>,
+        state: State,
+    }
+    impl CloudBackend for BackupProvider {
+        fn uses_directory_metadata(&self) -> bool {
+            true
+        }
+        fn directory_metadata(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+            crate::provider::Provider::list_directory(self, path)
+        }
+        fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+            self.fixture.list_all()
+        }
+        fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+            self.fixture.download(id)
+        }
+        fn upload(&self, path: &str, bytes: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+            self.fixture.upload(path, bytes)
+        }
+        fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.fixture.create_folder(path)
+        }
+        fn rename(&self, id: &str, path: &str) -> anyhow::Result<MetadataEntry> {
+            self.fixture.rename(id, path)
+        }
+        fn delete(&self, id: &str) -> anyhow::Result<()> {
+            self.fixture.delete(id)
+        }
+    }
+    impl crate::provider::Provider for BackupProvider {
+        fn capabilities(&self) -> crate::provider::Capabilities {
+            crate::provider::Capabilities {
+                upload: true,
+                mkdir: true,
+                ..Default::default()
+            }
+        }
+        fn recoverable_backup(&self) -> bool {
+            true
+        }
+        fn manual_upload_supported(&self) -> bool {
+            true
+        }
+        fn initial_directory_listing(&self) -> Option<(std::time::Instant, Vec<MetadataEntry>)> {
+            Some((
+                std::time::Instant::now(),
+                vec![MetadataEntry::new_file(
+                    "old-display",
+                    "/old-display",
+                    1,
+                    1,
+                    "old",
+                )],
+            ))
+        }
+        fn list_directory(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+            Ok(self
+                .fixture
+                .list_all()?
+                .into_iter()
+                .filter(|m| m.parent_path == path)
+                .collect())
+        }
+        fn upload_controlled(
+            &self,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: Progress,
+        ) -> anyhow::Result<MetadataEntry> {
+            anyhow::bail!("atomic upload unavailable")
+        }
+        fn manual_upload(
+            &self,
+            path: &str,
+            source: &Path,
+            id: Option<&str>,
+            version: Option<&str>,
+            progress: Progress,
+        ) -> anyhow::Result<MetadataEntry> {
+            replace(
+                self.fixture.as_ref(),
+                &self.state,
+                path,
+                source,
+                id,
+                version,
+                progress,
+            )
+        }
+        fn resume_manual_upload(
+            &self,
+            path: &str,
+            source: &Path,
+            version: Option<&str>,
+            progress: Progress,
+        ) -> anyhow::Result<Option<MetadataEntry>> {
+            resume(
+                self.fixture.as_ref(),
+                &self.state,
+                path,
+                source,
+                version,
+                progress,
+            )
+        }
+    }
+    #[test]
+    fn backup_public_entry_recovers_all_interrupted_replacement_boundaries() {
+        for step in [2, 3, 1] {
+            for after in [true, false] {
+                let temp = tempfile::tempdir().unwrap();
+                let fixture = Arc::new(Fixture::new(step, after));
+                let old = fixture.upload("/target", b"old".to_vec()).unwrap();
+                let source = temp.path().join("source");
+                std::fs::write(&source, b"new").unwrap();
+                let backend = crate::provider::Backend::new(BackupProvider {
+                    fixture: fixture.clone(),
+                    state: State::new(temp.path().join("journal")).unwrap(),
+                });
+                let run = || {
+                    backend.manual_upload_path(
+                        "/target",
+                        &source,
+                        Some(&old.etag),
+                        Arc::new(|_, _| Ok(())),
+                    )
+                };
+                assert!(run().is_err());
+                fixture.fail.store(0, Ordering::SeqCst);
+                let uploaded = run().unwrap_or_else(|e| panic!("step={step} after={after}: {e}"));
+                assert_eq!(fixture.download(&uploaded.remote_id).unwrap(), b"new");
+                let previous = fixture
+                    .list_all()
+                    .unwrap()
+                    .into_iter()
+                    .find(|m| m.path.ends_with(".previous"))
+                    .unwrap();
+                assert_eq!(fixture.download(&previous.remote_id).unwrap(), b"old");
+                let mutations = fixture.step.load(Ordering::SeqCst);
+                run().unwrap();
+                assert_eq!(fixture.step.load(Ordering::SeqCst), mutations);
+            }
+        }
+    }
+    #[test]
+    fn backup_public_entry_keeps_foreign_target_and_different_pending_source() {
+        for foreign in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let fixture = Arc::new(Fixture::new(2, true));
+            let old = fixture.upload("/target", b"old".to_vec()).unwrap();
+            let source = temp.path().join("source");
+            std::fs::write(&source, b"new").unwrap();
+            let backend = crate::provider::Backend::new(BackupProvider {
+                fixture: fixture.clone(),
+                state: State::new(temp.path().join("journal")).unwrap(),
+            });
+            let run = || {
+                backend.manual_upload_path(
+                    "/target",
+                    &source,
+                    Some(&old.etag),
+                    Arc::new(|_, _| Ok(())),
+                )
+            };
+            assert!(run().is_err());
+            fixture.fail.store(0, Ordering::SeqCst);
+            if foreign {
+                fixture.upload("/target", b"foreign".to_vec()).unwrap();
+            } else {
+                std::fs::write(&source, b"different local generation").unwrap();
+            }
+            let before = fixture.step.load(Ordering::SeqCst);
+            assert!(run().is_err());
+            assert_eq!(fixture.step.load(Ordering::SeqCst), before);
+            for (suffix, bytes) in [
+                (".previous", b"old".as_slice()),
+                (".upload", b"new".as_slice()),
+            ] {
+                let entry = fixture
+                    .list_all()
+                    .unwrap()
+                    .into_iter()
+                    .find(|m| m.path.ends_with(suffix))
+                    .unwrap();
+                assert_eq!(fixture.download(&entry.remote_id).unwrap(), bytes);
+            }
+            if foreign {
+                let target = fixture.get_metadata_by_path("/target").unwrap().unwrap();
+                assert_eq!(fixture.download(&target.remote_id).unwrap(), b"foreign");
+            } else {
+                assert!(fixture.get_metadata_by_path("/target").unwrap().is_none());
+            }
+        }
+    }
+    #[test]
+    fn authoritative_root_refresh_does_not_reconcile_a_startup_display_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = Arc::new(Fixture::new(0, false));
+        fixture.upload("/target", b"current".to_vec()).unwrap();
+        let backend = crate::provider::Backend::new(BackupProvider {
+            fixture,
+            state: State::new(temp.path().join("journal")).unwrap(),
+        });
+        let entries = backend.directory_metadata("/").unwrap();
+        assert!(entries.iter().any(|m| m.path == "/target"));
+        assert!(entries.iter().all(|m| m.path != "/old-display"));
+    }
+
     #[test]
     fn every_mutation_boundary_recovers_without_overwriting_unknown_content() {
         for step in 1..=3 {
