@@ -31,7 +31,11 @@ Linux 桌面 CI 同时运行 Openbox 和带合成的 Mutter 界面测试。从�
 
 ### 交付记录
 
-[Development PR #92](https://github.com/LumiaBlack51/twodrive/pull/92)。正式制品及本机安装结果待补充。
+[阴影修复 #92](https://github.com/LumiaBlack51/twodrive/pull/92) 及[退出修复 #95](https://github.com/LumiaBlack51/twodrive/pull/95) 已合入 Development。[发布提交 3f2e72a](https://github.com/LumiaBlack51/twodrive/commit/3f2e72a7b4c8386582a2b91877bb712581a55a7a) 的七项工作流均通过。[Development 0.3.4](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.4) 发布前后逐一校验了 16 个附件的名称、大小、状态和 SHA-256。另核对 Windows 便携包、MSIX 标识，以及 dpkg-buildpackage 生成的 Debian 源码、二进制、调试包和构建清单。
+
+正式 Linux 包在独立 Mutter/X11 上从仪表盘和已显示托盘两条路径正常退出，重复打开时，每个检测到面板内容的取样帧也都检测到了外侧浅阴影。Openbox 兼容测试和私有 GNOME Wayland 三次定位也通过。
+
+本机沿用既有用户安装方式覆盖升级。升级前检查两个挂载的活动写入、待同步队列和占用均为零；正常退出后恢复原挂载。全部 63 个运行时文件与正式包逐一匹配，运行中的 GUI、Flutter AOT、引擎及配对程序也已核对；配置、挂载绑定与登录状态保留。已用安装目录内的二进制在独立桌面再次验证阴影及 2 倍缩放的三轮展开、返回仪表盘和收起。未向用户桌面发送模拟输入，未操作云端文件。
 
 ## TD-20261125-04：隔离合成桌面退出时 Flutter 仍有待处理重绘
 
