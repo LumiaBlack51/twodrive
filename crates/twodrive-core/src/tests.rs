@@ -1960,3 +1960,58 @@ fn excluded_replacement_keeps_both_identities_when_it_cannot_transfer_safely() {
         assert!(db.pending_deletes().unwrap().is_empty());
     }
 }
+
+#[test]
+fn shallow_refresh_preserves_local_identity_and_invalidates_changed_cached_content() {
+    let t = TestDatabase::new("shallow-version");
+    let old = MetadataEntry::new_file("snapshot-v1", "/document", 3, 1, "v1");
+    t.db.reconcile_directory_metadata("/", &[old]).unwrap();
+    let cache = t.root.join("cached");
+    fs::write(&cache, b"old").unwrap();
+    t.db.mark_cached("snapshot-v1", &cache).unwrap();
+    let new = MetadataEntry::new_file("snapshot-v2", "/document", 4, 2, "v2");
+    t.db.reconcile_directory_metadata("/", &[new]).unwrap();
+    let current = t.db.get_by_path("/document").unwrap().unwrap();
+    assert_eq!(current.metadata.remote_id, "snapshot-v1");
+    assert_eq!(current.cloud_remote_id.as_deref(), Some("snapshot-v2"));
+    assert_eq!(current.metadata.etag, "v2");
+    assert!(current.cache_path.is_none());
+    assert!(
+        cache.is_file(),
+        "retired content must remain until safe reclamation"
+    );
+}
+#[test]
+fn shallow_refresh_keeps_dirty_subtrees_and_does_not_resurrect_tombstones() {
+    let t = TestDatabase::new("shallow-protected");
+    let folder = MetadataEntry::new_dir("folder", "/folder", 1, "1");
+    let clean = MetadataEntry::new_file("clean", "/clean", 3, 1, "1");
+    let deleted = MetadataEntry::new_file("deleted", "/deleted", 3, 1, "1");
+    t.db.upsert_metadata_batch([&folder, &clean, &deleted])
+        .unwrap();
+    let cache = t.root.join("edit");
+    fs::write(&cache, b"edit").unwrap();
+    t.db.create_local_file("local-upload-edit", "/folder/edit", &cache)
+        .unwrap();
+    let tombstone = t.db.get_by_path("/deleted").unwrap().unwrap();
+    t.db.queue_pending_delete(&tombstone).unwrap();
+    t.db.reconcile_directory_metadata("/", &[deleted]).unwrap();
+    assert!(t.db.get_by_path("/clean").unwrap().is_none());
+    assert!(t.db.get_by_path("/folder").unwrap().is_some());
+    assert!(t.db.get_by_path("/folder/edit").unwrap().is_some());
+    assert_eq!(t.db.pending_deletes().unwrap().len(), 1);
+    assert!(t.db.get_by_path("/deleted").unwrap().is_none());
+}
+#[test]
+fn malformed_shallow_snapshot_does_not_prune_existing_metadata() {
+    let t = TestDatabase::new("shallow-invalid");
+    let good = MetadataEntry::new_file("good", "/good", 3, 1, "1");
+    t.db.upsert_metadata(&good).unwrap();
+    let nested = MetadataEntry::new_file("nested", "/folder/file", 1, 1, "1");
+    assert!(t.db.reconcile_directory_metadata("/", &[nested]).is_err());
+    assert!(
+        t.db.reconcile_directory_metadata("/", &[good.clone(), good])
+            .is_err()
+    );
+    assert!(t.db.get_by_path("/good").unwrap().is_some());
+}

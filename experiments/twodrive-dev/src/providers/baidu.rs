@@ -17,11 +17,11 @@ use twodrive_dev::{
 };
 
 pub fn descriptor() -> Value {
-    json!({"id":"baidu","mount_backend":"readonly_bridge","label":"百度网盘","account_label":"百度账号","icon":"cloud",
+    json!({"id":"baidu","mount_backend":"twodrivefs","label":"百度网盘","account_label":"百度账号","icon":"cloud",
         "identity_fields":["baidu_state","root_path"],"protected_paths":["baidu_state"],
         "network_modes":["system","direct"],"write_recovery_field":"baidu_state","write_policy":"覆盖前核对版本并保留本机恢复副本；云端不提供原子版本覆盖，同时编辑仍可能冲突。","login_action":"configure",
         "help":"使用你自己的百度开放平台应用，在百度官方网页授权。解锁后可手动编辑；可见及可写文件受应用权限和授权根目录限制。AppKey、SecretKey 是应用凭据，无需在此输入百度账号密码。",
-        "capabilities":{"mount":true,"upload":true,"manual_upload":true,"conditional_upload":false,"mkdir":true,"rename":true,"delete":true,"backup":false},
+        "capabilities":{"mount":true,"upload":true,"manual_upload":true,"conditional_upload":false,"mkdir":true,"rename":true,"delete":true,"backup":true,"versioned_backup":true},
         "actions":[{"id":"configure","label":"百度官方网页登录 / 更新授权","input_fields":["baidu_state","root_path"],"credential_fields":["app_key","secret_key"]}],
         "fields":[{"key":"app_key","label":"应用 AppKey / API Key","transient":true,"omit_from_profile":true},
             {"key":"secret_key","label":"应用 SecretKey","secret":true,"transient":true,"omit_from_profile":true},

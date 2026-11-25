@@ -1,6 +1,6 @@
 //! Provider-independent desktop storage contract. Paths select entries; opaque
-//! remote IDs select objects. A provider must advertise conditional writes before
-//! uploads/backups are offered; CloudBackend's legacy defaults do not promise them.
+//! remote IDs select objects. In-place backup updates require conditional writes.
+//! Providers can also save independent versions through the backup-only API.
 use crate::model::{CloudBackend, DeltaResult, MetadataEntry};
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize};
@@ -112,6 +112,22 @@ pub trait Provider: CloudBackend {
         Ok(None)
     }
     fn capabilities(&self) -> Capabilities;
+    fn recoverable_backup(&self) -> bool {
+        false
+    }
+    fn versioned_backup(&self) -> bool {
+        false
+    }
+    /// Publish at a freshly allocated path. The worker never submits an
+    /// existing version path again, including after an uncertain response.
+    fn upload_backup_version(
+        &self,
+        _path: &str,
+        _source: &Path,
+        _progress: Progress,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("此连接不支持保留备份版本")
+    }
     /// The backup journal has already verified the source against its saved
     /// intent digest. Resume only the original owned create-only session;
     /// returning None must not mutate or adopt an existing remote object.
@@ -205,6 +221,7 @@ pub struct Backend {
     inner: Arc<dyn Provider>,
     paused: Option<PathBuf>,
     writable: bool,
+    mount_writes: bool,
     write_guard: Option<(PathBuf, String)>,
     policy: Arc<crate::sync_policy::SyncPolicy>,
 }
@@ -273,9 +290,16 @@ impl Backend {
             inner: Arc::new(provider),
             paused: None,
             writable: true,
+            mount_writes: false,
             write_guard: None,
             policy: Arc::default(),
         }
+    }
+    /// Use provider-specific recovery for writes made through TwoDriveFS.
+    /// This does not advertise atomic conditional writes to other clients.
+    pub fn for_mount(mut self) -> Self {
+        self.mount_writes = self.inner.uses_directory_metadata();
+        self
     }
     pub fn with_pause_file(mut self, path: PathBuf) -> Self {
         self.paused = Some(path);
@@ -329,6 +353,53 @@ impl Backend {
         } else {
             Capabilities::default()
         }
+    }
+    pub fn versioned_backup(&self) -> bool {
+        let caps = self.capabilities();
+        caps.upload && caps.mkdir && self.inner.versioned_backup()
+    }
+    pub fn backup_supported(&self) -> bool {
+        self.backup_replace_supported() || self.versioned_backup()
+    }
+    pub fn backup_replace_supported(&self) -> bool {
+        self.capabilities().backup()
+            || (self.capabilities().upload
+                && self.capabilities().mkdir
+                && self.inner.recoverable_backup())
+    }
+    pub fn upload_backup_path(
+        &self,
+        path: &str,
+        source: &Path,
+        version: Option<&str>,
+        progress: Progress,
+    ) -> anyhow::Result<MetadataEntry> {
+        ensure!(self.backup_replace_supported(), "此连接不支持原路径备份");
+        self.manual_upload_path(path, source, version, progress)
+    }
+    pub fn upload_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        valid_path(path)?;
+        self.check_pause()?;
+        self.check_write()?;
+        ensure!(
+            path != "/" && self.versioned_backup(),
+            "此连接不支持保留备份版本"
+        );
+        let owner = self.clone();
+        self.inner.upload_backup_version(
+            path,
+            source,
+            Arc::new(move |done, total| {
+                owner.check_pause()?;
+                owner.check_write()?;
+                progress(done, total)
+            }),
+        )
     }
     pub fn storage_usage(
         &self,
@@ -628,6 +699,21 @@ pub fn valid_path(path: &str) -> anyhow::Result<()> {
 }
 
 impl CloudBackend for Backend {
+    fn uses_directory_metadata(&self) -> bool {
+        self.inner.uses_directory_metadata()
+    }
+    fn directory_metadata(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+        self.check_pause()?;
+        valid_path(path)?;
+        if path == "/"
+            && let Some((at, entries)) = self.inner.initial_directory_listing()
+            && at.elapsed() < std::time::Duration::from_secs(15)
+        {
+            return Ok(entries);
+        }
+        self.inner.directory_metadata(path)
+    }
+
     fn is_conflict_error(&self, e: &anyhow::Error) -> bool {
         self.inner.is_conflict_error(e)
     }
@@ -710,6 +796,9 @@ impl CloudBackend for Backend {
         version: Option<&str>,
         progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
     ) -> anyhow::Result<MetadataEntry> {
+        if self.mount_writes && !self.capabilities().conditional_upload {
+            return upload_for_mount(self, path, source, id, version, progress);
+        }
         self.check_pause()?;
         ensure!(
             self.capabilities().upload && self.capabilities().conditional_upload,
@@ -742,4 +831,60 @@ impl CloudBackend for Backend {
         self.check_write()?;
         self.inner.delete(id)
     }
+}
+
+/// Bridge the filesystem's borrowed progress callback to provider adapters without
+/// buffering content or allowing callback failures to be ignored.
+fn upload_for_mount(
+    backend: &Backend,
+    path: &str,
+    source: &Path,
+    id: Option<&str>,
+    version: Option<&str>,
+    on_progress: &mut dyn FnMut(u64, u64) -> anyhow::Result<()>,
+) -> anyhow::Result<MetadataEntry> {
+    enum Event {
+        Progress(u64, u64, std::sync::mpsc::SyncSender<Result<(), String>>),
+        Done(anyhow::Result<MetadataEntry>),
+    }
+    let backend = backend.clone();
+    let path = path.to_owned();
+    let source = source.to_path_buf();
+    let id = id.map(str::to_owned);
+    let version = version.map(str::to_owned);
+    let (send, receive) = std::sync::mpsc::sync_channel(0);
+    let worker = std::thread::spawn(move || {
+        let progress_send = send.clone();
+        let progress = Arc::new(move |done, total| {
+            let (ack, result) = std::sync::mpsc::sync_channel(0);
+            progress_send.send(Event::Progress(done, total, ack))?;
+            result.recv()?.map_err(anyhow::Error::msg)
+        });
+        let result = match (id.as_deref(), version.as_deref()) {
+            (Some(id), Some(version)) => {
+                backend.manual_upload_snapshot(&path, &source, id, version, progress)
+            }
+            (None, None) => backend.manual_upload_path(&path, &source, None, progress),
+            _ => anyhow::bail!("incomplete mount upload identity"),
+        };
+        let _ = send.send(Event::Done(result));
+        Ok(())
+    });
+    let result = loop {
+        match receive.recv() {
+            Ok(Event::Progress(done, total, ack)) => {
+                let _ = ack.send(on_progress(done, total).map_err(|e| e.to_string()));
+            }
+            Ok(Event::Done(result)) => break result,
+            Err(_) => {
+                break Err(anyhow::anyhow!(
+                    "mount upload worker stopped; local edit retained"
+                ));
+            }
+        }
+    };
+    worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("mount upload worker panicked"))??;
+    result
 }

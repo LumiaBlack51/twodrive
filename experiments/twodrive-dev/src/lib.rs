@@ -33,4 +33,5 @@ pub mod sync_policy;
 pub mod test_agent;
 pub mod webdav;
 
+mod recoverable_replace;
 pub mod write_recovery;

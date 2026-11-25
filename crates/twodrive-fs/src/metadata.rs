@@ -9,6 +9,9 @@ pub fn sync_metadata<B: CloudBackend>(db: &Database, backend: &B) -> anyhow::Res
 }
 
 pub fn sync_delta_metadata<B: CloudBackend>(db: &Database, backend: &B) -> anyhow::Result<usize> {
+    if backend.uses_directory_metadata() {
+        return Ok(0);
+    }
     let delta = backend.list_delta(db.delta_link()?.as_deref())?;
     for remote_id in &delta.deleted_remote_ids {
         // A delta deletion does not settle an in-flight upload or release open

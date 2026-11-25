@@ -11,10 +11,10 @@ use std::{
 use twodrive_dev::{profile::Profile, provider::Backend, rclone_drive::RcloneDrive, state::State};
 
 pub fn descriptor() -> Value {
-    json!({"id":"icloud","mount_backend":"readonly_bridge","label":"iCloud Drive","account_label":"Apple 账号","icon":"cloud",
+    json!({"id":"icloud","mount_backend":"twodrivefs","label":"iCloud Drive","account_label":"Apple 账号","icon":"cloud",
         "account_key":"name","summary_key":"name","identity_fields":["icloud_state"],"protected_paths":["icloud_state"],
         "network_modes":["system","direct"],"write_recovery_field":"icloud_state","write_policy":"写入前核对版本并保留本机原文件副本；云端不提供原子版本覆盖，同时编辑仍可能冲突。",
-        "capabilities":{"mount":true,"upload":true,"manual_upload":true,"conditional_upload":false,"mkdir":true,"rename":true,"delete":true,"backup":false},
+        "capabilities":{"mount":true,"upload":true,"manual_upload":true,"conditional_upload":false,"mkdir":true,"rename":true,"delete":true,"backup":true,"versioned_backup":true},
         "help":"填写 Apple 账号和密码后点击登录；需要双重认证时会提示输入验证码。支持浏览、下载及解锁后的手动编辑；覆盖前保留本机恢复副本。",
         "login_action":"configure",
         "actions":[{"id":"configure","label":"登录 iCloud / 更新授权","input_fields":["icloud_state"],"credential_fields":["apple_id","password"]}],

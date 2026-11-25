@@ -508,12 +508,47 @@ impl FileContext {
         }
         let path = string(a, "path")?;
         match req.op.as_str() {
-            "list" => Ok(
-                json!({"path":path,"entries":self.backend.list_directory_checked(path, &mut || {
+            "list" => {
+                let database = self
+                    .state
+                    .dir
+                    .join(format!("mount-{}", self.profile.id))
+                    .join("mount.sqlite3");
+                let binding_file = database.parent().unwrap().join("binding.json");
+                let session: Value = self
+                    .state
+                    .read(&format!("session-{}.json", self.profile.id))
+                    .unwrap_or_default();
+                let owner: Value = fs::read(binding_file)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice(&b).ok())
+                    .unwrap_or_default();
+                let db = (self.backend.uses_directory_metadata()
+                    && database.is_file()
+                    && session["binding"].is_string()
+                    && owner["provider"] == session["binding"])
+                    .then(|| Database::new(database));
+                if let Some(db) = &db
+                    && db.has_directory_metadata(path)?
+                {
+                    emit(
+                        out,
+                        json!({"id":req.id,"event":"directory_snapshot","profile":self.profile.id,
+                        "revision":self.profile.revision,"path":path,
+                        "entries":db.list_children(path)?.into_iter().map(|r|metadata(r.metadata)).collect::<Vec<_>>() }),
+                    );
+                }
+                let entries = self.backend.list_directory_checked(path, &mut || {
                     ensure!(!cancel.load(Ordering::Relaxed), "目录刷新已取消");
                     Ok(())
-                })?.into_iter().map(metadata).collect::<Vec<_>>()}),
-            ),
+                })?;
+                if let Some(db) = &db {
+                    db.reconcile_directory_metadata(path, &entries)?;
+                }
+                Ok(
+                    json!({"path":path,"entries":entries.into_iter().map(metadata).collect::<Vec<_>>()}),
+                )
+            }
             "mkdir" => Ok(metadata(self.backend.create_folder(path)?)),
             "rename" => Ok(metadata(self.backend.rename_path(path, string(a, "to")?)?)),
             "delete" => {

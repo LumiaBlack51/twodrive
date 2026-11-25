@@ -2960,3 +2960,172 @@ fn atomic_replacement_without_old_handles_must_not_leak_superseded_cache() {
         "superseded cache has no handles or database reference, but replacement and prune both leave it behind"
     );
 }
+
+#[derive(Clone)]
+struct ShallowBackend {
+    inner: Arc<MockBackend>,
+    listed: Arc<AtomicUsize>,
+    downloads: Arc<AtomicUsize>,
+    slow: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    started: Sender<()>,
+}
+impl CloudBackend for ShallowBackend {
+    fn uses_directory_metadata(&self) -> bool {
+        true
+    }
+    fn directory_metadata(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+        self.listed.fetch_add(1, Ordering::SeqCst);
+        if path.starts_with("/slow-") {
+            let _ = self.started.send(());
+            let (lock, wake) = &*self.slow;
+            let guard = lock.lock().unwrap();
+            let (guard, timeout) = wake
+                .wait_timeout_while(guard, Duration::from_secs(10), |ready| !*ready)
+                .unwrap();
+            anyhow::ensure!(
+                *guard && !timeout.timed_out(),
+                "synthetic directory timed out"
+            );
+        }
+        Ok(self
+            .inner
+            .list_all()?
+            .into_iter()
+            .filter(|m| m.parent_path == path)
+            .collect())
+    }
+    fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
+        anyhow::bail!("recursive metadata must never run")
+    }
+    fn get_metadata(&self, id: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        self.inner.get_metadata(id)
+    }
+    fn get_metadata_by_path(&self, path: &str) -> anyhow::Result<Option<MetadataEntry>> {
+        self.inner.get_metadata_by_path(path)
+    }
+    fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+        self.downloads.fetch_add(1, Ordering::SeqCst);
+        self.inner.download(id)
+    }
+    fn upload(&self, path: &str, bytes: Vec<u8>) -> anyhow::Result<MetadataEntry> {
+        self.inner.upload(path, bytes)
+    }
+    fn create_folder(&self, path: &str) -> anyhow::Result<MetadataEntry> {
+        self.inner.create_folder(path)
+    }
+    fn rename(&self, id: &str, to: &str) -> anyhow::Result<MetadataEntry> {
+        self.inner.rename(id, to)
+    }
+    fn delete(&self, id: &str) -> anyhow::Result<()> {
+        self.inner.delete(id)
+    }
+}
+#[test]
+#[ignore = "requires isolated /dev/fuse, fusermount3 and gio"]
+fn shallow_mount_is_lazy_cache_aware_and_reads_while_metadata_is_stalled() {
+    let root = test_root("shallow-native");
+    let mount = root.join("mount");
+    fs::create_dir_all(&mount).unwrap();
+    let db = Database::new(root.join("db.sqlite3"));
+    db.init().unwrap();
+    let inner = Arc::new(MockBackend::new());
+    let cached = inner
+        .upload("/cached.part.09", b"cached data".to_vec())
+        .unwrap();
+    let cold = inner
+        .upload("/cold.part.09", b"cold data".to_vec())
+        .unwrap();
+    for i in 0..4 {
+        inner.create_folder(&format!("/slow-{i}")).unwrap();
+    }
+    let cache = root.join("cached-content");
+    fs::write(&cache, b"cached data").unwrap();
+    db.upsert_metadata(&cached).unwrap();
+    db.mark_cached(&cached.remote_id, &cache).unwrap();
+    let (started, receive) = mpsc::channel();
+    let backend = ShallowBackend {
+        inner,
+        listed: Arc::default(),
+        downloads: Arc::default(),
+        slow: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+        started,
+    };
+    assert_eq!(sync_delta_metadata(&db, &backend).unwrap(), 0);
+    let filesystem = TwoDriveFs::new(db.clone(), root.join("cache"), backend.clone()).unwrap();
+    let session = fuser::spawn_mount2(filesystem, &mount, &[]).unwrap();
+    let result = Command::new("gio")
+        .args(["list", "-a", "standard::*,access::*"])
+        .arg(&mount)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        backend.downloads.load(Ordering::SeqCst),
+        0,
+        "metadata must use local cached bytes without hydrating cold files"
+    );
+    assert!(
+        db.get_by_path(&cold.path)
+            .unwrap()
+            .unwrap()
+            .cache_path
+            .is_none()
+    );
+    let pending: Vec<_> = (0..4)
+        .map(|i| {
+            let path = mount.join(format!("slow-{i}"));
+            thread::spawn(move || fs::read_dir(path).map(|d| d.count()))
+        })
+        .collect();
+    for _ in 0..4 {
+        receive.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+    let at = Instant::now();
+    assert_eq!(
+        fs::read(mount.join("cached.part.09")).unwrap(),
+        b"cached data"
+    );
+    assert!(
+        at.elapsed() < Duration::from_secs(1),
+        "metadata stalled the dispatcher"
+    );
+    // GIO must still sniff fully local content. ENODATA for all GIO opens would
+    // make this query lose its text/plain MIME type.
+    let info = Command::new("gio")
+        .args(["info", "-a", "standard::content-type"])
+        .arg(mount.join("cached.part.09"))
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    assert!(String::from_utf8_lossy(&info.stdout).contains("text/plain"));
+    assert_eq!(backend.downloads.load(Ordering::SeqCst), 0);
+    let at = Instant::now();
+    assert_eq!(fs::read(mount.join("cold.part.09")).unwrap(), b"cold data");
+    assert!(
+        at.elapsed() < Duration::from_secs(1),
+        "all metadata workers blocked content hydration"
+    );
+    assert_eq!(backend.downloads.load(Ordering::SeqCst), 1);
+    {
+        let (lock, wake) = &*backend.slow;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+    }
+    for worker in pending {
+        worker.join().unwrap().unwrap();
+    }
+    assert_eq!(fs::read(mount.join("cold.part.09")).unwrap(), b"cold data");
+    assert_eq!(backend.downloads.load(Ordering::SeqCst), 1);
+    let unmount = Command::new("fusermount3")
+        .args(["-u", "--"])
+        .arg(&mount)
+        .output()
+        .unwrap();
+    assert!(unmount.status.success());
+    session.join();
+    fs::remove_dir_all(root).unwrap();
+}

@@ -66,7 +66,8 @@ pub fn uses_readonly_bridge(p: &Profile) -> bool {
     descriptor(&p.kind)
         .map(|d| {
             d["capabilities"]["mount"] == true
-                && (d["mount_backend"] == "readonly_bridge" || !editable(p))
+                && (d["mount_backend"] == "readonly_bridge"
+                    || (!editable(p) && d["mount_backend"] != "twodrivefs"))
         })
         .unwrap_or(false)
 }
@@ -191,10 +192,22 @@ pub fn public_profile(p: &Profile) -> Value {
         }
         let mut capabilities = d["capabilities"].clone();
         if !editable(p) {
-            for key in ["upload", "mkdir", "rename", "delete", "backup"] {
+            for key in [
+                "upload",
+                "mkdir",
+                "rename",
+                "delete",
+                "backup",
+                "versioned_backup",
+            ] {
                 capabilities[key] = json!(false);
             }
         }
+        value["backup_strategy"] = json!(if p.option("backup_strategy") == "versioned" {
+            "versioned"
+        } else {
+            "replace"
+        });
         value["capabilities"] = capabilities;
     } else {
         value["provider_label"] = json!(&p.kind);
@@ -416,7 +429,8 @@ mod tests {
         assert_eq!(d["login_action"], "configure");
         assert_eq!(d["capabilities"]["upload"], true);
         assert_eq!(d["capabilities"]["conditional_upload"], false);
-        assert_eq!(d["capabilities"]["backup"], false);
+        assert_eq!(d["capabilities"]["backup"], true);
+        assert_eq!(d["capabilities"]["versioned_backup"], true);
         let dir = tempfile::tempdir().unwrap();
         let state = twodrive_dev::state::State::new(dir.path().join("state")).unwrap();
         let mut p: Profile = serde_json::from_value(json!({"id":"baidu-one","kind":"baidu","network_route":"system","app_key":"synthetic-key","secret_key":"synthetic-secret"})).unwrap();
@@ -452,7 +466,8 @@ mod tests {
             .expect("iCloud must be available through normal provider discovery");
         assert_eq!(d["capabilities"]["upload"], true);
         assert_eq!(d["capabilities"]["conditional_upload"], false);
-        assert_eq!(d["capabilities"]["backup"], false);
+        assert_eq!(d["capabilities"]["backup"], true);
+        assert_eq!(d["capabilities"]["versioned_backup"], true);
         let dir = tempfile::tempdir().unwrap();
         let state = twodrive_dev::state::State::new(dir.path().join("state")).unwrap();
         let mut p = Profile {

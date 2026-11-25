@@ -140,20 +140,55 @@ impl Database {
     }
 
     pub fn upsert_metadata(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
-        self.upsert_metadata_entries([entry], false)
+        self.upsert_metadata_entries([entry], false, None)
     }
 
     pub fn upsert_metadata_batch<'a>(
         &self,
         entries: impl IntoIterator<Item = &'a MetadataEntry>,
     ) -> anyhow::Result<()> {
-        self.upsert_metadata_entries(entries, true)
+        self.upsert_metadata_entries(entries, true, None)
+    }
+
+    pub fn has_directory_metadata(&self, path: &str) -> anyhow::Result<bool> {
+        let conn = self.connect()?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_state WHERE key=?1)",
+            params![format!("directory:{}", normalize_cloud_path(path))],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Commit a complete shallow listing while preserving local work and tombstones.
+    pub fn reconcile_directory_metadata(
+        &self,
+        path: &str,
+        entries: &[MetadataEntry],
+    ) -> anyhow::Result<()> {
+        let path = normalize_cloud_path(path);
+        let mut paths = std::collections::HashSet::new();
+        let mut ids = std::collections::HashSet::new();
+        for entry in entries {
+            anyhow::ensure!(
+                entry.path != path
+                    && parent_cloud_path(&entry.path) == path
+                    && !entry.remote_id.is_empty()
+                    && entry.parent_path == path
+                    && entry.name == cloud_name(&entry.path)
+                    && normalize_cloud_path(&entry.path) == entry.path
+                    && paths.insert(entry.path.clone())
+                    && ids.insert(entry.remote_id.clone()),
+                "invalid or duplicate shallow directory entry"
+            );
+        }
+        self.upsert_metadata_entries(entries, true, Some((&path, &paths)))
     }
 
     fn upsert_metadata_entries<'a>(
         &self,
         entries: impl IntoIterator<Item = &'a MetadataEntry>,
         block_new_pin_inheritance: bool,
+        directory: Option<(&str, &std::collections::HashSet<String>)>,
     ) -> anyhow::Result<()> {
         // Keep identity resolution, local-generation protection and cache
         // invalidation in one writer transaction for both import paths.
@@ -179,8 +214,19 @@ impl Database {
                     params![entry.remote_id],
                     |row| row.get::<_, String>(0),
                 )
-                .optional()?
-                .unwrap_or_else(|| entry.remote_id.clone());
+                .optional()?;
+            let local_id = match local_id {
+                Some(id) => id,
+                None if directory.is_some() => tx
+                    .query_row(
+                        "SELECT remote_id FROM files WHERE path=?1",
+                        params![entry.path],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .unwrap_or_else(|| entry.remote_id.clone()),
+                None => entry.remote_id.clone(),
+            };
             let pending_metadata = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pending_metadata_operations op
                  JOIN files ancestor ON ancestor.remote_id = op.local_id
@@ -202,7 +248,7 @@ impl Database {
                     SELECT 1 FROM files
                     WHERE path = ?1
                       AND remote_id <> ?2
-                      AND state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict')
+                      AND state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict', 'error')
                 )
                 "#,
                 params![entry.path, local_id],
@@ -213,7 +259,7 @@ impl Database {
                 SELECT EXISTS(
                     SELECT 1 FROM files
                     WHERE remote_id = ?1
-                      AND state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict')
+                      AND state IN ('local_only', 'writing', 'dirty', 'uploading', 'conflict', 'error')
                 )
                 "#,
                 params![local_id],
@@ -326,6 +372,42 @@ impl Database {
                         params![path, parent_cloud_path(&path), cloud_name(&path), remote_id],
                     )?;
                 }
+            }
+        }
+        if let Some((parent, present)) = directory {
+            tx.execute("INSERT INTO app_state(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![format!("directory:{parent}"), now_unix().to_string()])?;
+            let children = {
+                let mut stmt =
+                    tx.prepare("SELECT remote_id, path FROM files WHERE parent_path=?1")?;
+                stmt.query_map(params![parent], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+            };
+            for (id, path) in children {
+                if present.contains(&path) {
+                    continue;
+                }
+                // Preserve the whole absent subtree if any local generation or
+                // durable namespace operation still needs it. SQL runs under
+                // the same writer transaction as metadata import.
+                let protected: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM files f WHERE
+                    (f.path=?1 OR substr(f.path,1,length(?1)+1)=?1||'/')
+                    AND (f.state IN ('local_only','writing','dirty','uploading','conflict','error')
+                        OR EXISTS(SELECT 1 FROM pending_metadata_operations op WHERE op.local_id=f.remote_id)))
+                    OR EXISTS(SELECT 1 FROM pending_deletes d WHERE d.path=?1 OR substr(d.path,1,length(?1)+1)=?1||'/')
+                    OR EXISTS(SELECT 1 FROM pending_metadata_operations op JOIN files f ON f.remote_id=op.local_id
+                        WHERE ?1=f.path OR substr(?1,1,length(f.path)+1)=f.path||'/')",params![path],|row|row.get(0))?;
+                if protected {
+                    continue;
+                }
+                tx.execute("INSERT OR IGNORE INTO retired_cache(cache_path) SELECT cache_path FROM files
+                    WHERE (path=?1 OR substr(path,1,length(?1)+1)=?1||'/') AND cache_path IS NOT NULL",params![path])?;
+                tx.execute(
+                    "DELETE FROM files WHERE remote_id=?1 OR substr(path,1,length(?2)+1)=?2||'/'",
+                    params![id, path],
+                )?;
             }
         }
         tx.commit()?;

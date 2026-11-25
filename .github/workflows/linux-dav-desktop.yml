@@ -104,6 +104,8 @@ jobs:
           TWODRIVE_RCLONE_BIN="$PWD/dist/rclone/rclone" python3 scripts/test-desktop-startup.py --native --engine "$PWD/experiments/twodrive-dev/target/release/twodrive-dav-engine" --peer "$PWD/experiments/twodrive-dev/target/release/twodrive-dev"
           TWODRIVE_TEST_RCLONE="$PWD/dist/rclone/rclone" cargo test --manifest-path experiments/twodrive-dev/Cargo.toml --locked --features mount --test bridge_fuse_linux -- --ignored
           TWODRIVE_TEST_RCLONE="$PWD/dist/rclone/rclone" cargo test --manifest-path experiments/twodrive-dev/Cargo.toml --locked --features mount --lib native_statfs_and_gio_return_while_cloud_quota_is_stalled -- --ignored
+      - name: Shallow provider metadata and cache-aware GIO on TwoDriveFS
+        run: cargo test --locked -p twodrive-fs shallow_mount_is_lazy_cache_aware_and_reads_while_metadata_is_stalled -- --ignored --exact filesystem::tests::shallow_mount_is_lazy_cache_aware_and_reads_while_metadata_is_stalled
       - name: Linux locked startup and pending-write recovery through FUSE
         run: python3 scripts/test-linux-locked-mount.py --engine "$PWD/experiments/twodrive-dev/target/release/twodrive-dav-engine" --peer "$PWD/experiments/twodrive-dev/target/release/twodrive-dev" --report linux-locked-mount.json
       - name: Verify bulk pin isolation and automatic retry

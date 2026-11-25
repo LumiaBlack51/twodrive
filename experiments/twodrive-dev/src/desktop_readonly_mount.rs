@@ -330,15 +330,16 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     } else {
         "linux-readonly"
     }))?;
-    #[cfg(target_os = "linux")]
-    let _target = LinuxTarget::prepare(&p.mount_path)?;
     let _lock = cache.run_lock()?;
     let writable = backend.manual_upload_supported();
     let persistent = State::new(account_cache(app, p, &binding).join("vfs"))?;
     let recovery = account_cache(app, p, &binding).join("write-recovery");
-    if writable && dirty_cache(&persistent.dir)? == 0 && recovery.join("observed.json").exists() {
+    let legacy_dirty = dirty_cache(&persistent.dir)?;
+    if writable && legacy_dirty == 0 && recovery.join("observed.json").exists() {
         fs::remove_file(recovery.join("observed.json"))?;
     }
+    #[cfg(target_os = "linux")]
+    let _target = LinuxTarget::prepare(&p.mount_path)?;
     let bridge = if matches!(p.kind.as_str(), "icloud" | "baidu") {
         Bridge::start_indexed(
             backend,
@@ -382,16 +383,7 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     );
     std::io::stdout().flush()?;
     lifecycle("worker-ready");
-    let (send, receive) = mpsc::channel();
-    thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
-            lifecycle("worker-input-line");
-            if line.is_ok_and(|line| line == "unmount") && send.send(()).is_err() {
-                return;
-            }
-        }
-        let _ = send.send(()); // Parent pipe closed: never leave a native mount.
-    });
+    let receive = unmount_requests();
     let mut unmount_requested = false;
     let mut sample = Instant::now() - Duration::from_secs(2);
     let mut last_write_status = (0, false);
@@ -470,6 +462,20 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn unmount_requests() -> mpsc::Receiver<()> {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            lifecycle("worker-input-line");
+            if line.is_ok_and(|line| line == "unmount") && send.send(()).is_err() {
+                return;
+            }
+        }
+        let _ = send.send(()); // Parent pipe closed.
+    });
+    receive
+}
+
 #[cfg(target_os = "linux")]
 static WORKER_TERMINATING: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "linux")]
@@ -536,7 +542,7 @@ fn account_cache(app: &App, p: &Profile, binding: &str) -> PathBuf {
 }
 /// Inspect only our private metadata, including dirty files whose handles have
 /// not closed yet. RC upload queues alone do not include those open editors.
-fn dirty_cache(root: &Path) -> anyhow::Result<u64> {
+pub(super) fn dirty_cache(root: &Path) -> anyhow::Result<u64> {
     let meta = root.join("vfsMeta");
     if !meta.exists() {
         return Ok(0);
@@ -797,5 +803,44 @@ mod tests {
         let options = control.call("options/get", json!({})).unwrap();
         assert_eq!(options["vfs"]["ReadOnly"], true);
         let _ = control.call("core/quit", json!({}));
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn ensure_native_migration(mount: &Path, binding: &str) -> anyhow::Result<()> {
+    let account = twodrive_dev::mount_write::account_cache(mount, binding);
+    ensure!(
+        dirty_cache(&account.join("vfs"))? == 0
+            && dirty_cache(&mount.join("linux-readonly/vfs"))? == 0,
+        "旧挂载缓存仍有未上传内容，请先用原版本完成同步；迁移未开始"
+    );
+    let recovery = twodrive_dev::mount_write::recovery_status(&account.join("write-recovery"))?;
+    ensure!(
+        recovery["files"].as_u64() == Some(0) && recovery["editor_pending"].as_u64() == Some(0),
+        "旧挂载仍有编辑恢复内容，请先恢复；迁移未开始"
+    );
+    Ok(())
+}
+#[cfg(all(test, target_os = "linux"))]
+mod migration_tests {
+    use super::*;
+    #[test]
+    fn migration_refuses_dirty_metadata_and_editor_recovery_without_removing_either() {
+        let root = tempfile::tempdir().unwrap();
+        let mount = root.path();
+        let binding = "fixture-account";
+        let account = twodrive_dev::mount_write::account_cache(mount, binding);
+        fs::create_dir_all(account.join("vfs/vfsMeta/namespace")).unwrap();
+        let dirty = account.join("vfs/vfsMeta/namespace/file");
+        fs::write(&dirty, b"{\"Dirty\":true}").unwrap();
+        assert!(ensure_native_migration(mount, binding).is_err());
+        assert!(dirty.is_file());
+        fs::write(&dirty, b"{\"Dirty\":false}").unwrap();
+        assert!(ensure_native_migration(mount, binding).is_ok());
+        fs::create_dir_all(account.join("write-recovery")).unwrap();
+        let edited = account.join("write-recovery/edit.content");
+        fs::write(&edited, b"unsynchronized").unwrap();
+        assert!(ensure_native_migration(mount, binding).is_err());
+        assert_eq!(fs::read(edited).unwrap(), b"unsynchronized");
     }
 }

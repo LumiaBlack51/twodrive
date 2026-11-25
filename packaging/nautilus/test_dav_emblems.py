@@ -1,6 +1,7 @@
 """Local fixtures only: no mounted file reads, cloud requests or credentials."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -97,6 +98,56 @@ class DavEmblemTests(unittest.TestCase):
             ext.TwoDriveExtension().update_file_info(file_info)
             queued.assert_called_once()
         self.assertEqual(events, [])
+
+    def test_bridge_candidates_accepts_owned_mount_helper_and_official_component(self):
+        runtime = self.root / "runtime"
+        cache = self.root / "account-cache"
+        processes = []
+        for pid, executable, account_cache in (
+            (10, runtime / "rclone", cache),
+            (11, runtime / "rclone-mount", cache),
+            (12, self.root / "other/rclone-mount", cache),
+            (13, runtime / "rclone-mount", self.root / "other-cache"),
+        ):
+            process = self.root / str(pid)
+            process.mkdir()
+            (process / "exe").symlink_to(executable)
+            (process / "environ").write_bytes(f"RCLONE_CACHE_DIR={account_cache}\0".encode())
+            processes.append(process)
+        with patch.object(Path, "iterdir", return_value=processes):
+            self.assertEqual([pid for pid, _ in ext.bridge_candidates(cache)], [10, 11])
+
+    def test_bridge_candidates_find_the_running_engine_after_runtime_moves(self):
+        proc = self.root / "proc"
+        proc.mkdir()
+        run_lock = self.state / "run.lock"
+        run_lock.touch()
+        info = run_lock.stat()
+        device = f"{os.major(info.st_dev):x}:{os.minor(info.st_dev):x}"
+        (proc / "locks").write_text(
+            f"1: FLOCK ADVISORY WRITE 20 {device}:{info.st_ino + 1} 0 EOF\n"
+            f"2: FLOCK ADVISORY WRITE 21 {device}:{info.st_ino} 0 EOF\n"
+        )
+        relocated = self.root / "previous-runtime"
+        cache = self.root / "account-cache"
+        for pid, name in [(20, "other-runtime/twodrive-dav-engine"),
+                          (21, "previous-runtime/twodrive-dav-engine"),
+                          (22, "previous-runtime/rclone-mount"),
+                          (23, "other-runtime/rclone-mount"),
+                          (24, "previous-runtime/other-tool")]:
+            process = proc / str(pid)
+            process.mkdir()
+            (process / "exe").symlink_to(self.root / name)
+            (process / "cmdline").write_bytes(b"engine\0--state\0" + os.fsencode(self.state) + b"\0")
+            (process / "environ").write_bytes(f"RCLONE_CACHE_DIR={cache}\0".encode())
+        with patch.object(ext, "PROC_ROOT", proc):
+            self.assertEqual(ext.running_dav_engine_directory(self.state), relocated)
+            self.assertEqual([pid for pid, _ in ext.bridge_candidates(cache)], [22])
+            # An engine holding a different state's lock must not authorize
+            # the binaries next to it, even when the cache path matches.
+            (proc / "21" / "cmdline").write_bytes(b"engine\0--state\0/unrelated\0")
+            self.assertIsNone(ext.running_dav_engine_directory(self.state))
+            self.assertEqual(list(ext.bridge_candidates(cache)), [])
 
     def test_native_states_and_missing_cache_are_honest(self):
         p = self.profile("onedrive")
