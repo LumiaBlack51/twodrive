@@ -18,6 +18,7 @@ namespace {
 struct Tray {
   FlMethodChannel* channel = nullptr;
   GtkWindow* popup = nullptr;
+  GtkCssProvider* decoration = nullptr;
   FlView* primary = nullptr;
   GtkWindow* dashboard = nullptr;
   FlView* content = nullptr;
@@ -88,6 +89,30 @@ gboolean key_press(GtkWidget*, GdkEventKey* event, gpointer data) {
   dismiss(tray);
   return TRUE;
 }
+void configure_popup_decoration(Tray* tray) {
+  auto* popup = tray->popup;
+  auto* widget = GTK_WIDGET(popup);
+  auto* screen = gtk_widget_get_screen(widget);
+#ifdef GDK_WINDOWING_X11
+  if (GDK_IS_X11_SCREEN(screen) &&
+      (!gdk_screen_is_composited(screen) || !gdk_screen_get_rgba_visual(screen) ||
+       !gdk_x11_screen_supports_net_wm_hint(screen, gdk_atom_intern_static_string("_GTK_FRAME_EXTENTS")))) {
+    gtk_window_set_decorated(popup, FALSE);
+    return;
+  }
+#endif
+  // A hidden custom titlebar opts the popup into GTK client-side decoration.
+  // Its shadow is painted with the content, including the first visible frame.
+  gtk_window_set_titlebar(popup, gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+  gtk_widget_set_name(widget, "twodrive-tray-popup");
+  tray->decoration = gtk_css_provider_new();
+  gtk_css_provider_load_from_data(tray->decoration,
+      "#twodrive-tray-popup.csd decoration, #twodrive-tray-popup.csd decoration:backdrop {"
+      " margin: 0; padding: 0; border: 0; border-radius: 0; transition: none;"
+      " box-shadow: 0 3px 9px rgba(0,0,0,0.22); }", -1, nullptr);
+  gtk_style_context_add_provider_for_screen(screen,
+      GTK_STYLE_PROVIDER(tray->decoration), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
 void reveal_when_ready(Tray* tray) {
   if (tray->placed && tray->frame_ready && gtk_widget_get_mapped(GTK_WIDGET(tray->popup)))
     gtk_widget_set_opacity(GTK_WIDGET(tray->popup), 1.0);
@@ -100,12 +125,14 @@ gboolean position_mapped_panel(gpointer data) {
       // GTK has already requested these bounds before map. Correct the WM only
       // if it placed us elsewhere. Shell and XWayland use different units.
       const auto bounds = tray->anchor.panel();
-      auto* surface = gtk_widget_get_window(GTK_WIDGET(tray->popup));
-      gint x, y;
-      gdk_window_get_origin(surface, &x, &y);
-      if (x != bounds.x || y != bounds.y || gdk_window_get_width(surface) != bounds.width ||
-          gdk_window_get_height(surface) != bounds.height)
-        gdk_window_move_resize(surface, bounds.x, bounds.y, bounds.width, bounds.height);
+      gint x, y, width, height;
+      // GtkWindow coordinates describe the panel itself, excluding its shadow.
+      gtk_window_get_position(tray->popup, &x, &y);
+      gtk_window_get_size(tray->popup, &width, &height);
+      if (x != bounds.x || y != bounds.y)
+        gtk_window_move(tray->popup, bounds.x, bounds.y);
+      if (width != bounds.width || height != bounds.height)
+        gtk_window_resize(tray->popup, bounds.width, bounds.height);
     } else
 #endif
     if (tray->host_anchor) {
@@ -334,6 +361,11 @@ void stop(Tray* tray) {
     if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray disposing detached view");
     g_clear_object(&tray->content);
     if (g_getenv("TWODRIVE_TRAY_TRACE")) g_message("tray detached view released");
+    if (tray->decoration) {
+      gtk_style_context_remove_provider_for_screen(gtk_widget_get_screen(GTK_WIDGET(tray->popup)),
+          GTK_STYLE_PROVIDER(tray->decoration));
+      g_clear_object(&tray->decoration);
+    }
     gtk_widget_destroy(GTK_WIDGET(tray->popup));
     if (cleanup) gdk_gl_context_clear_current();
     tray->popup = nullptr;
@@ -437,7 +469,7 @@ void register_status_tray(FlView* view) {
   gtk_window_set_title(tray->popup, "TwoDrive Tray");
   gtk_window_set_role(tray->popup, "twodrive-tray");
   gtk_window_set_type_hint(tray->popup, GDK_WINDOW_TYPE_HINT_UTILITY);
-  gtk_window_set_decorated(tray->popup, FALSE);
+  configure_popup_decoration(tray);
   gtk_window_set_keep_above(tray->popup, TRUE);
   gtk_window_set_skip_taskbar_hint(tray->popup, TRUE);
   gtk_window_set_skip_pager_hint(tray->popup, TRUE);

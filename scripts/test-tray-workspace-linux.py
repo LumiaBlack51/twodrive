@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise the installed Flutter GUI, Openbox and SNI in a private X11 session."""
+"""Exercise the installed Flutter tray on a private X11 desktop."""
 import argparse
 import errno
 import os
-import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,6 +10,7 @@ import threading
 import time
 
 from PIL import ImageGrab
+from tray_x11_geometry import panel_geometry
 
 
 def output(*args):
@@ -55,12 +55,13 @@ def mock_anchor():
     threading.Thread(target=loop.run, daemon=True).start()
     return calls, loop, bus
 
-def exercise(bundle, engines, home, gnome):
-    wm = subprocess.Popen(["gnome-shell", "--x11", "--sm-disable"] if gnome else ["openbox"])
+def exercise(bundle, engines, home, gnome, mutter):
+    wm_command = ["gnome-shell" if gnome else "mutter", "--x11", "--sm-disable"]
+    wm = subprocess.Popen(wm_command if gnome or mutter else ["openbox"])
     app = None
     calls, loop, anchor_bus = (None, None, None) if gnome else mock_anchor()
     try:
-        wm_name = "GNOME Shell" if gnome else "Openbox"
+        wm_name = "GNOME Shell" if gnome else "Mutter" if mutter else "Openbox"
         until(lambda: wm_name in output("wmctrl", "-m"), "window manager")
         if gnome:
             time.sleep(1)
@@ -101,7 +102,32 @@ def exercise(bundle, engines, home, gnome):
         minimized = lambda: "Iconic" in output("xprop", "-id", primary, "WM_STATE")
         until(minimized, "minimized dashboard")
         time.sleep(0.35)
+        x, y, width, height = panel_geometry(panel)
+        # Capture a strip across the left edge with the panel closed. Once the
+        # Flutter body appears, the same frame must also darken the desktop.
+        strip = (x - 4, y + height // 2, x + 4, y + height // 2 + 8)
+        desktop = ImageGrab.grab(bbox=strip).convert("RGB")
+
+        def check_shadow():
+            if not (gnome or mutter):
+                return
+            assert (width, height) == (390, 570), "decoration changed the content size"
+            visible = 0
+            deadline = time.monotonic() + 2.5
+            while time.monotonic() < deadline:
+                frame = ImageGrab.grab(bbox=strip).convert("RGB")
+                if frame.getpixel((6, 4)) == (250, 251, 254):
+                    visible += 1
+                    inner = sum(sum(frame.getpixel((3, i))) for i in range(8))
+                    background = sum(sum(desktop.getpixel((3, i))) for i in range(8))
+                    assert inner < background, "visible tray lost its edge shadow"
+                time.sleep(0.016)
+            assert visible >= 12, "did not observe enough visible tray frames"
+            prop = output("xprop", "-id", panel, "_GTK_FRAME_EXTENTS")
+            assert "=" in prop and all(int(v) > 0 for v in prop.split("=")[1].split(",")), prop
+
         click_tray()
+        check_shadow()
         until(lambda: "IsViewable" in output("xwininfo", "-id", panel), "tray above minimized dashboard")
         time.sleep(0.4)
         assert minimized(), "opening the tray restored the dashboard"
@@ -109,11 +135,8 @@ def exercise(bundle, engines, home, gnome):
         # secondary view process periodic status updates. Sample the actual GTK
         # presentation, including the text, rather than Flutter layout alone.
         def footer():
-            geometry = output("xwininfo", "-id", panel)
-            def field(label):
-                return int(re.search(label + r":\s+(-?\d+)", geometry).group(1))
-            x = field("Absolute upper-left X") + field("Width") // 2
-            bottom = field("Absolute upper-left Y") + field("Height")
+            left, top, width, height = panel_geometry(panel)
+            x, bottom = left + width // 2, top + height
             bounds = (x - 52, bottom - 26, x + 52, bottom - 4)
             image = ImageGrab.grab(bbox=bounds).convert("RGB")
             return bounds, image
@@ -133,20 +156,29 @@ def exercise(bundle, engines, home, gnome):
         assert minimized(), "dismissing the tray restored the dashboard"
         time.sleep(0.35)
         click_tray()
+        check_shadow()
         until(lambda: "IsViewable" in output("xwininfo", "-id", panel), "tray reopened")
         time.sleep(0.6)
         # Open the settings menu and choose its first item, Dashboard.
-        output("xdotool", "mousemove", "--window", panel, "360", "38", "click", "1")
+        output("xdotool", "mousemove", str(x + 360), str(y + 38), "click", "1")
         time.sleep(0.25)
         output("xdotool", "key", "Down", "Return")
         until(lambda: "Normal" in output("xprop", "-id", primary, "WM_STATE"), "explicit dashboard action")
         assert "IsUnMapped" in output("xwininfo", "-id", panel)
+        if mutter:
+            # The compositor fixture covers both shadow reveals and dismissal.
+            # Quit from the restored dashboard. The workspace regression below
+            # separately exercises Quit with a live secondary Flutter view.
+            output("xdotool", "key", "ctrl+q")
+            assert app.wait(timeout=15) == 0, "dashboard Quit failed"
+            print("Tray shadow stayed visible across opens on composited X11.")
+            return
         time.sleep(0.35)
         click_tray()
         until(lambda: "IsViewable" in output("xwininfo", "-id", panel), "tray before Quit")
         # The disconnected fixture offers Dashboard and Quit in the tray menu.
         time.sleep(0.4)
-        output("xdotool", "mousemove", "--window", panel, "360", "38", "click", "1")
+        output("xdotool", "mousemove", str(x + 360), str(y + 38), "click", "1")
         time.sleep(0.25)
         output("xdotool", "key", "Down", "Down", "Return")
         assert app.wait(timeout=15) == 0, "Quit must cleanly exit with the tray mapped"
@@ -170,7 +202,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--engines", type=Path)
-    parser.add_argument("--gnome", action="store_true", help="use GNOME Shell X11 in the private display")
+    manager = parser.add_mutually_exclusive_group()
+    manager.add_argument("--mutter", action="store_true", help="exercise GTK shadows under composited X11")
+    manager.add_argument("--gnome", action="store_true", help="use GNOME Shell X11 in the private display")
     parser.add_argument("--private-session", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     bundle = args.bundle.resolve()
@@ -180,7 +214,7 @@ if __name__ == "__main__":
         home = Path.home()
         if home.parent != Path(tempfile.gettempdir()) or not home.name.startswith("twodrive-tray-test-") or not (home / "fixture").is_file():
             raise SystemExit("Use the outer test entry point to create an isolated desktop")
-        exercise(bundle, engines, home, args.gnome)
+        exercise(bundle, engines, home, args.gnome, args.mutter)
     else:
         fixture = tempfile.TemporaryDirectory(prefix="twodrive-tray-test-")
         directory = fixture.name
@@ -199,7 +233,7 @@ if __name__ == "__main__":
                 (home / "Desktop").mkdir()
             subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x1024x24", "dbus-run-session",
                             "--", "python3", __file__, str(bundle), "--engines", str(engines),
-                            "--private-session", *(["--gnome"] if args.gnome else [])], env=env, check=True)
+                            "--private-session", *(["--gnome"] if args.gnome else ["--mutter"] if args.mutter else [])], env=env, check=True)
 
         finally:
             # Private GNOME services may finish disposing their XDG files just
