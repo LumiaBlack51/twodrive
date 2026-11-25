@@ -1965,12 +1965,14 @@ fn excluded_replacement_keeps_both_identities_when_it_cannot_transfer_safely() {
 fn shallow_refresh_preserves_local_identity_and_invalidates_changed_cached_content() {
     let t = TestDatabase::new("shallow-version");
     let old = MetadataEntry::new_file("snapshot-v1", "/document", 3, 1, "v1");
-    t.db.reconcile_directory_metadata("/", &[old]).unwrap();
+    t.db.reconcile_directory_metadata("/", &[old], t.db.begin_directory_refresh("/").unwrap())
+        .unwrap();
     let cache = t.root.join("cached");
     fs::write(&cache, b"old").unwrap();
     t.db.mark_cached("snapshot-v1", &cache).unwrap();
     let new = MetadataEntry::new_file("snapshot-v2", "/document", 4, 2, "v2");
-    t.db.reconcile_directory_metadata("/", &[new]).unwrap();
+    t.db.reconcile_directory_metadata("/", &[new], t.db.begin_directory_refresh("/").unwrap())
+        .unwrap();
     let current = t.db.get_by_path("/document").unwrap().unwrap();
     assert_eq!(current.metadata.remote_id, "snapshot-v1");
     assert_eq!(current.cloud_remote_id.as_deref(), Some("snapshot-v2"));
@@ -1995,7 +1997,8 @@ fn shallow_refresh_keeps_dirty_subtrees_and_does_not_resurrect_tombstones() {
         .unwrap();
     let tombstone = t.db.get_by_path("/deleted").unwrap().unwrap();
     t.db.queue_pending_delete(&tombstone).unwrap();
-    t.db.reconcile_directory_metadata("/", &[deleted]).unwrap();
+    t.db.reconcile_directory_metadata("/", &[deleted], t.db.begin_directory_refresh("/").unwrap())
+        .unwrap();
     assert!(t.db.get_by_path("/clean").unwrap().is_none());
     assert!(t.db.get_by_path("/folder").unwrap().is_some());
     assert!(t.db.get_by_path("/folder/edit").unwrap().is_some());
@@ -2008,10 +2011,65 @@ fn malformed_shallow_snapshot_does_not_prune_existing_metadata() {
     let good = MetadataEntry::new_file("good", "/good", 3, 1, "1");
     t.db.upsert_metadata(&good).unwrap();
     let nested = MetadataEntry::new_file("nested", "/folder/file", 1, 1, "1");
-    assert!(t.db.reconcile_directory_metadata("/", &[nested]).is_err());
     assert!(
-        t.db.reconcile_directory_metadata("/", &[good.clone(), good])
-            .is_err()
+        t.db.reconcile_directory_metadata(
+            "/",
+            &[nested],
+            t.db.begin_directory_refresh("/").unwrap()
+        )
+        .is_err()
+    );
+    assert!(
+        t.db.reconcile_directory_metadata(
+            "/",
+            &[good.clone(), good],
+            t.db.begin_directory_refresh("/").unwrap()
+        )
+        .is_err()
     );
     assert!(t.db.get_by_path("/good").unwrap().is_some());
+}
+
+#[test]
+fn older_directory_fetch_cannot_overwrite_a_newer_cross_owner_commit() {
+    let t = TestDatabase::new("directory-fetch-order");
+    let older_owner = Database::new(t.root.join("test.sqlite3"));
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let old = std::thread::spawn(move || {
+        let generation = older_owner.begin_directory_refresh("/").unwrap();
+        started_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        let stale = MetadataEntry::new_file("old-snapshot", "/document", 3, 1, "v1");
+        older_owner
+            .reconcile_directory_metadata("/", &[stale], generation)
+            .unwrap()
+    });
+    started_rx.recv().unwrap();
+    let generation = t.db.begin_directory_refresh("/").unwrap();
+    let current = MetadataEntry::new_file("current-snapshot", "/document", 3, 2, "v2");
+    let added = MetadataEntry::new_file("new-child", "/new-child", 2, 2, "v2");
+    assert!(
+        t.db.reconcile_directory_metadata("/", &[current, added], generation)
+            .unwrap()
+    );
+    let cache = t.root.join("cached-current");
+    fs::write(&cache, b"new").unwrap();
+    t.db.mark_cached("current-snapshot", &cache).unwrap();
+    release_tx.send(()).unwrap();
+    assert!(!old.join().unwrap(), "a superseded listing must not commit");
+    let current = t.db.get_by_path("/document").unwrap().unwrap();
+    assert_eq!(current.metadata.etag, "v2");
+    assert_eq!(current.cloud_remote_id.as_deref(), Some("current-snapshot"));
+    assert_eq!(current.cache_path.as_deref(), Some(cache.as_path()));
+    assert!(t.db.get_by_path("/new-child").unwrap().is_some());
+    assert_eq!(fs::read(cache).unwrap(), b"new");
+    // Issuing a newer request that fails is not permission to discard a
+    // successful older response. Other directories have independent ordering.
+    let older = t.db.begin_directory_refresh("/other").unwrap();
+    let _failed_newer = t.db.begin_directory_refresh("/other").unwrap();
+    assert!(
+        t.db.reconcile_directory_metadata("/other", &[], older)
+            .unwrap()
+    );
 }

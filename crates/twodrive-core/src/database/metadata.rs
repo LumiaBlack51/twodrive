@@ -141,6 +141,7 @@ impl Database {
 
     pub fn upsert_metadata(&self, entry: &MetadataEntry) -> anyhow::Result<()> {
         self.upsert_metadata_entries([entry], false, None)
+            .map(|_| ())
     }
 
     pub fn upsert_metadata_batch<'a>(
@@ -148,6 +149,7 @@ impl Database {
         entries: impl IntoIterator<Item = &'a MetadataEntry>,
     ) -> anyhow::Result<()> {
         self.upsert_metadata_entries(entries, true, None)
+            .map(|_| ())
     }
 
     pub fn has_directory_metadata(&self, path: &str) -> anyhow::Result<bool> {
@@ -159,12 +161,41 @@ impl Database {
         )?)
     }
 
+    /// Reserve an ordered fetch generation before starting cloud IO. SQLite,
+    /// rather than an in-process gate, coordinates desktop and FUSE owners.
+    pub fn begin_directory_refresh(&self, path: &str) -> anyhow::Result<i64> {
+        let key = format!("directory-request:{}", normalize_cloud_path(path));
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT value FROM app_state WHERE key=?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let generation = previous
+            .map(|v| v.parse::<i64>())
+            .transpose()?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("directory generation exhausted"))?;
+        tx.execute(
+            "INSERT INTO app_state(key,value) VALUES(?1,?2)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, generation.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(generation)
+    }
+
     /// Commit a complete shallow listing while preserving local work and tombstones.
     pub fn reconcile_directory_metadata(
         &self,
         path: &str,
         entries: &[MetadataEntry],
-    ) -> anyhow::Result<()> {
+        generation: i64,
+    ) -> anyhow::Result<bool> {
         let path = normalize_cloud_path(path);
         let mut paths = std::collections::HashSet::new();
         let mut ids = std::collections::HashSet::new();
@@ -181,15 +212,15 @@ impl Database {
                 "invalid or duplicate shallow directory entry"
             );
         }
-        self.upsert_metadata_entries(entries, true, Some((&path, &paths)))
+        self.upsert_metadata_entries(entries, true, Some((&path, &paths, generation)))
     }
 
     fn upsert_metadata_entries<'a>(
         &self,
         entries: impl IntoIterator<Item = &'a MetadataEntry>,
         block_new_pin_inheritance: bool,
-        directory: Option<(&str, &std::collections::HashSet<String>)>,
-    ) -> anyhow::Result<()> {
+        directory: Option<(&str, &std::collections::HashSet<String>, i64)>,
+    ) -> anyhow::Result<bool> {
         // Keep identity resolution, local-generation protection and cache
         // invalidation in one writer transaction for both import paths.
         let _writer = self
@@ -198,6 +229,24 @@ impl Database {
             .map_err(|_| anyhow::anyhow!("metadata write lock is poisoned"))?;
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some((parent, _, generation)) = directory {
+            anyhow::ensure!(generation > 0, "invalid directory generation");
+            let committed: Option<String> = tx
+                .query_row(
+                    "SELECT value FROM app_state WHERE key=?1",
+                    params![format!("directory-committed:{parent}")],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if committed
+                .map(|v| v.parse::<i64>())
+                .transpose()?
+                .unwrap_or(0)
+                >= generation
+            {
+                return Ok(false);
+            }
+        }
         for entry in entries {
             let pending_delete = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pending_deletes WHERE remote_id = ?1 OR cloud_remote_id = ?1 OR path = ?2 OR upload_path = ?2 OR uploaded_path = ?2)",
@@ -374,9 +423,11 @@ impl Database {
                 }
             }
         }
-        if let Some((parent, present)) = directory {
+        if let Some((parent, present, generation)) = directory {
             tx.execute("INSERT INTO app_state(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 params![format!("directory:{parent}"), now_unix().to_string()])?;
+            tx.execute("INSERT INTO app_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![format!("directory-committed:{parent}"),generation.to_string()])?;
             let children = {
                 let mut stmt =
                     tx.prepare("SELECT remote_id, path FROM files WHERE parent_path=?1")?;
@@ -411,7 +462,8 @@ impl Database {
             }
         }
         tx.commit()?;
-        self.recompute_pin_inheritance()
+        self.recompute_pin_inheritance()?;
+        Ok(true)
     }
 
     pub fn bind_cloud_identity(

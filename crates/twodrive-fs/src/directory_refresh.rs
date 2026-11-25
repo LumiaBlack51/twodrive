@@ -52,8 +52,14 @@ impl<B: CloudBackend> DirectoryRefresh<B> {
         if self.fresh(path) {
             return Ok(());
         }
+        let generation = self.db.begin_directory_refresh(path)?;
         let entries = self.backend.directory_metadata(path)?;
-        self.db.reconcile_directory_metadata(path, &entries)?;
+        if !self
+            .db
+            .reconcile_directory_metadata(path, &entries, generation)?
+        {
+            return Ok(());
+        }
         let mut refreshed = self.refreshed.lock().unwrap();
         refreshed.retain(|_, at| at.elapsed() < Duration::from_secs(60));
         if refreshed.len() >= 4096 {

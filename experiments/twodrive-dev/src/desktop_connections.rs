@@ -538,12 +538,15 @@ impl FileContext {
                         "entries":db.list_children(path)?.into_iter().map(|r|metadata(r.metadata)).collect::<Vec<_>>() }),
                     );
                 }
-                let entries = self.backend.list_directory_checked(path, &mut || {
+                let generation = db.as_ref().map(|db| db.begin_directory_refresh(path)).transpose()?;
+                let mut entries = self.backend.list_directory_checked(path, &mut || {
                     ensure!(!cancel.load(Ordering::Relaxed), "目录刷新已取消");
                     Ok(())
                 })?;
-                if let Some(db) = &db {
-                    db.reconcile_directory_metadata(path, &entries)?;
+                if let (Some(db), Some(generation)) = (&db, generation)
+                    && !db.reconcile_directory_metadata(path, &entries, generation)?
+                {
+                    entries = db.list_children(path)?.into_iter().map(|r| r.metadata).collect();
                 }
                 Ok(
                     json!({"path":path,"entries":entries.into_iter().map(metadata).collect::<Vec<_>>()}),
