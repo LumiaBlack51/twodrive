@@ -135,7 +135,9 @@ jobs:
       - name: Verify foreground and minimized tray behavior with a window manager
         run: /usr/bin/python3 scripts/test-tray-workspace-linux.py apps/dav/build/linux/x64/release/bundle --engines experiments/twodrive-dev/target/release
       - name: Tray shadow under the X11 compositor
-        run: /usr/bin/python3 scripts/test-tray-workspace-linux.py --mutter apps/dav/build/linux/x64/release/bundle --engines experiments/twodrive-dev/target/release
+        run: |
+          /usr/bin/python3 scripts/test-tray-workspace-linux.py --mutter apps/dav/build/linux/x64/release/bundle --engines experiments/twodrive-dev/target/release
+          /usr/bin/python3 scripts/test-tray-workspace-linux.py --mutter --quit-from-tray apps/dav/build/linux/x64/release/bundle --engines experiments/twodrive-dev/target/release
       - name: Assemble portable directory
         run: |
           cp experiments/twodrive-dev/target/release/twodrive-dev experiments/twodrive-dev/target/release/twodrive-dav-engine experiments/twodrive-dev/target/release/twodrive-provider-login apps/dav/build/linux/x64/release/bundle/

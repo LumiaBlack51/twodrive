@@ -393,8 +393,14 @@ class _WorkspaceState extends State<Workspace>
         ];
       }
       if (!mounted) return;
+      if (trayReady) await _trayWork;
+      if (widget.desktop && Platform.isLinux) {
+        // The approved storage shutdown has finished. Leave GTK dispatch
+        // before releasing either of the shared engine's views.
+        await tray.quitApplication();
+        return;
+      }
       if (trayReady) {
-        await _trayWork;
         await tray.destroy();
         trayReady = false;
       }

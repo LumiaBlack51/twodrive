@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,6 +37,9 @@ class WindowQuitClient extends StorageClient {
 
 void main() {
   final events = <String>[];
+  final nativeExit = Platform.isLinux
+      ? 'tray:quitApplication'
+      : 'window:destroy';
   setUp(() {
     events.clear();
     trayReady = false;
@@ -83,13 +87,13 @@ void main() {
       await tester.pump();
       expect(events.first, 'window:hide');
       expect(events, contains('engine:quit'));
-      expect(events, isNot(contains('window:destroy')));
+      expect(events, isNot(contains(nativeExit)));
       client.acknowledgement.complete({});
       await tester.pump();
-      expect(events, isNot(contains('window:destroy')));
+      expect(events, isNot(contains(nativeExit)));
       await tester.pump(const Duration(seconds: 3));
       await done;
-      expect(events.where((v) => v == 'window:destroy'), hasLength(1));
+      expect(events.where((v) => v == nativeExit), hasLength(1));
       expect(client.quitting, true);
       await tester.pumpWidget(const SizedBox());
       client.dispose();
@@ -108,7 +112,7 @@ void main() {
       await tester.pumpAndSettle();
       await done;
       expect(events, contains('window:show'));
-      expect(events, isNot(contains('window:destroy')));
+      expect(events, isNot(contains(nativeExit)));
       expect(events, isNot(contains('tray:destroy')));
       expect(client.available, true);
       expect(client.connected, true);
@@ -136,8 +140,13 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
     await Future.wait([first, second]);
     expect(events.where((v) => v == 'engine:quit'), hasLength(1));
-    expect(events.where((v) => v == 'tray:destroy'), hasLength(1));
-    expect(events.where((v) => v == 'window:destroy'), hasLength(1));
+    if (Platform.isLinux) {
+      expect(events, isNot(contains('tray:destroy')));
+      expect(events, isNot(contains('window:destroy')));
+    } else {
+      expect(events.where((v) => v == 'tray:destroy'), hasLength(1));
+    }
+    expect(events.where((v) => v == nativeExit), hasLength(1));
     await tester.pumpWidget(const SizedBox());
     client.dispose();
   });
@@ -174,7 +183,7 @@ void main() {
       expect(client.quitArguments, [
         {'mount_confirmation': true},
       ]);
-      expect(events, isNot(contains('window:destroy')));
+      expect(events, isNot(contains(nativeExit)));
 
       await tester.tap(find.text(accept ? '关闭程序并退出' : '取消'));
       await tester.pump(const Duration(seconds: 1));
@@ -189,13 +198,13 @@ void main() {
             ],
           },
         ]);
-        expect(events, contains('window:destroy'));
+        expect(events, contains(nativeExit));
       } else {
         expect(client.quitArguments, [
           {'mount_confirmation': true},
         ]);
         expect(client.available, isTrue);
-        expect(events, isNot(contains('window:destroy')));
+        expect(events, isNot(contains(nativeExit)));
       }
       await tester.pumpWidget(const SizedBox());
       client.dispose();
