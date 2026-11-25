@@ -154,7 +154,8 @@ fn editor_close_and_same_name_reopen_do_not_wait_for_slow_cloud_mutations() {
     let root = tempfile::tempdir().unwrap();
     let mut p = OpaqueProvider::default();
     p.upload_delay = Duration::from_millis(600);
-    p.delete_delay = Duration::from_millis(600);
+    let gate = std::sync::Arc::new(std::sync::Mutex::new(()));
+    p.mutation_gate = Some(gate.clone());
     p.upload("/book.xlsx", b"original workbook".to_vec())
         .unwrap();
     let spool = root.path().join("recovery");
@@ -166,12 +167,11 @@ fn editor_close_and_same_name_reopen_do_not_wait_for_slow_cloud_mutations() {
         .build()
         .unwrap();
     let lock = "/.~lock.book.xlsx%23";
-    let started = Instant::now();
+    let first_upload = gate.lock().unwrap();
     assert_eq!(
         call(&c, &bridge, Method::PUT, lock, "first editor lock").status(),
         201
     );
-    assert!(started.elapsed() < Duration::from_millis(400));
     wait(|| {
         let jobs: serde_json::Value =
             serde_json::from_slice(&std::fs::read(spool.join("editor-locks/queue.json")).unwrap())
@@ -181,7 +181,6 @@ fn editor_close_and_same_name_reopen_do_not_wait_for_slow_cloud_mutations() {
             .iter()
             .any(|j| j["phase"] == "Uploading")
     });
-    let started = Instant::now();
     assert_eq!(
         call(&c, &bridge, Method::GET, lock, "").text().unwrap(),
         "first editor lock"
@@ -197,23 +196,30 @@ fn editor_close_and_same_name_reopen_do_not_wait_for_slow_cloud_mutations() {
         "second editor lock"
     );
     assert!(
-        started.elapsed() < Duration::from_millis(400),
-        "close/read/reopen waited for the cloud"
+        p.get_metadata_by_path("/.~lock.book.xlsx#")
+            .unwrap()
+            .is_none()
     );
-    // The worker removes the first lock before publishing the replacement.
-    // Wait for both operations before resolving and downloading the cloud ID.
+    drop(first_upload);
+    // The first generation may be deleted between a pathname lookup and an
+    // ID-based read. Inspect the replacement only after both jobs have settled.
     wait(|| twodrive_dev::mount_write::recovery_status(&spool).unwrap()["editor_pending"] == 0);
-    let cloud_lock = p
+    let reopened = p
         .get_metadata_by_path("/.~lock.book.xlsx#")
         .unwrap()
-        .expect("the settled queue should leave the second editor lock in the cloud");
+        .unwrap();
     assert_eq!(
-        p.download(&cloud_lock.remote_id).unwrap(),
+        p.download(&reopened.remote_id).unwrap(),
         b"second editor lock"
     );
-    let started = Instant::now();
+    let last_delete = gate.lock().unwrap();
     assert_eq!(call(&c, &bridge, Method::DELETE, lock, "").status(), 204);
-    assert!(started.elapsed() < Duration::from_millis(400));
+    assert!(
+        p.get_metadata_by_path("/.~lock.book.xlsx#")
+            .unwrap()
+            .is_some()
+    );
+    drop(last_delete);
     wait(|| twodrive_dev::mount_write::recovery_status(&spool).unwrap()["editor_pending"] == 0);
     assert!(
         p.get_metadata_by_path("/.~lock.book.xlsx#")

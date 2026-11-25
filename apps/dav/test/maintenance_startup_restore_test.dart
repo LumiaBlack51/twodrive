@@ -3,46 +3,45 @@ import 'package:twodrive_dav/client.dart';
 
 class RestoreClient extends StorageClient {
   RestoreClient() {
+    available = true;
     selected = 'icloud';
     profiles = [
-      for (final id in ['personal', 'icloud', 'baidu']) {'id': id},
+      for (final id in ['personal', 'icloud', 'baidu'])
+        {'id': id, 'revision': id, 'startup_ready': true},
     ];
   }
-  final connectedIds = <String>[];
-  bool rejectPersonal = false;
+  final restored = <String>[];
   @override
-  Future<void> connect([String? id]) async {
-    connectedIds.add(id!);
-    selected = id;
-    error = id == 'personal' && rejectPersonal ? 'Unavailable' : null;
+  Future<Json> request(
+    String op, [
+    Json args = const {},
+    int? requestId,
+  ]) async {
+    expect(op, 'resume');
+    restored.add(args['id'] as String);
+    if (args['id'] == 'personal') throw StateError('Unavailable');
+    return {};
   }
+
+  @override
+  Future<void> refreshStatus() async {}
+  @override
+  Future<void> loadProfiles() async {}
 }
 
 void main() {
   test(
-    'maintenance restart restores known connections once and keeps selected account',
+    'maintenance restart silently resumes only requested profiles, selected last',
     () async {
       final c = RestoreClient();
       await c.restoreConnectionsAtStartup([
+        'icloud',
         'personal',
         'icloud',
-        'baidu',
-        'personal',
         'unknown',
       ]);
-      expect(c.connectedIds, ['personal', 'baidu', 'icloud']);
-      expect(c.selected, 'icloud');
-      expect(c.error, isNull);
-      c.dispose();
-    },
-  );
-  test(
-    'one failed restore does not lose original selection or hide the failure',
-    () async {
-      final c = RestoreClient()..rejectPersonal = true;
-      await c.restoreConnectionsAtStartup(['personal', 'baidu']);
-      expect(c.selected, 'icloud');
-      expect(c.error, contains('部分连接未能恢复'));
+      expect(c.restored, ['personal', 'icloud']);
+      expect(c.connectionErrors, {'personal': 'Unavailable'});
       c.dispose();
     },
   );

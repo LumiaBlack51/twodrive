@@ -630,24 +630,33 @@ impl RemoteFs {
                 self.file.flush()
             }
         }
-        let done = self.0.backend.download_to(
-            &entry.remote_id,
-            &mut Bounded {
-                file: temp.as_file_mut(),
-                remaining: entry.size,
-            },
-            &mut |_| self.check(),
-        )?;
+        let specialized =
+            self.0
+                .backend
+                .download_mount_snapshot(&entry, temp.as_file_mut(), &mut |_| self.check())?;
+        let done = match specialized {
+            Some(done) => done,
+            None => self.0.backend.download_to(
+                &entry.remote_id,
+                &mut Bounded {
+                    file: temp.as_file_mut(),
+                    remaining: entry.size,
+                },
+                &mut |_| self.check(),
+            )?,
+        };
         ensure!(
             done == entry.size && temp.as_file().metadata()?.len() == entry.size,
             "incomplete mount download"
         );
-        let after = self
-            .0
-            .backend
-            .get_metadata_by_path(&entry.path)?
-            .context("file removed during download")?;
-        ensure!(same(&entry, &after), "file changed during download");
+        if specialized.is_none() {
+            let after = self
+                .0
+                .backend
+                .get_metadata_by_path(&entry.path)?
+                .context("file removed during download")?;
+            ensure!(same(&entry, &after), "file changed during download");
+        }
         self.check()?;
         let item = Arc::new(Cached {
             meta: entry,

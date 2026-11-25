@@ -11,7 +11,9 @@ on:
       - 'scripts/*dav-desktop.py'
       - 'scripts/test-desktop-windows-ui.py'
       - 'scripts/test-dav-tray-x11.py'
+      - 'scripts/test-tray-workspace-linux.py'
       - 'packaging/gnome-tray-anchor/**'
+      - 'packaging/icons/**'
       - 'doc/provider-integration-spec.md'
       - 'scripts/install-dav-desktop.py'
       - 'scripts/test_dav_installer.py'
@@ -63,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Native desktop prerequisites
-        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev fuse3 gjs python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev fuse3 xvfb xauth openbox wmctrl xdotool x11-utils python3-pil gjs python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -115,6 +117,8 @@ jobs:
           TWODRIVE_TEST_RCLONE="$PWD/dist/rclone/rclone" cargo test --manifest-path experiments/twodrive-dev/Cargo.toml --locked --features mount --lib native_statfs_and_gio_return_while_cloud_quota_is_stalled -- --ignored
       - name: Linux locked startup and pending-write recovery through FUSE
         run: python3 scripts/test-linux-locked-mount.py --engine "$PWD/experiments/twodrive-dev/target/release/twodrive-dav-engine" --peer "$PWD/experiments/twodrive-dev/target/release/twodrive-dev" --report linux-locked-mount.json
+      - name: Verify bulk pin isolation and automatic retry
+        run: cargo test --manifest-path experiments/twodrive-dev/Cargo.toml --locked --features mount --bin twodrive-dev folder_pin_retry_does_not_block_release_or_unrelated_reads -- --ignored
       - name: Tray positioning regression
         run: |
           clang++ -std=c++17 -Wall -Wextra -Werror apps/dav/linux/runner/tray_geometry_test.cc -o /tmp/tray-geometry-test
@@ -128,11 +132,15 @@ jobs:
           flutter analyze
           flutter test
           flutter build linux --release
+      - name: Verify foreground and minimized tray behavior with a window manager
+        run: /usr/bin/python3 scripts/test-tray-workspace-linux.py apps/dav/build/linux/x64/release/bundle --engines experiments/twodrive-dev/target/release
       - name: Assemble portable directory
         run: |
           cp experiments/twodrive-dev/target/release/twodrive-dev experiments/twodrive-dev/target/release/twodrive-dav-engine experiments/twodrive-dev/target/release/twodrive-provider-login apps/dav/build/linux/x64/release/bundle/
           cp dist/rclone/* apps/dav/build/linux/x64/release/bundle/
           cp -r packaging/gnome-tray-anchor apps/dav/build/linux/x64/release/bundle/
+          cp packaging/nautilus/twodrive_nautilus.py apps/dav/build/linux/x64/release/bundle/twodrive_dav_nautilus.py
+          cp -r packaging/icons/hicolor/scalable/emblems apps/dav/build/linux/x64/release/bundle/
           cp scripts/install-dav-desktop.py apps/dav/build/linux/x64/release/bundle/
           mkdir -p apps/dav/build/linux/x64/release/bundle/docs
           cp doc/provider-integration-spec.md doc/storage-connections-dev.md doc/desktop-sharing-validation.md doc/google-drive-dev.md doc/icloud-drive.md doc/tray-positioning-2026-10-14.md apps/dav/build/linux/x64/release/bundle/docs/

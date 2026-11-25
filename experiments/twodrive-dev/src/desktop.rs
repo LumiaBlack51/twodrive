@@ -52,6 +52,8 @@ mod stale_mount;
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
+    tdlink_server: bool,
+    #[arg(long)]
     state: PathBuf,
     #[arg(long)]
     peer_bin: PathBuf,
@@ -219,7 +221,6 @@ struct App {
     mounted: Option<Process>,
     backup: Option<Process>,
     network: Arc<Diagnostics>,
-    hosting: sharing::Hosting,
 }
 impl App {
     fn saved_session(&self, p: &Profile) -> Option<Value> {
@@ -530,7 +531,14 @@ impl App {
                 network.clone(),
             )?
         } else {
-            providers::connect(&p, &self.args, cancel, network.clone())?
+            let session = self.saved_session(&p);
+            providers::connect(
+                &p,
+                &self.args,
+                cancel,
+                network.clone(),
+                session.as_ref().and_then(|s| s["binding"].as_str()),
+            )?
         };
         connection.backend.set_operation_cancel(cancel.clone());
         let entries = connection.backend.list_directory_checked("/", &mut || {
@@ -568,7 +576,9 @@ impl App {
         {
             return Ok(());
         }
-        backup::reset_report(&self.state, p)?;
+        if !backup::prepare_worker(&self.state, p)? {
+            return Ok(());
+        }
         let mut cmd = Command::new(std::env::current_exe()?);
         cmd.arg("--state")
             .arg(&self.state.dir)
@@ -681,7 +691,6 @@ impl App {
             .as_mut()
             .is_some_and(|p| p.0.try_wait().ok().flatten().is_some());
         let network = self.network.snapshot();
-        let sharing = self.hosting.status(&self.state).unwrap_or_else(|_| json!({"supported":true,"running":false,"error":"共享配置无法读取，请检查私有状态目录"}));
         let mount_support = {
             #[cfg(windows)]
             {
@@ -705,9 +714,9 @@ impl App {
             }
         };
         Ok(
-            json!({"providers":providers::catalog(),"capabilities":self.capabilities(),"route_fallback":self.network.fallback(),"paused":self.state.dir.join("paused").exists(),"backup":backup,"backup_failed":backup_failed,"mount_activity":mount_activity,
-              "version":env!("CARGO_PKG_VERSION"),"sharing":sharing,"local_files":self.native_fixture.capabilities(),
-            "build":{"core_version":twodrive_core::VERSION,"edition":"Windows · Linux 0.2.24 集成版","revision":option_env!("TWODRIVE_BUILD_REVISION").unwrap_or("local")},
+            json!({"providers":providers::catalog(),"capabilities":self.capabilities(),"route_fallback":self.network.fallback(),"component_fallback":self.network.component_fallback(),"system_tunnel_active":self.network.system_tunnel_active(),"paused":self.state.dir.join("paused").exists(),"backup":backup,"backup_failed":backup_failed,"mount_activity":mount_activity,
+              "version":env!("CARGO_PKG_VERSION"),"local_files":self.native_fixture.capabilities(),
+            "build":{"core_version":twodrive_core::VERSION,"edition":"Development","platform":std::env::consts::OS,"revision":option_env!("TWODRIVE_BUILD_REVISION").unwrap_or("local")},
             "sync_policy":twodrive_dev::sync_policy::SyncPolicy::load(&self.state.dir)?,
             "cfapi":self.native_runtime.status(&self.state)?,
             "connected":self.backend.is_some(),"profile":self.connected.as_ref().map(|p|&p.id),
@@ -758,9 +767,10 @@ impl App {
                     .request(&req.op, a, &p, &self.state, &cancel)
             }
             "save_sync_policy" => {
-                let policy: twodrive_dev::sync_policy::SyncPolicy =
+                let mut policy: twodrive_dev::sync_policy::SyncPolicy =
                     serde_json::from_value(a.clone())?;
                 policy.validate()?;
+                policy.exclude_directory_paths = policy.canonical_backup_exclusions();
                 self.state.save("sync-policy.json", &policy)?;
                 Ok(json!({"restart_required":true}))
             }
@@ -769,17 +779,6 @@ impl App {
                 self.native_fixture.request(&req.op, a)
             }
             "local_preflight" => local_files::preflight(a),
-            "share_start" => self.hosting.start(&self.state, &self.args, a, &cancel),
-            "share_stop" => {
-                self.hosting.stop();
-                self.hosting.status(&self.state)
-            }
-            "share_export" => self.hosting.export(
-                &self.state,
-                Path::new(string(a, "output")?),
-                a["replace"] == true,
-            ),
-            "share_revoke" => self.hosting.revoke(&self.state, string(a, "device")?),
             "provider_action" => providers::action(
                 string(a, "kind")?,
                 string(a, "action")?,
@@ -893,7 +892,6 @@ impl App {
             "quit" => {
                 self.native_runtime.stop(&self.state)?;
                 self.disconnect_all()?;
-                self.hosting.stop();
                 Ok(json!({}))
             }
             "status" => self.status(),
@@ -1037,6 +1035,9 @@ pub fn run() -> anyhow::Result<()> {
         );
     }
     let state = State::new(args.state.clone())?;
+    if args.tdlink_server {
+        return sharing::run(&args, &state);
+    }
     let config = if state.dir.join("profiles.json").exists() {
         state.read("profiles.json")?
     } else {
@@ -1052,7 +1053,6 @@ pub fn run() -> anyhow::Result<()> {
         mounted: None,
         backup: None,
         network: Arc::default(),
-        hosting: sharing::Hosting::default(),
         inactive: HashMap::new(),
         jobs: HashMap::new(),
         native_fixture: local_files::NativeFixture::default(),
@@ -1174,7 +1174,13 @@ pub fn run() -> anyhow::Result<()> {
             let quit = req.op == "quit" && result.is_ok();
             let value = match result {
                 Ok(value) => json!({"id":req.id,"ok":true,"result":value}),
-                Err(error) => json!({"id":req.id,"ok":false,"error":error.to_string()}),
+                Err(error) => {
+                    let mut reply = json!({"id":req.id,"ok":false,"error":error.to_string()});
+                    if error.is::<twodrive_dev::google::auth::ReauthorizationRequired>() {
+                        reply["code"] = json!("reauthorize");
+                    }
+                    reply
+                }
             };
             emit(&worker_out, value);
             worker_cancel.lock().unwrap().remove(&req.id);
@@ -1282,6 +1288,7 @@ mod tests {
             .collect();
         let mut app = App {
             args: Args {
+                tdlink_server: false,
                 state: state.dir.clone(),
                 peer_bin: PathBuf::new(),
                 launcher: PathBuf::new(),
@@ -1300,7 +1307,6 @@ mod tests {
             mounted: None,
             backup: None,
             network: Arc::default(),
-            hosting: sharing::Hosting::default(),
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
@@ -1374,6 +1380,7 @@ mod tests {
         let backend = Backend::new(OpaqueProvider::default()).with_write_access(false, None);
         let mut app = App {
             args: Args {
+                tdlink_server: false,
                 state: state.dir.clone(),
                 peer_bin: PathBuf::new(),
                 launcher: PathBuf::new(),
@@ -1392,7 +1399,6 @@ mod tests {
             mounted: None,
             backup: None,
             network: Arc::default(),
-            hosting: sharing::Hosting::default(),
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
@@ -1419,6 +1425,7 @@ mod tests {
         let state = State::new(temp.path().join("private")).unwrap();
         let mut app = App {
             args: Args {
+                tdlink_server: false,
                 state: state.dir.clone(),
                 peer_bin: PathBuf::new(),
                 launcher: PathBuf::new(),
@@ -1437,7 +1444,6 @@ mod tests {
             mounted: None,
             backup: None,
             network: Arc::default(),
-            hosting: sharing::Hosting::default(),
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
@@ -1495,6 +1501,7 @@ mod tests {
         let state = State::new(temp.path().join("private")).unwrap();
         let mut app = App {
             args: Args {
+                tdlink_server: false,
                 state: state.dir.clone(),
                 peer_bin: PathBuf::new(),
                 launcher: PathBuf::new(),
@@ -1513,7 +1520,6 @@ mod tests {
             mounted: None,
             backup: None,
             network: Arc::default(),
-            hosting: sharing::Hosting::default(),
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),
@@ -1614,6 +1620,7 @@ mod tests {
         let state = State::new(temp.path().join("private")).unwrap();
         let mut app = App {
             args: Args {
+                tdlink_server: false,
                 state: state.dir.clone(),
                 peer_bin: PathBuf::new(),
                 launcher: PathBuf::new(),
@@ -1629,7 +1636,6 @@ mod tests {
             mounted: None,
             backup: None,
             network: Arc::default(),
-            hosting: sharing::Hosting::default(),
             inactive: HashMap::new(),
             jobs: HashMap::new(),
             native_fixture: local_files::NativeFixture::default(),

@@ -13,6 +13,88 @@ impl<B: CloudBackend> Filesystem for TwoDriveFs<B> {
         Ok(())
     }
 
+    fn getxattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        name: &OsStr,
+        size: u32,
+        reply: fuser::ReplyXattr,
+    ) {
+        if self.refresh_signal.is_none() || name != "user.twodrive.dav-controls" {
+            reply.error(libc::ENOTSUP);
+        } else if ino != fuser::FUSE_ROOT_ID && self.record_for_ino(ino).is_none() {
+            reply.error(libc::ENOENT);
+        } else if size == 0 {
+            reply.size(1);
+        } else {
+            reply.data(b"1");
+        }
+    }
+
+    fn setxattr(
+        &mut self,
+        req: &Request<'_>,
+        ino: u64,
+        name: &OsStr,
+        value: &[u8],
+        flags: i32,
+        position: u32,
+        reply: ReplyEmpty,
+    ) {
+        let Some(signal) = &self.refresh_signal else {
+            return reply.error(libc::ENOTSUP);
+        };
+        if name != "user.twodrive.dav-controls" {
+            return reply.error(libc::ENOTSUP);
+        }
+        if req.uid() != unsafe { libc::geteuid() } {
+            return reply.error(libc::EACCES);
+        }
+        if flags != 0 || position != 0 {
+            return reply.error(libc::EINVAL);
+        }
+        if ino == fuser::FUSE_ROOT_ID && value == b"sync" {
+            return match signal.try_send(()) {
+                Ok(()) | Err(std::sync::mpsc::TrySendError::Full(())) => reply.ok(),
+                Err(_) => reply.error(libc::EIO),
+            };
+        }
+        let (target, command) = if ino == ROOT_INO {
+            let Some((action, id)) = value
+                .iter()
+                .position(|b| *b == b':')
+                .map(|i| (&value[..i], &value[i + 1..]))
+            else {
+                return reply.error(libc::EINVAL);
+            };
+            let Some(target) = std::str::from_utf8(id)
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+            else {
+                return reply.error(libc::EINVAL);
+            };
+            (target, action)
+        } else {
+            (ino, value)
+        };
+        let Some(record) = self.record_for_ino(target) else {
+            return reply.error(libc::ENOENT);
+        };
+        use crate::cache_controls::Action;
+        let action = match command {
+            b"pin" => Action::Pin,
+            b"unpin" => Action::Unpin,
+            b"release" => Action::Release,
+            _ => return reply.error(libc::EINVAL),
+        };
+        if let Some(controls) = &self.cache_controls {
+            controls.submit(record, action, reply);
+        } else {
+            reply.error(libc::ENOTSUP);
+        }
+    }
+
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
         match filesystem_stats(&self.cache_dir) {
             Ok(stats) => reply.statfs(

@@ -80,12 +80,25 @@ def install(bundle, engine_dir, data, bin_dir, preserve_runtime=False):
         icon = runtime / 'data/flutter_assets/assets/cloud-connected.svg'
     for name in ['twodrive-dav.svg', 'twodrive-dav-minimal.svg']:
         shutil.copy2(icon, icons / name)
+    extension = runtime / 'twodrive_dav_nautilus.py'
+    if extension.is_file():
+        extensions = data / 'nautilus-python/extensions'
+        extensions.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(extension, extensions / extension.name)
+        emblems = data / 'icons/hicolor/scalable/emblems'
+        emblems.mkdir(parents=True, exist_ok=True)
+        for emblem in (runtime / 'emblems').glob('emblem-twodrive-*.svg'):
+            shutil.copy2(emblem, emblems / emblem.name.replace('twodrive-', 'twodrive-dav-', 1))
     applications = data / 'applications'
     applications.mkdir(parents=True, exist_ok=True)
     (applications / 'app.twodrive.twodrive_dav.desktop').write_text(
         '[Desktop Entry]\nType=Application\nName=TwoDrive\nComment=WebDAV files and TwoDrive paired shares\n'
         + 'Exec=' + quote_exec(str(launcher)) + '\nIcon=twodrive-dav-minimal\nTerminal=false\n'
         + 'Categories=Network;FileTransfer;\nStartupWMClass=app.twodrive.twodrive_dav\n')
+    (applications / 'app.twodrive.tdlink.desktop').write_text(
+        '[Desktop Entry]\nType=Application\nName=TDLink Server\n'
+        + 'Exec=' + quote_exec(str(launcher)) + ' --tdlink-server\nIcon=twodrive-dav-minimal\nTerminal=false\n'
+        + 'Categories=Network;FileTransfer;\n')
     # Deliberately do not create or modify XDG_CONFIG_HOME/autostart.
     if previous.exists() and not preserve_runtime:
         shutil.rmtree(previous)

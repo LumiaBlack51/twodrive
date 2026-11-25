@@ -14,4 +14,9 @@ $shortcut.TargetPath = Join-Path $target 'twodrive_dav.exe'
 $shortcut.WorkingDirectory = $target
 $shortcut.IconLocation = "$target\twodrive_dav.exe,0"
 $shortcut.Save()
+$serverShortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'TDLink Server.lnk'))
+$serverShortcut.TargetPath = $shortcut.TargetPath
+$serverShortcut.WorkingDirectory = $target
+$serverShortcut.Arguments = '--tdlink-server'
+$serverShortcut.Save()
 Write-Host 'TwoDrive Development installed. Autostart was not enabled.'

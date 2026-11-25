@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 
 spec = importlib.util.spec_from_file_location('desktop_check', Path(__file__).with_name('test-dav-desktop.py'))
 desktop = importlib.util.module_from_spec(spec)
@@ -23,8 +24,20 @@ def run(args):
             for name in ['host', 'client']:
                 home = root / name
                 home.mkdir()
-                engines.append(desktop.Engine(args.engine, args.peer, home))
+                engines.append(desktop.Engine(args.engine, args.peer, home, tdlink=name == 'host'))
             host, client = engines
+            # Same default state as a running host, exactly as installed.
+            shared_home = root / 'same-state-client'
+            shared_home.mkdir()
+            same = desktop.Engine(args.engine, args.peer, shared_home,
+                                  state_path=root / 'host' / 'client')
+            engines.append(same)
+            assert 'sharing' not in same.call('status')
+            duplicate = subprocess.run([args.engine, '--state', str(root / 'host' / 'client'),
+                                        '--peer-bin', args.peer, '--launcher', args.peer, '--tdlink-server'],
+                                       input='', capture_output=True, encoding='utf-8', timeout=8)
+            assert duplicate.returncode != 0 and 'already running' in duplicate.stderr
+            checks['shared_state_with_distinct_roles_and_exclusive_server_lock'] = True
             settings = dict(name='Disposable shared PC', root=str(shared), writable=True,
                             discoverable=False, network='lan')
             initial = host.call('share_start', settings)
@@ -67,18 +80,9 @@ def run(args):
             client.call('save_profile', dict(id='shared-pc',kind='peer',network_route='system',**options))
             client.call('connect', dict(id='shared-pc'))
             client.call('disconnect')
-            # The same desktop engine can host while using a storage connection.
-            local_file = root / 'local-client.json'
-            host.call('share_export', dict(output=str(local_file)))
-            local_options = host.call('provider_action', dict(kind='peer', action='import', file=str(local_file)))['options']
-            host.call('save_profile', dict(id='local-client', kind='peer', network_route='system', **local_options))
-            host.call('connect', dict(id='local-client'))
-            simultaneous = host.call('status')
-            assert simultaneous['connected'] and simultaneous['sharing']['running']
-            host.call('list', dict(path='/'))
-            host.call('disconnect')
-            assert host.call('status')['sharing']['running']
-            checks['same_engine_disconnect_preserves_hosting'] = True
+            client.call('share_start', settings, failure=True)
+            host.call('profiles', failure=True)
+            checks['client_and_server_roles_are_separate'] = True
             host.call('share_stop')
             assert not host.call('status')['sharing']['running']
             restarted = host.call('share_start', settings)
@@ -96,15 +100,14 @@ def run(args):
             client.call('connect', dict(id='readonly'))
             client.call('upload', dict(path='/denied.txt',source=str(source)), failure=True)
             assert not (shared/'denied.txt').exists()
-            client.call('disconnect')
-            host.call('share_stop')
-            host.call('share_export', dict(output=str(root/'stopped.json')), failure=True)
             checks['changed_permissions_use_new_identity_and_enforce_readonly'] = True
-            host.call('share_start', settings)
+            client.call('list', dict(path='/'))
             host.close()
-            host = desktop.Engine(args.engine, args.peer, root / 'host')
+            client.call('disconnect')
+            host = desktop.Engine(args.engine, args.peer, root / 'host', tdlink=True)
             engines[0] = host
             assert not host.call('status')['sharing']['running']
+            host.call('share_export', dict(output=str(root/'stopped.json')), failure=True)
             # A new start immediately succeeds only if quit released its child/lock.
             host.call('share_start', settings)
             host.call('share_stop')

@@ -224,7 +224,7 @@ fn regex_exclusion_survives_restart_and_removing_rule_restores_upload() {
         sender,
         pending: Arc::new(Mutex::new(HashMap::new())),
     };
-    crate::recovery::enqueue_recovery(&db, &queue).unwrap();
+    crate::recovery::enqueue_recovery(&db, &queue, true).unwrap();
     assert!(receiver.try_recv().is_err());
     let db = Database::new(root.join("test.sqlite3"));
     db.init().unwrap();

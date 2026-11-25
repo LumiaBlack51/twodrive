@@ -1,3 +1,4 @@
+import 'language.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
@@ -57,9 +58,9 @@ class _SharingPageState extends State<SharingPage> {
 
   Future<void> export() async {
     final destination = await getSaveLocation(
-      suggestedName: 'TwoDrive-连接.json',
-      acceptedTypeGroups: const [
-        XTypeGroup(label: 'TwoDrive 连接文件', extensions: ['json']),
+      suggestedName: tr('TwoDrive-连接.json'),
+      acceptedTypeGroups: [
+        XTypeGroup(label: tr('TwoDrive 连接文件'), extensions: ['json']),
       ],
     );
     if (!mounted || destination == null) return;
@@ -69,16 +70,16 @@ class _SharingPageState extends State<SharingPage> {
       final replace = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('替换现有连接文件？'),
-          content: const Text('目标文件会被新的配对邀请替换。'),
+          title: Text(tr('替换现有连接文件？')),
+          content: Text(tr('目标文件会被新的配对邀请替换。')),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
+              child: Text(tr('取消')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('替换'),
+              child: Text(tr('替换')),
             ),
           ],
         ),
@@ -118,7 +119,7 @@ class _SharingPageState extends State<SharingPage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          running ? '正在共享此电脑的文件夹' : '共享此电脑的文件夹',
+                          running ? tr('正在共享此电脑的文件夹') : tr('共享此电脑的文件夹'),
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w600,
@@ -128,14 +129,14 @@ class _SharingPageState extends State<SharingPage> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  const Text('选择一个文件夹，启动共享后导出连接文件，发给另一台电脑即可连接。'),
+                  Text(tr('选择一个文件夹，启动共享后导出连接文件，发给另一台电脑即可连接。')),
                   const SizedBox(height: 20),
                   TextFormField(
                     controller: name,
                     enabled: editable,
-                    decoration: const InputDecoration(labelText: '共享名称'),
+                    decoration: InputDecoration(labelText: tr('共享名称')),
                     validator: (value) => value == null || value.trim().isEmpty
-                        ? '请填写共享名称'
+                        ? tr('请填写共享名称')
                         : null,
                   ),
                   const SizedBox(height: 16),
@@ -143,9 +144,9 @@ class _SharingPageState extends State<SharingPage> {
                     controller: root,
                     readOnly: true,
                     decoration: InputDecoration(
-                      labelText: '共享文件夹',
+                      labelText: tr('共享文件夹'),
                       suffixIcon: IconButton(
-                        tooltip: '选择共享文件夹',
+                        tooltip: tr('选择共享文件夹'),
                         onPressed: editable
                             ? () async {
                                 final folder = await getDirectoryPath();
@@ -158,12 +159,12 @@ class _SharingPageState extends State<SharingPage> {
                       ),
                     ),
                     validator: (value) =>
-                        value == null || value.isEmpty ? '请选择共享文件夹' : null,
+                        value == null || value.isEmpty ? tr('请选择共享文件夹') : null,
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('允许对方修改文件'),
-                    subtitle: const Text('默认只读。开启后允许上传、移动和删除共享文件夹中的文件。'),
+                    title: Text(tr('允许对方修改文件')),
+                    subtitle: Text(tr('默认只读。开启后允许上传、移动和删除共享文件夹中的文件。')),
                     value: writable,
                     onChanged: editable
                         ? (value) => setState(() => writable = value)
@@ -171,12 +172,12 @@ class _SharingPageState extends State<SharingPage> {
                   ),
                   ExpansionTile(
                     tilePadding: EdgeInsets.zero,
-                    title: const Text('共享选项'),
+                    title: Text(tr('共享选项')),
                     children: [
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: const Text('允许局域网发现'),
-                        subtitle: const Text('对方仍需导入连接文件才能访问。'),
+                        title: Text(tr('允许局域网发现')),
+                        subtitle: Text(tr('对方仍需导入连接文件才能访问。')),
                         value: discoverable,
                         onChanged: editable
                             ? (value) => setState(() => discoverable = value)
@@ -184,23 +185,23 @@ class _SharingPageState extends State<SharingPage> {
                       ),
                       DropdownButtonFormField<String>(
                         initialValue: network,
-                        decoration: const InputDecoration(labelText: '网络连接方式'),
-                        items: const [
+                        decoration: InputDecoration(labelText: tr('网络连接方式')),
+                        items: [
                           DropdownMenuItem(
                             value: 'auto',
-                            child: Text('自动选择，优先直连'),
+                            child: Text(tr('自动选择，优先直连')),
                           ),
                           DropdownMenuItem(
                             value: 'direct',
-                            child: Text('仅使用物理网络'),
+                            child: Text(tr('仅使用物理网络')),
                           ),
                           DropdownMenuItem(
                             value: 'system',
-                            child: Text('使用系统路由和代理'),
+                            child: Text(tr('使用系统路由和代理')),
                           ),
                           DropdownMenuItem(
                             value: 'lan',
-                            child: Text('仅局域网（不使用公共中继）'),
+                            child: Text(tr('仅局域网（不使用公共中继）')),
                           ),
                         ],
                         onChanged: editable
@@ -231,13 +232,13 @@ class _SharingPageState extends State<SharingPage> {
                                 }
                               : null,
                           icon: const Icon(Icons.play_arrow),
-                          label: const Text('启动共享'),
+                          label: Text(tr('启动共享')),
                         ),
                       if (running)
                         FilledButton.icon(
                           onPressed: available ? export : null,
                           icon: const Icon(Icons.ios_share),
-                          label: const Text('导出连接文件'),
+                          label: Text(tr('导出连接文件')),
                         ),
                       if (running)
                         OutlinedButton.icon(
@@ -245,22 +246,18 @@ class _SharingPageState extends State<SharingPage> {
                               ? () => c.shareAction('share_stop', {})
                               : null,
                           icon: const Icon(Icons.stop),
-                          label: const Text('停止共享'),
+                          label: Text(tr('停止共享')),
                         ),
                     ],
                   ),
                   const SizedBox(height: 16),
-                  const Text(
-                    '连接文件包含访问邀请，十分钟内有效且仅能首次使用一次。对方连接成功后会记住设备；重新导出会替换尚未使用的旧邀请。',
-                  ),
+                  Text(tr('邀请十分钟内有效，可使用一次。')),
                   const SizedBox(height: 8),
-                  const Text(
-                    '关闭窗口后共享继续在托盘运行；退出应用将停止共享。修改文件夹或读写权限后，会建立新的共享身份，需重新导出连接文件。',
-                  ),
+                  Text(tr('退出 TDLink 将停止共享。')),
                   if (!c.available || c.sharing['supported'] != true)
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.only(top: 12),
-                      child: Text('请等待支持共享功能的本地引擎启动。'),
+                      child: Text(tr('请等待支持共享功能的本地引擎启动。')),
                     ),
                   if (c.sharing['error'] is String)
                     Padding(
@@ -270,7 +267,7 @@ class _SharingPageState extends State<SharingPage> {
                   if (exported != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 12),
-                      child: SelectableText('已导出：$exported'),
+                      child: SelectableText(tr('已导出：{arg0}', [exported])),
                     ),
                 ],
               ),
@@ -281,9 +278,9 @@ class _SharingPageState extends State<SharingPage> {
               color: Colors.white,
               child: Column(
                 children: [
-                  const ListTile(
-                    title: Text('已授权设备'),
-                    subtitle: Text('撤销后，该设备的新文件请求会被拒绝。'),
+                  ListTile(
+                    title: Text(tr('已授权设备')),
+                    subtitle: Text(tr('撤销后，该设备的新文件请求会被拒绝。')),
                   ),
                   for (final peer in peers)
                     ListTile(
@@ -295,18 +292,18 @@ class _SharingPageState extends State<SharingPage> {
                                 final confirmed = await showDialog<bool>(
                                   context: context,
                                   builder: (context) => AlertDialog(
-                                    title: const Text('撤销这台设备的访问？'),
-                                    content: const Text('需要再次导入新的连接文件，才能重新授权。'),
+                                    title: Text(tr('撤销这台设备的访问？')),
+                                    content: Text(tr('需要再次导入新的连接文件，才能重新授权。')),
                                     actions: [
                                       TextButton(
                                         onPressed: () =>
                                             Navigator.pop(context, false),
-                                        child: const Text('取消'),
+                                        child: Text(tr('取消')),
                                       ),
                                       FilledButton(
                                         onPressed: () =>
                                             Navigator.pop(context, true),
-                                        child: const Text('撤销'),
+                                        child: Text(tr('撤销')),
                                       ),
                                     ],
                                   ),
@@ -318,7 +315,7 @@ class _SharingPageState extends State<SharingPage> {
                                 }
                               }
                             : null,
-                        child: const Text('撤销访问'),
+                        child: Text(tr('撤销访问')),
                       ),
                     ),
                 ],

@@ -102,7 +102,7 @@ impl Backend {
             }
         }
         if ips.is_empty() && lookup_failed && self.physical.allow_fallback {
-            self.physical.fallback("DNS");
+            self.physical.fallback("DNS", "physical DNS lookup failed");
             ips.extend(
                 tokio::net::lookup_host((host, 0))
                     .await?
@@ -288,7 +288,9 @@ impl iroh::dns::Resolver for Resolver {
                     }
                 })) as BoxIter<_>),
                 Err(_) if backend.physical.allow_fallback => {
-                    backend.physical.fallback("DNS A");
+                    backend
+                        .physical
+                        .fallback("DNS A", "physical DNS lookup failed");
                     let values = DnsResolver::new()
                         .lookup_ipv4(host, Duration::from_secs(3))
                         .await?
@@ -322,7 +324,9 @@ impl iroh::dns::Resolver for Resolver {
                     }
                 })) as BoxIter<_>),
                 Err(_) if backend.physical.allow_fallback => {
-                    backend.physical.fallback("DNS AAAA");
+                    backend
+                        .physical
+                        .fallback("DNS AAAA", "physical DNS lookup failed");
                     let values = DnsResolver::new()
                         .lookup_ipv6(host, Duration::from_secs(3))
                         .await?
@@ -367,7 +371,9 @@ impl iroh::dns::Resolver for Resolver {
                     }
                 })) as BoxIter<_>),
                 Err(_) if backend.physical.allow_fallback => {
-                    backend.physical.fallback("DNS TXT");
+                    backend
+                        .physical
+                        .fallback("DNS TXT", "physical DNS lookup failed");
                     let values = DnsResolver::new()
                         .lookup_txt(host, Duration::from_secs(3))
                         .await?
@@ -623,9 +629,20 @@ mod tests {
             dns_servers: vec![],
             allow_fallback: false,
         };
-        let udp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let addr = udp.local_addr().unwrap();
-        let tcp = tokio::net::TcpListener::bind(addr).await.unwrap();
+        // Port zero allocates in one protocol's namespace only. Keep both
+        // listeners bound before starting the fixture.
+        let mut attempts = 0;
+        let (tcp, udp, addr) = loop {
+            let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = tcp.local_addr().unwrap();
+            match tokio::net::UdpSocket::bind(addr).await {
+                Ok(udp) => break (tcp, udp, addr),
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempts < 32 => {
+                    attempts += 1;
+                }
+                Err(e) => panic!("could not bind DNS fixture sockets: {e}"),
+            }
+        };
         let mut query = Packet::new_query(42);
         query.questions.push(Question::new(
             Name::new("relay.example").unwrap(),

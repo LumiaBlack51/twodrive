@@ -166,20 +166,31 @@ fn open_browser(url: &Url) -> anyhow::Result<()> {
         .context("无法打开系统浏览器")?;
     Ok(())
 }
+#[derive(Debug, thiserror::Error)]
+#[error("Google 授权已失效，请重新授权")]
+pub struct ReauthorizationRequired;
+
+fn token_error(status: u16, body: &[u8], refreshing: bool) -> anyhow::Error {
+    let error = serde_json::from_slice::<Value>(body).unwrap_or_default();
+    match error["error"].as_str() {
+        Some("invalid_grant") if status == 400 && refreshing => ReauthorizationRequired.into(),
+        Some("invalid_client" | "unauthorized_client") => {
+            anyhow::anyhow!("Google 应用凭据无效，请检查连接设置")
+        }
+        _ => anyhow::anyhow!("Google 令牌请求失败（HTTP {status}）"),
+    }
+}
 fn decode_token(
     response: reqwest::blocking::Response,
     config: &ClientConfig,
     previous: Option<&Tokens>,
 ) -> anyhow::Result<Tokens> {
     let status = response.status();
-    if !status.is_success() {
-        anyhow::bail!(
-            "Google 令牌请求失败（HTTP {}）；请检查应用设置或重新登录",
-            status.as_u16()
-        );
-    }
     let mut bytes = Vec::new();
     response.take(65537).read_to_end(&mut bytes)?;
+    if !status.is_success() {
+        return Err(token_error(status.as_u16(), &bytes, previous.is_some()));
+    }
     ensure!(bytes.len() <= 65536, "Google 令牌响应过大");
     let value: Value =
         serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("无效的 Google 令牌响应"))?;
@@ -220,6 +231,16 @@ pub fn login(
     config: &ClientConfig,
     route: &str,
     cancel: &AtomicBool,
+) -> anyhow::Result<()> {
+    login_checked(state, config, route, cancel, |_| Ok(()))
+}
+
+pub fn login_checked(
+    state: &State,
+    config: &ClientConfig,
+    route: &str,
+    cancel: &AtomicBool,
+    check_identity: impl FnOnce(&str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let _lock = lock(state, "google-auth.lock")?;
     let server = tiny_http::Server::http("127.0.0.1:0")
@@ -281,6 +302,8 @@ pub fn login(
         .send()
         .map_err(|_| anyhow::anyhow!("Google 令牌请求连接失败，请检查网络"))?;
     let tokens = decode_token(response, config, None)?;
+    check_identity(&tokens.access_token)?;
+    ensure!(!cancel.load(Ordering::Relaxed), "Google 登录已取消");
     config.save(state)?;
     tokens.save(state)
 }
@@ -391,5 +414,27 @@ mod tests {
         assert!(Tokens::load(&state, &other).is_err());
         logout(&state).unwrap();
         assert!(!state.dir.join("google-tokens.json").exists());
+    }
+}
+
+#[cfg(test)]
+mod refresh_errors {
+    use super::*;
+    #[test]
+    fn only_a_rejected_refresh_grant_requires_consent() {
+        let body = br#"{"error":"invalid_grant","error_description":"private detail"}"#;
+        assert!(token_error(400, body, true).is::<ReauthorizationRequired>());
+        assert!(!token_error(400, body, false).is::<ReauthorizationRequired>());
+        for body in [
+            br#"{"error":"invalid_client"}"#.as_slice(),
+            b"temporarily unavailable",
+        ] {
+            assert!(!token_error(400, body, true).is::<ReauthorizationRequired>());
+        }
+        assert!(
+            !token_error(400, body, false)
+                .to_string()
+                .contains("private detail")
+        );
     }
 }

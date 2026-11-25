@@ -211,10 +211,8 @@ impl Physical {
         Ok(socket)
     }
 
-    pub(crate) fn fallback(&self, component: &str) {
-        eprintln!(
-            "network: route=system/proxy fallback; component={component}; physical connection failed"
-        );
+    pub(crate) fn fallback(&self, component: &str, reason: &str) {
+        eprintln!("network: route=system/proxy fallback; component={component}; {reason}");
     }
 }
 

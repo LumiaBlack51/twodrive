@@ -1,5 +1,7 @@
 # Development 桌面共享验证 / Desktop sharing validation
 
+0.2.25 将发布端独立为 TDLink Server。旧版的验证记录保留如下；当前入口见 [连接文档](storage-connections-dev.md#development-0225)。
+
 2026-10-15。新增服务端 GUI 位于 Development 桌面的“共享”，客户端入口位于“连接 → 添加连接 → 从 TwoDrive 连接文件添加”。CLI 服务保留；不是额外的独立服务端安装包。后续已随 [Development 0.1.5](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.1.5) 发布，安装验收见[0.1.5 记录](development-0.1.5.md)；下列保留初始实现的验证证据。
 
 ## 实现边界

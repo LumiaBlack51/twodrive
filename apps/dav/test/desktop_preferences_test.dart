@@ -30,6 +30,7 @@ void main() {
       final preferences = DesktopPreferences();
       await preferences.load(file);
       await Future.wait([
+        preferences.setLanguage('en'),
         preferences.setAutoMountOnConnect(false),
         preferences.setRestoreConnectionsOnStartup(false),
       ]);
@@ -37,6 +38,7 @@ void main() {
       await restored.load(file);
       expect(restored.autoMountOnConnect, isFalse);
       expect(restored.restoreConnectionsOnStartup, isFalse);
+      expect(restored.language, 'en');
       await restored.setAutoMountOnConnect(true);
       final again = DesktopPreferences();
       await again.load(file);

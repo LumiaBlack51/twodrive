@@ -224,6 +224,56 @@ impl Hosting {
     }
 }
 
+/// Serve only the TDLink hosting protocol. The client engine has its own lock
+/// and never reads hosting.json or starts a sharing process.
+pub(super) fn run(args: &Args, state: &State) -> anyhow::Result<()> {
+    use super::{Request, string};
+    use std::io::{Read, Write};
+
+    let _lock = State::new(state.dir.join("tdlink-server"))?.run_lock()?;
+    let mut hosting = Hosting::default();
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    loop {
+        let mut line = String::new();
+        if input.by_ref().take(1024 * 1024 + 1).read_line(&mut line)? == 0 {
+            break;
+        }
+        ensure!(line.len() <= 1024 * 1024, "IPC line exceeds limit");
+        let request: Request = serde_json::from_str(&line)?;
+        let a = &request.args;
+        let result = (|| -> anyhow::Result<Value> {
+            match request.op.as_str() {
+                "status" => Ok(json!({"sharing": hosting.status(state)?})),
+                "share_start" => hosting.start(state, args, a, &AtomicBool::new(false)),
+                "share_stop" => {
+                    hosting.stop();
+                    hosting.status(state)
+                }
+                "share_export" => {
+                    hosting.export(state, Path::new(string(a, "output")?), a["replace"] == true)
+                }
+                "share_revoke" => hosting.revoke(state, string(a, "device")?),
+                "quit" => {
+                    hosting.stop();
+                    Ok(json!({}))
+                }
+                _ => anyhow::bail!("unsupported TDLink operation"),
+            }
+        })();
+        let reply = match result {
+            Ok(result) => json!({"id":request.id,"ok":true,"result":result}),
+            Err(error) => json!({"id":request.id,"ok":false,"error":error.to_string()}),
+        };
+        writeln!(output, "{reply}")?;
+        output.flush()?;
+        if request.op == "quit" {
+            break;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

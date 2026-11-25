@@ -32,6 +32,16 @@ def run(args):
                 pass
 
             def do_PROPFIND(self):
+                properties = self.rfile.read(int(self.headers['Content-Length']))
+                if b'quota-used-bytes' in properties:
+                    assert self.headers['Depth'] == '0' and self.path == '/'
+                    used = 19 if account == 'a' else 37
+                    body = (f'<d:multistatus xmlns:d="DAV:"><d:response><d:href>/</d:href>'
+                            f'<d:propstat><d:prop><d:quota-used-bytes>{used}</d:quota-used-bytes>'
+                            '<d:quota-available-bytes>100</d:quota-available-bytes></d:prop>'
+                            '<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>').encode()
+                    self.respond_xml(body)
+                    return
                 if account == 'b' and list_hold.is_set():
                     list_started.set()
                     if not list_release.wait(20):
@@ -43,6 +53,9 @@ def run(args):
                         f'<d:resourcetype/><d:getcontentlength>{len(data)}</d:getcontentlength>'
                         f'<d:getetag>"{account}-version"</d:getetag></d:prop>'
                         '<d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>').encode()
+                self.respond_xml(body)
+
+            def respond_xml(self, body):
                 self.send_response(207)
                 self.send_header('Content-Length', str(len(body)))
                 self.send_header('Content-Type', 'application/xml')
@@ -69,6 +82,11 @@ def run(args):
             engine = desktop.Engine(args.engine, args.peer, root)
             try:
                 revisions = {}
+                # An unconfigured backup must never need the worker's exclusive lock.
+                lock = root / 'client' / 'backup-a' / 'run.lock'
+                engine.call('profiles')
+                lock.parent.mkdir(mode=0o700)
+                lock.mkdir(mode=0o700)
                 for account in payloads:
                     server = ThreadingHTTPServer(('127.0.0.1', 0), handler(account))
                     servers.append(server)
@@ -77,6 +95,10 @@ def run(args):
                                 'url': f'http://127.0.0.1:{server.server_port}/', 'network_route': 'system'})
                     revisions[account] = engine.call('connect', {'id': account})['revision']
                 assert {p['id'] for p in engine.call('status')['connections']} == {'a', 'b'}
+                account_a = next(item for item in engine.call('status')['accounts'] if item['profile'] == 'a')
+                assert account_a['backup']['state'] == 'idle' and not account_a['backup_failed'], account_a['backup']
+                assert not engine.call('status')['overall']['error']
+                report['checks']['no_backup_sources_stays_idle_without_worker'] = True
                 assert all(p['connected'] for p in engine.call('profiles')['profiles'])
                 report['checks']['both_accounts_remain_connected'] = True
 
@@ -111,7 +133,9 @@ def run(args):
                 assert replies[501]['ok'] and replies[501]['result']['retained']
                 assert replies[502]['result']['profile'] == 'b'
                 assert not replies[503]['ok'], 'disconnect must retain running account'
-                assert replies[504]['result']['state'] == 'unsupported'
+                assert replies[504]['result'] == {
+                    'state': 'ready', 'usage': {'scope': 'share', 'used': 19, 'free': 100, 'total': 119}
+                }
                 assert replies[505]['ok']
                 send(506, 'download', file_args('b', output=str(root/'b.txt')))
                 receive({506})
