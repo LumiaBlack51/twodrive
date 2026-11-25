@@ -1,5 +1,11 @@
 # TwoDrive 故障记录
 
+## TD-20261125-DAV-PACKAGE：独立 DAV Debian 开发测试包
+
+- 将 #72 的 DAV 开发测试包按维护者要求从客户端功能中拆出。通过现有 debhelper 与 dpkg-buildpackage、独立构建 profile 生成 twodrive-dav，保留便携 payload；稳定 twodrive 包不改变。
+- 包校验覆盖依赖、原始文件摘要、源码/二进制/调试包及构建清单。说明测试包不安装便携安装器的 Nautilus 徽标资产。
+- 本机 Debian policy 和九项合成包校验回归通过；正式 CI 构建及安装结果以 PR 为准，合成包不代表实机安装。
+
 ## TD-20261125-03：Development 托盘弹窗边缘阴影间歇消失
 
 - 日期及范围：2026-11-25，Linux Development 0.3.3。关联 TD-20261124-03 的页脚及定位和 TD-20261123-09 的次视图退出清理。

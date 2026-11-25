@@ -1,0 +1,14 @@
+bundle/twodrive_dav usr/lib/twodrive-dav
+bundle/twodrive-dav-engine usr/lib/twodrive-dav
+bundle/twodrive-dev usr/lib/twodrive-dav
+bundle/twodrive-provider-login usr/lib/twodrive-dav
+bundle/rclone usr/lib/twodrive-dav
+bundle/rclone-component.json usr/lib/twodrive-dav
+bundle/lib usr/lib/twodrive-dav
+bundle/data usr/lib/twodrive-dav
+dav-assets/twodrive-dav usr/bin
+dav-assets/app.twodrive.twodrive_dav_packaged.desktop usr/share/applications
+dav-assets/twodrive-dav.svg usr/share/icons/hicolor/scalable/apps
+gnome-tray-anchor/metadata.json usr/share/gnome-shell/extensions/twodrive-tray-anchor@twodrive
+gnome-tray-anchor/extension.js usr/share/gnome-shell/extensions/twodrive-tray-anchor@twodrive
+gnome-tray-anchor/geometry.js usr/share/gnome-shell/extensions/twodrive-tray-anchor@twodrive
