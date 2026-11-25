@@ -4,6 +4,8 @@ Requires an already running client and X11 tools. Does not inject global input.
 """
 import argparse
 import ctypes as c,subprocess,time,re,json,ast,os
+from tray_x11_geometry import panel_geometry
+
 x=c.CDLL('libX11.so.6');x.XOpenDisplay.restype=c.c_void_p;d=x.XOpenDisplay(None)
 class Button(c.Structure):
  _fields_=[('type',c.c_int),('serial',c.c_ulong),('send_event',c.c_int),('display',c.c_void_p),('window',c.c_ulong),('root',c.c_ulong),('subwindow',c.c_ulong),('time',c.c_ulong),('x',c.c_int),('y',c.c_int),('x_root',c.c_int),('y_root',c.c_int),('state',c.c_uint),('button',c.c_uint),('same_screen',c.c_int)]
@@ -70,7 +72,9 @@ def state():
   window=next((ident for ident,_,props in owned_windows() if '"twodrive-tray"' in props),None)
   if window is None:return {'Map State':'IsUnMapped'}
  data=subprocess.check_output(['xwininfo','-id',window],text=True)
- return {k:re.search(k+r':\s+(.+)',data).group(1) for k in ['Absolute upper-left X','Absolute upper-left Y','Width','Height','Map State']}
+ result = dict(zip(('Absolute upper-left X', 'Absolute upper-left Y', 'Width', 'Height'), panel_geometry(window)))
+ result['Map State'] = re.search(r'Map State:\s+(.+)', data).group(1)
+ return result
 def click():
  if args.virtual_input:
   assert anchor, 'virtual input must use the actual TwoDrive tray actor'
