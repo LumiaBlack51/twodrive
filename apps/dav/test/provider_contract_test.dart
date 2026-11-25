@@ -367,42 +367,46 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
-  testWidgets(
-    'active relay has its own warning and identifies the share volume',
-    (tester) async {
-      final c = StorageClient()
-        ..selected = 'pc'
-        ..profiles = [
-          {'id': 'pc', 'kind': 'peer', 'name': 'Fixture PC'},
-        ]
-        ..status = {
-          'connected': true,
-          'system_tunnel_active': true,
-          'component_fallback': true,
-        };
-      await tester.pumpWidget(
-        MaterialApp(
-          home: TrayPanel(
-            client: c,
-            onManage: ([int page = 0]) async {},
-            onOpenFolder: () async {},
-            onQuit: () async {},
-          ),
+  testWidgets('active relay keeps the normal tray and share volume', (
+    tester,
+  ) async {
+    final c = StorageClient()
+      ..selected = 'pc'
+      ..profiles = [
+        {'id': 'pc', 'kind': 'peer', 'name': 'Fixture PC'},
+      ]
+      ..status = {
+        'connected': true,
+        'system_tunnel_active': true,
+        'component_fallback': true,
+      };
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TrayPanel(
+          client: c,
+          onManage: ([int page = 0]) async {},
+          onOpenFolder: () async {},
+          onQuit: () async {},
         ),
-      );
-      expect(find.text('部分请求正在使用系统网络'), findsOneWidget);
-      expect(find.text('已连接 · 使用系统／代理兜底'), findsNothing);
-      expect(find.text('共享所在卷'), findsOneWidget);
-      await tester.pumpWidget(const SizedBox());
-      c.dispose();
-    },
-  );
+      ),
+    );
+    expect(c.trayState, 'connected');
+    expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
+    expect(find.text('文件已就绪'), findsOneWidget);
+    expect(find.text('部分请求正在使用系统网络'), findsNothing);
+    expect(find.text('中继或设备发现的 TCP 连接正在使用系统网络。'), findsNothing);
+    expect(find.text('部分辅助网络请求尝试使用系统网络。'), findsNothing);
+    expect(find.text('已连接 · 使用系统／代理兜底'), findsNothing);
+    expect(find.text('共享所在卷'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
   test('warning is connected fallback only; actual errors retain priority', () {
     final c = StorageClient();
     c.status = {'connected': true, 'route_fallback': true, 'paused': true};
     expect(c.trayState, 'warning');
     c.status = {'connected': true, 'system_tunnel_active': true};
-    expect(c.trayState, 'warning');
+    expect(c.trayState, 'connected');
     c.status['system_tunnel_active'] = false;
     expect(c.trayState, 'connected');
     c.status['backup_failed'] = true;

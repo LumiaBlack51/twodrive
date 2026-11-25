@@ -1,4 +1,4 @@
-# TwoDrive Development 0.3.2 — Windows x64
+# TwoDrive Development 0.3.3 — Windows x64
 
 核对 Release 的 SHA256SUMS，解压完整目录后运行 `twodrive_dav.exe`。不要只复制一个 EXE；引擎、DLL 和 `data` 都必须保留。可以使用同目录 `install-desktop-windows.ps1` 安装到当前用户；自启动默认关闭。Development 不采用稳定客户端的登录状态。
 

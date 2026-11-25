@@ -1,3 +1,9 @@
+twodrive (0.2.24+dev0.3.3-1) unstable; urgency=medium
+
+  * Report whole-device route fallback separately from background relay use.
+
+ -- TwoDrive maintainers <maintainers@users.noreply.github.com>  Wed, 25 Nov 2026 18:00:00 +0800
+
 twodrive (0.2.24+dev0.3.2-1) unstable; urgency=medium
 
   * Keep unconfigured backups idle and stabilize the Linux tray footer.

@@ -279,16 +279,11 @@ const _english = <String, String>{
   '退出登录…': 'Sign out…',
   '退出 TwoDrive': 'Quit TwoDrive',
   '刷新状态': 'Refresh status',
-  '部分请求正在使用系统网络': 'Some requests use the system network',
-  '中继或设备发现的 TCP 连接正在使用系统网络。':
-      'A relay or discovery connection is using the system network.',
   '共享所在卷': 'Share volume',
   '容量为共享目录所在文件系统的已用及可用空间。':
       'Used and available space on the volume containing the shared folder.',
   '卷容量 {arg0}': 'Volume total {arg0}',
   '此设备连接已切换到系统网络。': 'This connection switched to the system network.',
-  '部分辅助网络请求尝试使用系统网络。':
-      'Some background network requests tried the system network.',
   '以下设备正在使用系统网络：{arg0}': 'Using the system network: {arg0}',
   '未提供总容量': 'Total capacity not reported',
   '共享空间': 'Share storage',

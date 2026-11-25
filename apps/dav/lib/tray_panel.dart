@@ -28,10 +28,7 @@ class TrayPanel extends StatelessWidget {
     final backup = c.status['backup'] as Map? ?? {};
     final overall = c.status['overall'] as Map?;
     final issues = (overall?['issues'] as List?) ?? [];
-    final endpointFallback = c.proxyFallback;
-    final fallback =
-        endpointFallback ||
-        (c.connected && c.status['system_tunnel_active'] == true);
+    final fallback = c.proxyFallback;
     final otherFallbacks = ((c.status['accounts'] as List?) ?? [])
         .whereType<Map>()
         .where(
@@ -90,7 +87,7 @@ class TrayPanel extends StatelessWidget {
         : issue != null
         ? tr('需要处理')
         : fallback
-        ? tr(endpointFallback ? '已连接 · 使用系统／代理兜底' : '部分请求正在使用系统网络')
+        ? tr('已连接 · 使用系统／代理兜底')
         : c.syncing
         ? tr('正在同步')
         : (backup['folders'] as num? ?? 0) > 0 &&
@@ -356,21 +353,13 @@ class TrayPanel extends StatelessWidget {
                           ],
                         ),
                       ),
-                      if (fallback ||
-                          (c.connected &&
-                              c.status['component_fallback'] == true))
+                      if (fallback)
                         Padding(
-                          padding: EdgeInsets.all(12),
+                          padding: const EdgeInsets.all(12),
                           child: Text(
-                            endpointFallback
-                                ? tr('此设备连接已切换到系统网络。')
-                                : fallback
-                                ? tr('中继或设备发现的 TCP 连接正在使用系统网络。')
-                                : tr('部分辅助网络请求尝试使用系统网络。'),
-                            style: TextStyle(
-                              color: fallback
-                                  ? const Color(0xff985800)
-                                  : Colors.blueGrey,
+                            tr('此设备连接已切换到系统网络。'),
+                            style: const TextStyle(
+                              color: Color(0xff985800),
                               fontSize: 12,
                             ),
                           ),

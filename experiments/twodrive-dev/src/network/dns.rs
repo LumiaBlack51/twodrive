@@ -102,7 +102,7 @@ impl Backend {
             }
         }
         if ips.is_empty() && lookup_failed && self.physical.allow_fallback {
-            self.physical.fallback("DNS");
+            self.physical.fallback("DNS", "physical DNS lookup failed");
             ips.extend(
                 tokio::net::lookup_host((host, 0))
                     .await?
@@ -288,7 +288,9 @@ impl iroh::dns::Resolver for Resolver {
                     }
                 })) as BoxIter<_>),
                 Err(_) if backend.physical.allow_fallback => {
-                    backend.physical.fallback("DNS A");
+                    backend
+                        .physical
+                        .fallback("DNS A", "physical DNS lookup failed");
                     let values = DnsResolver::new()
                         .lookup_ipv4(host, Duration::from_secs(3))
                         .await?
@@ -322,7 +324,9 @@ impl iroh::dns::Resolver for Resolver {
                     }
                 })) as BoxIter<_>),
                 Err(_) if backend.physical.allow_fallback => {
-                    backend.physical.fallback("DNS AAAA");
+                    backend
+                        .physical
+                        .fallback("DNS AAAA", "physical DNS lookup failed");
                     let values = DnsResolver::new()
                         .lookup_ipv6(host, Duration::from_secs(3))
                         .await?
@@ -367,7 +371,9 @@ impl iroh::dns::Resolver for Resolver {
                     }
                 })) as BoxIter<_>),
                 Err(_) if backend.physical.allow_fallback => {
-                    backend.physical.fallback("DNS TXT");
+                    backend
+                        .physical
+                        .fallback("DNS TXT", "physical DNS lookup failed");
                     let values = DnsResolver::new()
                         .lookup_txt(host, Duration::from_secs(3))
                         .await?
