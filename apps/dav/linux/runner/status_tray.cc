@@ -89,12 +89,6 @@ gboolean key_press(GtkWidget*, GdkEventKey* event, gpointer data) {
   dismiss(tray);
   return TRUE;
 }
-// Flutter 3.41 queues redraws with the FlView as unowned idle data. The
-// raster thread can hold its last reference across window teardown. Cancel
-// pending redraws when the view actually dies, including the primary view.
-void discard_view_redraws(gpointer, GObject* retired) {
-  while (g_idle_remove_by_data(retired)) {}
-}
 void configure_popup_decoration(Tray* tray) {
   auto* popup = tray->popup;
   auto* widget = GTK_WIDGET(popup);
@@ -259,7 +253,6 @@ void activate(Tray* tray, gint x, gint y) {
     capture_anchor(tray, x, y);
     if (!tray->content) {
       tray->content = fl_view_new_for_engine(fl_view_get_engine(tray->primary));
-      g_object_weak_ref(G_OBJECT(tray->content), discard_view_redraws, nullptr);
       GdkRGBA background;
       gdk_rgba_parse(&background, "#fafbfe");
       fl_view_set_background_color(tray->content, &background);
@@ -472,7 +465,6 @@ void register_status_tray(FlView* view) {
   tray->dashboard = window;
   g_object_add_weak_pointer(G_OBJECT(window), reinterpret_cast<gpointer*>(&tray->dashboard));
   tray->primary = view;
-  g_object_weak_ref(G_OBJECT(view), discard_view_redraws, nullptr);
   tray->popup = GTK_WINDOW(gtk_window_new(GTK_WINDOW_TOPLEVEL));
   gtk_window_set_title(tray->popup, "TwoDrive Tray");
   gtk_window_set_role(tray->popup, "twodrive-tray");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the installed Flutter GUI, Openbox and SNI in a private X11 session."""
+"""Exercise the installed Flutter tray on a private X11 desktop."""
 import argparse
 import errno
 import os
