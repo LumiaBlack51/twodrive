@@ -6,7 +6,17 @@
 
 - 网络证据：原共享配置为 auto。截图调查期间观察到共享进程两条 TCP 连接经 FlClash 访问合成地址。复查时同时观察到经 Wi-Fi 接口建立的外部 TCP 连接。对发现服务和两个默认中继的只读探测中，系统 DNS 返回合成地址，通过 Wi-Fi 查询两个递归服务器都返回普通地址，三个目标均通过物理 TCP 443 握手。不同时间的采样不能还原截图时的 DNS 响应、物理失败原因或某个文件的路径。
 - 根因和修改：前端将活动辅助隧道升级为设备警告，账号汇总也将该计数与整连接回退作逻辑或。改为只从整连接回退生成路由警告；错误、暂停和传输状态继续按优先级显示。保留辅助诊断，并区分仅有合成目的地址与物理 TCP 不可用。未更改路由选择、系统 DNS、FlClash 或设备配置。
-- 回归与边界：同一控件用例在 0.3.2 返回 warning，修复后为 connected。Flutter 全部 147 项通过，双账号引擎回归覆盖选中及后台设备。真实网络仅作只读观测和握手，未对生产共享发起文件传输。正式制品与安装验证待补充。
+- 回归与边界：同一控件用例在 0.3.2 返回 warning，修复后为 connected。Flutter 全部 147 项通过，双账号引擎回归覆盖选中及后台设备。真实网络仅作只读观测和握手，未对生产共享发起文件传输。发布制品与本机验证见下。
+
+
+### Development 0.3.3 发布验证
+
+[实现 PR #89](https://github.com/LumiaBlack51/twodrive/pull/89) 已合入 dev，调查摘要经 [PR #90](https://github.com/LumiaBlack51/twodrive/pull/90) 合入 main。合并提交 `fa2b58a085a778ad2056c641d94a8bfa7ac59c56` 的七个工作流全部通过。Dot 对实现提交作静态复核；本轮另在本机实跑启用 mount 的 Rust 库及二进制测试（214 项通过，12 项按条件忽略），严格 Clippy 和 Flutter 静态分析通过。
+
+[Development 0.3.3](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.3) 发布前后逐一核验 16 项附件的状态、大小、SHA-256 和标签目标。校验 Linux 和 Windows 便携包、MSIX 版本及 Debian 源码、二进制、调试包与构建清单。使用正式 Linux 包在隔离 X11 桌面注入三种合成状态，后台隧道显示已连接且实际弹窗文字为 Files ready，整连接回退显示警告，同步失败显示错误。正式引擎通过双账号回环 WebDAV 测试。[工作流与制品校验](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.3/verification.json) · [运行时验证](https://github.com/LumiaBlack51/twodrive/releases/download/dev-v0.3.3/runtime-validation.json)
+
+
+本机安装时旧客户端已退出，两处挂载已卸载。确认无活动写入和待处理队列后按原启动器覆盖安装。首次恢复已有 Windows 共享挂载，Google 挂载未恢复；用已有会话独立执行非交互账号检查成功，客户端在空闲时正常退出并重试，两个原挂载点均已恢复。63 个安装文件的摘要逐一匹配正式包，运行中的桌面程序、Flutter AOT、桌面引擎和配对进程均来自该包。核对了配置、挂载绑定和会话，桌面托盘为已连接，未留下回退程序。本次未更新 Windows 共享主机或测试生产文件传输。
 
 ## TD-20261125-01：本机托盘隐藏后台中继和设备发现的网络提示
 
