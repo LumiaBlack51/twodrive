@@ -1,3 +1,9 @@
+twodrive (0.2.24+dev0.3.4-1) unstable; urgency=medium
+
+  * Paint the Linux tray shadow with the popup content.
+
+ -- TwoDrive maintainers <maintainers@users.noreply.github.com>  Wed, 25 Nov 2026 19:50:00 +0800
+
 twodrive (0.2.24+dev0.3.3-1) unstable; urgency=medium
 
   * Report whole-device route fallback separately from background relay use.

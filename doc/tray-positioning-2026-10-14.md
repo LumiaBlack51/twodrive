@@ -2,6 +2,8 @@
 
 当前 `dev` 中，底部任务栏的 TwoDrive 状态面板以图标实际矩形的中心水平对齐，底边距任务栏保留工作区边界 8 个逻辑像素。顶部任务栏向下展开；图标过于靠近屏幕边缘时，仅为防止面板出屏而限位。定位不再跟随鼠标的纵向位置，也不使用偏向一侧的 `x + 20 - width` 公式。
 
+2026-11-25：Linux 托盘在支持客户端装饰阴影的桌面上随内容绘制浅阴影。锚点、390 × 570 逻辑像素的常规内容区及到任务栏的间距均按面板内容计算。在私有 X11 会话中运行 `python3 scripts/test-tray-workspace-linux.py /path/to/bundle --mutter`，可在展开和重开期间比较窗口两侧的桌面与内容像素。
+
 2026-11-23：Linux Development 0.2.26 为托盘创建独立 GTK 窗口。点击图标只打开或收起快捷面板，仪表盘保留原窗口、尺寸和最小化状态。要从托盘恢复仪表盘，选择菜单中的 Dashboard。运行 `python3 scripts/test-tray-workspace-linux.py /path/to/bundle --gnome` 可在临时 X11 桌面复验显隐、主窗口内容、菜单恢复和正常退出。
 
 2026-11-04 更新：为使状态面板隐藏 Dock/任务栏图标，启动器在 DISPLAY 可用时默认使用 X11/XWayland。显式 GDK_BACKEND 仍优先；原生 GTK 3 Wayland 的定位支持不代表其支持隐藏任务栏提示。验证和边界见 [TD-20261103-06](incidents.md#td-20261103-06打开托盘状态小窗口时出现额外-dock-图标)。
