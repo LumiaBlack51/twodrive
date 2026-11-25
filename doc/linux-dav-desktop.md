@@ -46,6 +46,11 @@ bindings installed, opt in to the iCloud GVfs mount by creating the empty
 `icloud-gnome-webdav` file under the desktop state directory (normally
 `~/.local/share/twodrive-dav/state`). Unmount and remount the iCloud connection
 to apply it. Remove that file and remount to return to the regular Linux mount.
+The portable installer registers the DAV Nautilus extension and status emblems.
+A clean installation of the desktop CI test package alone lacks these badges.
+On Windows, the client opens supported downloaded document and media copies
+with an Internet zone marker. It selects other formats in Explorer for inspection.
+
 The mount will need an active GNOME session bus. On Debian-based desktops the
 relevant packages include `gvfs-backends`, `gvfs-fuse` and `python3-gi`.
 

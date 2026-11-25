@@ -58,3 +58,7 @@ release artifacts.
 The packaged menu entry is TwoDrive DAV. It uses the existing DAV account and
 backup state when launched. Package installation adds system files and leaves
 user state, autostart and running mounts alone.
+
+The portable installer registers the DAV Nautilus extension and status emblems.
+The CI test package currently ships the desktop client without those two
+integration assets. A clean installation of that package alone has no DAV badges.

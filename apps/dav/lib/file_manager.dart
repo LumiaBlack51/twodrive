@@ -21,12 +21,51 @@ Future<void> openLocalDirectory(
   await (launch ?? _launchFileManager)(executable, [path]);
 }
 
-Future<void> openLocalFile(String path) async {
-  if (Platform.isWindows) {
-    await _launchFileManager('explorer.exe', [path]);
+Future<void> openLocalFile(
+  String path, {
+  String? platform,
+  Future<void> Function(String, List<String>)? launch,
+}) async {
+  final target = platform ?? Platform.operatingSystem;
+  if (target == 'windows') {
+    // A cloud "view" can name any file. Open common document/media copies
+    // only with their Internet origin retained. Select other files in Explorer.
+    const viewable = {
+      'txt',
+      'pdf',
+      'docx',
+      'xlsx',
+      'pptx',
+      'odt',
+      'ods',
+      'odp',
+      'png',
+      'jpg',
+      'jpeg',
+      'gif',
+      'bmp',
+      'webp',
+      'mp3',
+      'wav',
+      'mp4',
+    };
+    final extension = path.split('.').last.toLowerCase();
+    if (viewable.contains(extension)) {
+      try {
+        await File(
+          '$path:Zone.Identifier',
+        ).writeAsString('[ZoneTransfer]\r\nZoneId=3\r\n', flush: true);
+      } on FileSystemException {
+        await revealLocalFile(path, platform: target, launch: launch);
+        return;
+      }
+      await (launch ?? _launchFileManager)('explorer.exe', [path]);
+    } else {
+      await revealLocalFile(path, platform: target, launch: launch);
+    }
     return;
   }
-  final (executable, args) = switch (Platform.operatingSystem) {
+  final (executable, args) = switch (target) {
     'linux' => ('gio', ['open', path]),
     'macos' => ('open', [path]),
     _ => throw UnsupportedError('Unsupported desktop file opener'),
