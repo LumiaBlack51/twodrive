@@ -32,5 +32,6 @@ class StatusTray {
   });
   Future<void> panel(bool enabled) =>
       channel.invokeMethod('panel', {'enabled': enabled});
+  Future<void> quitApplication() => channel.invokeMethod('quitApplication');
   Future<void> destroy() => channel.invokeMethod('destroy');
 }

@@ -386,8 +386,14 @@ class _WorkspaceState extends State<Workspace>
         if (!await _confirmQuitWithOpenMounts()) return;
       }
       if (!mounted) return;
+      if (trayReady) await _trayWork;
+      if (widget.desktop && Platform.isLinux) {
+        // Both views remain attached until GTK leaves dispatch. The engine joins
+        // its render workers before the method-channel cleanup releases them.
+        await tray.quitApplication();
+        return;
+      }
       if (trayReady) {
-        await _trayWork;
         await tray.destroy();
         trayReady = false;
       }
