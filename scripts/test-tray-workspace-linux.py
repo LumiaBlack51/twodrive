@@ -5,6 +5,7 @@ import errno
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -55,7 +56,7 @@ def mock_anchor():
     threading.Thread(target=loop.run, daemon=True).start()
     return calls, loop, bus
 
-def exercise(bundle, engines, home, gnome, mutter):
+def exercise(bundle, engines, home, gnome, mutter, quit_from_tray):
     wm_command = ["gnome-shell" if gnome else "mutter", "--x11", "--sm-disable"]
     wm = subprocess.Popen(wm_command if gnome or mutter else ["openbox"])
     app = None
@@ -66,11 +67,22 @@ def exercise(bundle, engines, home, gnome, mutter):
         if gnome:
             time.sleep(1)
             output("xdotool", "key", "Escape")
-        app = subprocess.Popen([
-            bundle / "twodrive_dav", "--window-title", "Dashboard fixture",
-            "--engine", engines / "twodrive-dav-engine", "--peer-bin", engines / "twodrive-dev",
-            "--state", home / "state",
-        ])
+        app_log = home / "client.stderr"
+        with app_log.open("w") as log:
+            app = subprocess.Popen([
+                bundle / "twodrive_dav", "--window-title", "Dashboard fixture",
+                "--engine", engines / "twodrive-dav-engine", "--peer-bin", engines / "twodrive-dev",
+                "--state", home / "state",
+            ], stderr=log)
+
+        def assert_clean_exit():
+            code = app.wait(timeout=15)
+            assert code == 0, f"Quit returned {code}"
+            errors = app_log.read_text(errors="replace")
+            for diagnostic in ("invalid unclassed pointer in cast to 'FlView'",
+                               "gtk_widget_queue_draw: assertion", "g_mutex_clear() called",
+                               "Failed to shutdown Flutter engine"):
+                assert diagnostic not in errors, f"Flutter teardown emitted {diagnostic}"
 
         def named(title):
             for row in output("wmctrl", "-lp").splitlines():
@@ -165,12 +177,12 @@ def exercise(bundle, engines, home, gnome, mutter):
         output("xdotool", "key", "Down", "Return")
         until(lambda: "Normal" in output("xprop", "-id", primary, "WM_STATE"), "explicit dashboard action")
         assert "IsUnMapped" in output("xwininfo", "-id", panel)
-        if mutter:
+        if mutter and not quit_from_tray:
             # The compositor fixture covers both shadow reveals and dismissal.
             # Quit from the restored dashboard. The workspace regression below
             # separately exercises Quit with a live secondary Flutter view.
             output("xdotool", "key", "ctrl+q")
-            assert app.wait(timeout=15) == 0, "dashboard Quit failed"
+            assert_clean_exit()
             print("Tray shadow stayed visible across opens on composited X11.")
             return
         time.sleep(0.35)
@@ -181,9 +193,11 @@ def exercise(bundle, engines, home, gnome, mutter):
         output("xdotool", "mousemove", str(x + 360), str(y + 38), "click", "1")
         time.sleep(0.25)
         output("xdotool", "key", "Down", "Down", "Return")
-        assert app.wait(timeout=15) == 0, "Quit must cleanly exit with the tray mapped"
+        assert_clean_exit()
         print("Tray preserved dashboard pixels and minimization; Dashboard explicitly restored it.")
     finally:
+        if app and sys.exc_info()[0]:
+            print(app_log.read_text(errors="replace")[-6000:], file=sys.stderr)
         if loop:
             loop.quit()
             anchor_bus.close_sync(None)
@@ -202,6 +216,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--engines", type=Path)
+    parser.add_argument("--quit-from-tray", action="store_true", help="quit with the secondary view mapped")
     manager = parser.add_mutually_exclusive_group()
     manager.add_argument("--mutter", action="store_true", help="exercise GTK shadows under composited X11")
     manager.add_argument("--gnome", action="store_true", help="use GNOME Shell X11 in the private display")
@@ -214,7 +229,7 @@ if __name__ == "__main__":
         home = Path.home()
         if home.parent != Path(tempfile.gettempdir()) or not home.name.startswith("twodrive-tray-test-") or not (home / "fixture").is_file():
             raise SystemExit("Use the outer test entry point to create an isolated desktop")
-        exercise(bundle, engines, home, args.gnome, args.mutter)
+        exercise(bundle, engines, home, args.gnome, args.mutter, args.quit_from_tray)
     else:
         fixture = tempfile.TemporaryDirectory(prefix="twodrive-tray-test-")
         directory = fixture.name
@@ -233,7 +248,8 @@ if __name__ == "__main__":
                 (home / "Desktop").mkdir()
             subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x1024x24", "dbus-run-session",
                             "--", "python3", __file__, str(bundle), "--engines", str(engines),
-                            "--private-session", *(["--gnome"] if args.gnome else ["--mutter"] if args.mutter else [])], env=env, check=True)
+                            "--private-session", *(["--quit-from-tray"] if args.quit_from_tray else []),
+                            *(["--gnome"] if args.gnome else ["--mutter"] if args.mutter else [])], env=env, check=True)
 
         finally:
             # Private GNOME services may finish disposing their XDG files just

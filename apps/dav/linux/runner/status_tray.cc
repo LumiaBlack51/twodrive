@@ -376,11 +376,24 @@ void stop(Tray* tray) {
   if (tray->owner) { g_bus_unown_name(tray->owner); tray->owner = 0; }
   if (tray->object) { g_dbus_connection_unregister_object(tray->bus, tray->object); tray->object = 0; }
 }
+void stop_flutter_engine(GApplication*, FlEngine* engine) {
+  g_object_run_dispose(G_OBJECT(engine));
+}
+
 void call(FlMethodChannel*, FlMethodCall* request, gpointer data) {
   auto* tray = static_cast<Tray*>(data);
   const char* name = fl_method_call_get_name(request);
   if (g_str_equal(name, "panel")) {
     dismiss(tray);
+  } else if (g_str_equal(name, "quitApplication")) {
+    auto* app = g_application_get_default();
+    // The engine owns render threads shared by the tray and dashboard. Stop
+    // them once GTK stops dispatching, before process-wide Skia cleanup runs.
+    g_signal_connect_object(app, "shutdown", G_CALLBACK(stop_flutter_engine),
+                            fl_view_get_engine(tray->primary), G_CONNECT_DEFAULT);
+    fl_method_call_respond_success(request, nullptr, nullptr);
+    g_application_quit(app);
+    return;
   } else if (g_str_equal(name, "destroy")) {
     stop(tray);
   } else if (g_str_equal(name, "configure")) {
