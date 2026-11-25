@@ -1,0 +1,6 @@
+#!/bin/sh
+if [ -z "${GDK_BACKEND+x}" ] && [ -n "${DISPLAY:-}" ]; then
+    export GDK_BACKEND=x11
+fi
+export TWODRIVE_TRAY_BACKEND="${TWODRIVE_TRAY_BACKEND-sni}"
+exec /usr/lib/twodrive-dav/twodrive_dav --launcher /usr/bin/twodrive-dav "$@"

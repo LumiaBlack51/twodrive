@@ -1,10 +1,18 @@
 # TwoDrive 故障记录
 
+## TD-20261125-DAV-PACKAGE：独立 DAV Debian 开发测试包
+
+- 将 #72 的 DAV 开发测试包按维护者要求从客户端功能中拆出。通过现有 debhelper 与 dpkg-buildpackage、独立构建 profile 生成 twodrive-dav，保留便携 payload；稳定 twodrive 包不改变。
+- 测试包校验覆盖依赖、原始文件摘要及 .buildinfo/.changes。完整发布仍须另行生成并校验源码包、二进制/调试包，不能用此测试包代替。说明测试包不安装便携安装器的 Nautilus 徽标资产。
+- 本机 Debian policy 和九项合成包校验回归通过；正式 CI 构建及安装结果以 PR 为准，合成包不代表实机安装。
+
 ## TD-20261125-CLIENT：目录加载、传输历史与挂载文件查看职责
 
 - 关联上游 #72 的维护者审查。目录读取不再等待聚合状态；保留最后成功响应作展示状态，并拒绝过期账号、配置及目录结果。手动传输历史持久化并区分上传、下载、备份及挂载活动，后续目录刷新失败不改写传输结果。
 - 已挂载文件由后端验证原挂载路径后打开；未挂载时使用显式下载。客户端不枚举挂载目录、不创建 viewed-files 副本。正常退出只报告占用程序和路径，提示保存并正常关闭后重试，不发送 SIGTERM。
 - 提取自已验证的本机修复，保留当前上游 Dashboard、连接页面主题。宽屏概览卡片共享底边。拆分后的独立回归和 CI 结果以 PR 为准；Linux 用合成提供者，Windows NTFS/Explorer 尚未实机验证。
+
+2026-11-25 审查补记：Windows 对挂载原件使用与下载副本相同的打开函数。查看 PDF 等文件时会尝试写入 Zone.Identifier，写入被拒后仅在 Explorer 中选中。该路径已通过源码核对。原生 Windows 验证及只读打开修复仍待完成。[审查记录](https://github.com/LumiaBlack51/twodrive/pull/96#issuecomment-7163794572)
 
 ## TD-20261125-03：Development 托盘弹窗边缘阴影间歇消失
 
