@@ -334,8 +334,14 @@ class _WorkspaceState extends State<Workspace>
         } catch (_) {}
       }
       if (await c.shutdown()) {
+        if (trayReady) await _trayWork;
+        if (widget.desktop && Platform.isLinux) {
+          // Keep both Flutter views attached until GTK leaves its event loop.
+          // Storage and transport shutdown have already completed.
+          await tray.quitApplication();
+          return;
+        }
         if (trayReady) {
-          await _trayWork;
           await tray.destroy();
           trayReady = false;
         }
