@@ -6,7 +6,12 @@ use base64::{
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use rand::{Rng, distributions::Alphanumeric};
-use std::{fmt, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 use subtle::ConstantTimeEq;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -157,7 +162,7 @@ async fn tunnel(
             physical.allow_fallback,
             "physical TCP connection failed; fallback disabled"
         );
-        physical.fallback("relay/discovery TCP");
+        physical.fallback("relay/discovery TCP", tcp_fallback_reason(&ips));
         // System TCP permits a transparent/TUN proxy. Endpoint-level fallback
         // also supports configured HTTP(S) proxies via iroh's normal connector.
         let mut attempts: FuturesUnordered<_> = ips
@@ -179,10 +184,44 @@ async fn tunnel(
     Ok(())
 }
 
+// A synthetic destination is rejected before a physical TCP handshake.
+fn tcp_fallback_reason(ips: &[IpAddr]) -> &'static str {
+    if !ips.is_empty()
+        && ips
+            .iter()
+            .all(|ip| matches!(ip, IpAddr::V4(v4) if super::fake_ip(*v4)))
+    {
+        "only synthetic destination addresses available"
+    } else {
+        "physical TCP connection unavailable"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+    #[test]
+    fn distinguish_synthetic_destinations_from_unavailable_physical_tcp() {
+        let fake = IpAddr::V4(Ipv4Addr::new(198, 18, 0, 41));
+        let other = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        assert_eq!(
+            tcp_fallback_reason(&[fake]),
+            "only synthetic destination addresses available"
+        );
+        for ips in [
+            &[other][..],
+            &[fake, other],
+            &[IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)],
+            &[],
+        ] {
+            assert_eq!(
+                tcp_fallback_reason(ips),
+                "physical TCP connection unavailable"
+            );
+        }
+    }
+
     async fn connect(adapter: &Adapter, target: SocketAddr, auth: bool) -> TcpStream {
         let mut socket = TcpStream::connect(("127.0.0.1", adapter.url.port().unwrap()))
             .await

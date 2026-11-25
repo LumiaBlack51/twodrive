@@ -163,7 +163,7 @@ impl App {
                             .as_mut()
                             .is_some_and(|c| c.0.try_wait().ok().flatten().is_some()),
                         gateway_failed,
-                        self.network.fallback() || self.network.system_tunnel_active(),
+                        self.network.fallback(),
                     )
                 } else if let Some(saved) = self.inactive.get_mut(&p.id) {
                     let gateway_failed = saved
@@ -185,7 +185,7 @@ impl App {
                             .as_mut()
                             .is_some_and(|c| c.0.try_wait().ok().flatten().is_some()),
                         gateway_failed,
-                        saved.network.fallback() || saved.network.system_tunnel_active(),
+                        saved.network.fallback(),
                     )
                 } else {
                     continue;
@@ -658,6 +658,29 @@ mod tests {
         assert_eq!(status["overall"]["active"][0]["account"], "First");
         assert_eq!(status["accounts"].as_array().unwrap().len(), 2);
         assert!(app.online("a") && app.online("b"));
+    }
+
+    #[test]
+    fn tray_only_reports_endpoint_fallback_across_accounts() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = fixture(root.path());
+        let parked = app.inactive["a"].network.clone();
+        for network in [&app.network, &parked] {
+            network.record("network: system TCP tunnel opened");
+        }
+        let status = app.status().unwrap();
+        assert_eq!(status["system_tunnel_active"], true);
+        assert_eq!(status["overall"]["route_fallback"], false);
+        for account in status["accounts"].as_array().unwrap() {
+            assert_eq!(account["route_fallback"], false);
+        }
+
+        parked.record(
+            "network: route=system/proxy fallback; physical setup or relay registration failed",
+        );
+        let status = app.status().unwrap();
+        assert_eq!(status["route_fallback"], false);
+        assert_eq!(status["overall"]["route_fallback"], true);
     }
 
     #[test]
