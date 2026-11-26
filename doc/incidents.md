@@ -70,7 +70,11 @@ Linux 桌面 CI 同时运行 Openbox 和带合成的 Mutter 界面测试。从�
 
 ### 交付记录
 
-[Development PR #92](https://github.com/LumiaBlack51/twodrive/pull/92)。正式制品及本机安装结果待补充。
+[阴影修复 #92](https://github.com/LumiaBlack51/twodrive/pull/92) 及[退出修复 #95](https://github.com/LumiaBlack51/twodrive/pull/95) 已合入 Development。[发布提交 3f2e72a](https://github.com/LumiaBlack51/twodrive/commit/3f2e72a7b4c8386582a2b91877bb712581a55a7a) 的七项工作流均通过。[Development 0.3.4](https://github.com/LumiaBlack51/twodrive/releases/tag/dev-v0.3.4) 发布前后逐一校验了 16 个附件的名称、大小、状态和 SHA-256。另核对 Windows 便携包、MSIX 标识，以及 dpkg-buildpackage 生成的 Debian 源码、二进制、调试包和构建清单。
+
+正式 Linux 包在独立 Mutter/X11 上从仪表盘和已显示托盘两条路径正常退出，重复打开时，每个检测到面板内容的取样帧也都检测到了外侧浅阴影。Openbox 兼容测试和私有 GNOME Wayland 三次定位也通过。
+
+本机沿用既有用户安装方式覆盖升级。升级前检查两个挂载的活动写入、待同步队列和占用均为零；正常退出后恢复原挂载。全部 63 个运行时文件与正式包逐一匹配，运行中的 GUI、Flutter AOT、引擎及配对程序也已核对；配置、挂载绑定与登录状态保留。已用安装目录内的二进制在独立桌面再次验证阴影及 2 倍缩放的三轮展开、返回仪表盘和收起。未向用户桌面发送模拟输入，未操作云端文件。
 
 ## TD-20261125-04：隔离合成桌面退出时 Flutter 仍有待处理重绘
 
@@ -87,6 +91,19 @@ Linux 桌面 CI 同时运行 Openbox 和带合成的 Mutter 界面测试。从�
 原生回归同时检查退出码、无效视图重绘和互斥锁异常。CI 在独立 Mutter 上分别从已恢复仪表盘和仍映射的托盘退出，并保留 Openbox 测试。本机修复构建已通过 Flutter 全部 147 项及静态分析，Openbox 和 Mutter 的两种退出入口均已实际运行。独立作业中的互斥锁与旧重绘是否直接同因仍未由堆栈证明。
 
 [审查](https://github.com/LumiaBlack51/twodrive/pull/95#issuecomment-7162912354) 指出视图析构仍会访问引擎的鼠标指针处理器。修复在引擎同步停下工作线程后，借助其消息通道关闭回调释放托盘和仪表盘；此时指针和输入处理器仍有效。把两扇窗提前销毁的对照试验仍能触发进程异常。跟踪两个实际 FlView 的弱引用，在引擎析构入口观测到两个视图，到该调用返回时都已释放。原生用例同时拒绝 GTK、GLib 和 GObject 的严重诊断。隔离显示使用 GTK 内建输入法；本机额外捕获的一组信号断开告警，其调用栈位于未接入用户会话的 Fcitx 模块。
+
+## TD-20261125-06：Windows 回环 WebDAV 编辑器锁测试单请求超时
+
+- 状态及影响：2026-11-25，单次超时，根因未确认。[PR #92 的 Windows 检查](https://github.com/LumiaBlack51/twodrive/actions/runs/45610749728/job/139193298782) 首次失败，阻挡 PR 合并直至重跑通过。关联 TD-20261123-03 的复合耗时断言和 TD-20261124-04 的查找竞态。
+- 症状与触发：`editor_close_and_same_name_reopen_do_not_wait_for_slow_cloud_mutations` 在 `call().send()` 收到 reqwest TimedOut，目标为测试进程的回环地址和合成锁文件，客户端超时为 5 秒。同一套件其余四项通过。
+- 根因及边界：同一路径有多次 PUT、GET、HEAD 与 DELETE；旧日志未记录失败请求的方法或所处阶段。不能从此次日志确定挂载队列、Windows 调度或测试网络的具体原因，也无生产云端错误证据。
+- 处理、验证与后续：保留原断言。[同一提交的 Windows 作业重跑通过](https://github.com/LumiaBlack51/twodrive/actions/runs/45610749728/job/139200234120)。Linux 编辑器锁套件 5 项通过，同一用例在独立测试进程连续 12 次通过。若再现，应先记录失败请求的方法、阶段及服务端时序。
+
+## TD-20261125-07：高 DPI 桌面测试将仍显示的仪表盘误判为托盘
+
+- 日期及影响：2026-11-25，私有 GNOME X11 桌面的自适应定位测试。关联 TD-20261125-03 的内容区定位。原测试分别运行 0.3.3 正式包和 0.3.4 候选，均正确测得 2 倍缩放的托盘边界，随后在检查托盘收起时失败。
+- 根因与修复：显式打开仪表盘后它会继续显示。旧断言调用 `GetPanel`，托盘收起时该接口会回退到仪表盘。测试现在用窗口角色分别查询两扇窗，逐次检查托盘收起且仪表盘仍可见，并用菜单键盘操作选择“仪表盘”。
+- 实际验证：在私有 GNOME Shell 46.0 下，0.3.3 与 0.3.4 在 2560 × 1600、GTK 2 倍缩放下各通过三轮展开、返回仪表盘和收起。0.3.4 的普通缩放及模拟底部 Dock 也通过三轮。测试不操作用户桌面。
 
 ## TD-20261125-02：自动路由的后台网络活动提升为整台设备警告
 

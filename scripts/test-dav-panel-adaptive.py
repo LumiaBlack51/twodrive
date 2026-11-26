@@ -99,6 +99,13 @@ def inside(args):
         panel_bounds=[]
         observations = []
         assert not call('app.twodrive.TrayAnchor1.GetPanel', app.pid)[0]
+        def window_state(tray):
+            return call('app.twodrive.TrayAnchor1.GetPanelState', app.pid,
+                        'true' if tray else 'false')
+
+        def visible(state):
+            return state[0] and not state[1]
+
         for _ in range(3):
             time.sleep(.4)
             call('org.kde.StatusNotifierItem.Activate', *point,
@@ -128,38 +135,32 @@ def inside(args):
             if args.screenshot:
                 from PIL import ImageGrab
                 ImageGrab.grab(xdisplay=env['DISPLAY']).save(args.screenshot)
-            state = call('app.twodrive.TrayAnchor1.GetPanelState', app.pid)
+            state = window_state(True)
             observations.append(state)
-            assert state[0] and not state[1], state
-            # Input stays on this disposable compositor's display.
-            import ctypes
-            x = ctypes.CDLL('libX11.so.6')
-            x.XOpenDisplay.argtypes=[ctypes.c_char_p]; x.XOpenDisplay.restype=ctypes.c_void_p
-            x.XFlush.argtypes=[ctypes.c_void_p]; x.XCloseDisplay.argtypes=[ctypes.c_void_p]
-            d=x.XOpenDisplay(env['DISPLAY'].encode()); assert d
-            t=ctypes.CDLL('libXtst.so.6')
-            t.XTestFakeMotionEvent.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_ulong]
-            t.XTestFakeButtonEvent.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_int,ctypes.c_ulong]
-            _,px,py,pw,ph=call('app.twodrive.TrayAnchor1.GetPanel',app.pid)
-            def click(cx,cy):
-                t.XTestFakeMotionEvent(d,0,cx,cy,0)
-                t.XTestFakeButtonEvent(d,1,1,0); t.XTestFakeButtonEvent(d,1,0,0); x.XFlush(d)
-            click(px+pw-32*args.gdk_scale,py+40*args.gdk_scale); time.sleep(.5)
-            click(px+pw-95*args.gdk_scale,py+52*args.gdk_scale); time.sleep(.8)
-            main_state=call('app.twodrive.TrayAnchor1.GetPanelState',app.pid)
-            assert main_state[0] and not main_state[1] and not main_state[2], ('Dashboard did not open', main_state)
+            assert visible(state) and state[2], ('Tray did not open', state)
+            # Use the first menu action, Dashboard, on the disposable display.
+            _, px, py, pw, _ = rect
+            subprocess.run(['xdotool', 'mousemove', str(px+pw-32*args.gdk_scale),
+                            str(py+40*args.gdk_scale), 'click', '1'], env=env, check=True)
+            time.sleep(.5)
+            subprocess.run(['xdotool', 'key', 'Down', 'Return'], env=env, check=True)
+            time.sleep(.8)
+            main_state = window_state(False)
+            assert visible(main_state) and not main_state[2], ('Dashboard did not open', main_state)
+            assert not visible(window_state(True)), 'Dashboard action left tray mapped'
             observations.append(main_state)
             call('org.kde.StatusNotifierItem.Activate',*point,
                  dest=f'org.kde.StatusNotifierItem-{app.pid}-1',path='/StatusNotifierItem')
             time.sleep(.8)
-            return_state=call('app.twodrive.TrayAnchor1.GetPanelState',app.pid)
+            return_state = window_state(True)
+            assert visible(return_state) and return_state[2], ('Tray did not reopen', return_state)
             observations.append(return_state)
-            x.XCloseDisplay(d)
 
             call('org.kde.StatusNotifierItem.Activate', *point,
                  dest=f'org.kde.StatusNotifierItem-{app.pid}-1', path='/StatusNotifierItem')
             time.sleep(.4)
-            assert not call('app.twodrive.TrayAnchor1.GetPanel', app.pid)[0]
+            assert not visible(window_state(True)), 'Tray did not dismiss'
+            assert visible(window_state(False)), 'Tray dismissal hid the dashboard'
         report = dict(gdk_scale=args.gdk_scale, used_host_anchor=args.host_anchor, panel_bounds=panel_bounds, dock_top=dock_top, panel_window_states=observations,
                       all_panels_skip_taskbar=all(s[2] for i,s in enumerate(observations) if i%3 != 1),
                       repeat_open_close=3, background_start_hidden=True)
@@ -206,10 +207,17 @@ if __name__ == '__main__':
             shutil.copytree(REPO/'packaging/gnome-tray-anchor', root/'data/gnome-shell/extensions'/UUID)
             extension_file=root/'data/gnome-shell/extensions'/UUID/'extension.js'
             extension=extension_file.read_text()
-            extension=extension.replace('const XML = `<node><interface name="app.twodrive.TrayAnchor1">', 'const XML = `<node><interface name="app.twodrive.TrayAnchor1"><method name="GetPanelState"><arg type="u" direction="in"/><arg type="b" direction="out"/><arg type="b" direction="out"/><arg type="b" direction="out"/><arg type="i" direction="out"/></method>')
+            extension=extension.replace('const XML = `<node><interface name="app.twodrive.TrayAnchor1">', 'const XML = `<node><interface name="app.twodrive.TrayAnchor1"><method name="GetPanelState"><arg type="u" direction="in"/><arg type="b" direction="in"/><arg type="b" direction="out"/><arg type="b" direction="out"/><arg type="b" direction="out"/><arg type="i" direction="out"/></method>')
             extension=extension.replace('<method name="GetPanelState">', '<method name="LeaveOverview"/><method name="GetX11Environment"><arg type="s" direction="out"/><arg type="s" direction="out"/></method><method name="GetPanelState">')
             extension=extension.replace('    GetPanel(pid) {', '    LeaveOverview() { Main.overview.hide(); }\n    GetX11Environment() { return [GLib.getenv("DISPLAY") ?? "", GLib.getenv("XAUTHORITY") ?? ""]; }\n    GetPanel(pid) {')
-            extension=extension.replace('    GetPanel(pid) {', '    GetPanelState(pid) { const w = this._ownWindow(pid); return w ? [true, w.is_hidden(), w.skip_taskbar, w.get_window_type()] : [false, true, false, -1]; }\n\n    GetPanel(pid) {')
+            extension = extension.replace('    GetPanel(pid) {', '''    GetPanelState(pid, tray) {
+        const w = global.get_window_actors().map(a => a.meta_window).find(w =>
+            w.get_pid() === pid && w.get_wm_class()?.toLowerCase() === 'app.twodrive.twodrive_dav' &&
+            (w.get_role() === 'twodrive-tray' || w.get_title() === 'TwoDrive Tray') === tray);
+        return w ? [true, w.is_hidden(), w.skip_taskbar, w.get_window_type()] : [false, true, false, -1];
+    }
+
+    GetPanel(pid) {''')
             extension=extension.replace("import Clutter from 'gi://Clutter';","import Clutter from 'gi://Clutter';\nimport St from 'gi://St';")
             if not args.host_anchor:
                 extension=extension.replace('    GetAnchor(pid) {','    GetAnchor(pid) { if(pid) return [false,0,0,0,0,0,0,0,0];')
