@@ -24,11 +24,33 @@ Future<void> openLocalFile(
   String path, {
   String? platform,
   Future<void> Function(String, List<String>)? launch,
+}) => _openLocalFile(
+  path,
+  markInternetOrigin: true,
+  platform: platform,
+  launch: launch,
+);
+
+Future<void> openMountedFile(
+  String path, {
+  String? platform,
+  Future<void> Function(String, List<String>)? launch,
+}) => _openLocalFile(
+  path,
+  markInternetOrigin: false,
+  platform: platform,
+  launch: launch,
+);
+
+Future<void> _openLocalFile(
+  String path, {
+  required bool markInternetOrigin,
+  String? platform,
+  Future<void> Function(String, List<String>)? launch,
 }) async {
   final target = platform ?? Platform.operatingSystem;
   if (target == 'windows') {
-    // A cloud "view" can name any file. Open common document/media copies
-    // only with their Internet origin retained. Select other files in Explorer.
+    // Cloud files can name any file. Only launch common documents and media.
     const viewable = {
       'txt',
       'pdf',
@@ -49,7 +71,11 @@ Future<void> openLocalFile(
       'mp4',
     };
     final extension = path.split('.').last.toLowerCase();
-    if (viewable.contains(extension)) {
+    if (!viewable.contains(extension)) {
+      await revealLocalFile(path, platform: target, launch: launch);
+      return;
+    }
+    if (markInternetOrigin) {
       try {
         await File(
           '$path:Zone.Identifier',
@@ -58,10 +84,8 @@ Future<void> openLocalFile(
         await revealLocalFile(path, platform: target, launch: launch);
         return;
       }
-      await (launch ?? _launchFileManager)('explorer.exe', [path]);
-    } else {
-      await revealLocalFile(path, platform: target, launch: launch);
     }
+    await (launch ?? _launchFileManager)('explorer.exe', [path]);
     return;
   }
   final (executable, args) = switch (target) {
@@ -70,7 +94,9 @@ Future<void> openLocalFile(
     _ => throw UnsupportedError('Unsupported desktop file opener'),
   };
   final result = await Process.run(executable, args);
-  if (result.exitCode != 0) throw StateError('无法打开本机查看副本');
+  if (result.exitCode != 0) {
+    throw StateError(markInternetOrigin ? '无法打开本机查看副本' : '无法打开挂载文件');
+  }
 }
 
 /// Returns false if the desktop can only open the containing folder.

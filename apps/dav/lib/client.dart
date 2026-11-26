@@ -1351,7 +1351,7 @@ class StorageClient extends ChangeNotifier {
       });
       requireProfile(file);
       if (!isProfileMounted(id)) throw StateError('挂载已改变，请重试');
-      await openViewedFile(verified['path'] as String);
+      await openMountedOriginal(verified['path'] as String);
     } catch (e) {
       if (!_disposed) {
         error = '$e'.replaceFirst('Bad state: ', '');
@@ -1362,6 +1362,9 @@ class StorageClient extends ChangeNotifier {
 
   @protected
   Future<void> openViewedFile(String path) => openLocalFile(path);
+
+  @protected
+  Future<void> openMountedOriginal(String path) => openMountedFile(path);
 
   Future<void> cancelTransfer(int id) =>
       request('cancel', {'id': id}).then((_) {});

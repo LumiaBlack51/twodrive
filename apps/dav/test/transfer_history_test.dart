@@ -12,6 +12,7 @@ const identity = {'profile': 'account', 'revision': 'one'};
 class HistoryClient extends StorageClient {
   final calls = <String>[];
   final opened = <String>[];
+  final openedOriginals = <String>[];
   String mountedFile = '';
   final uploadStarted = Completer<void>();
   Completer<Json>? heldUpload;
@@ -54,6 +55,11 @@ class HistoryClient extends StorageClient {
   Future<void> openViewedFile(String path) async {
     expect(await File(path).readAsString(), 'fixture');
     opened.add(path);
+  }
+
+  @override
+  Future<void> openMountedOriginal(String path) async {
+    openedOriginals.add(path);
   }
 }
 
@@ -130,6 +136,34 @@ void main() {
     expect(c.transferShowsProgress(c.transferInfo(download)), isTrue);
   });
 
+  test('mounted view opens only the path verified by the engine', () async {
+    final mount = await Directory.systemTemp.createTemp('dav-mounted-route-');
+    addTearDown(() => mount.delete(recursive: true));
+    final verified = await File(
+      '${mount.path}/verified.pdf',
+    ).writeAsString('fixture');
+    final client = HistoryClient()
+      ..profiles = [profile]
+      ..selected = 'account'
+      ..status = {
+        'profile': 'account',
+        'connected': true,
+        'mounts': [
+          {...identity, 'path': mount.path},
+        ],
+      }
+      ..mountedFile = verified.path;
+    addTearDown(client.dispose);
+
+    await client.viewCloudFile({...identity, 'path': '/document.pdf'});
+
+    expect(client.error, isNull);
+    expect(client.calls, ['mounted_file']);
+    expect(client.openedOriginals, [verified.path]);
+    expect(client.opened, isEmpty);
+    expect(client.transfers, isEmpty);
+  });
+
   test(
     'upload, download, and view survive restart with exact paths',
     () async {
@@ -162,8 +196,8 @@ void main() {
         'path': '/测试/查看 #.docx',
         'size': 7,
       });
-      expect(first.opened, hasLength(1));
-      final viewedPath = first.opened.single;
+      expect(first.opened, isEmpty);
+      final viewedPath = first.openedOriginals.single;
       expect(viewedPath, output);
       expect(await first.shutdown(), isTrue);
       first.dispose();
@@ -184,6 +218,7 @@ void main() {
       expect(rows.last.manual!.args, isNot(contains('unrelated')));
       expect(second.canRetryTransfer(rows.last.manual!), isFalse);
       expect(second.opened, isEmpty);
+      expect(second.openedOriginals, isEmpty);
       expect(second.calls, isNot(contains(anyOf('upload', 'download'))));
       expect(await File(viewedPath).exists(), isTrue);
     },

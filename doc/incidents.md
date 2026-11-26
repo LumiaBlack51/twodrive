@@ -1,5 +1,11 @@
 # TwoDrive 故障记录
 
+## TD-20261126-WINDOWS-VIEW：打开挂载原文件时退回 Explorer 选中
+
+- 关联 [上游 #96 的审查](https://github.com/LumiaBlack51/twodrive/pull/96#issuecomment-7163794572) 和 TD-20261125-WINDOWS-VIEW。Windows 将引擎验证的挂载原路径交给下载副本打开函数，后者尝试写入 `Zone.Identifier`。本机 WinFsp 拒绝该数据流，旧逻辑随即退回 Explorer 选中，未打开文件。
+- 挂载原件使用独立入口，支持的文档和媒体直接通过 Explorer 打开，其他类型继续定位。下载副本打开前保留 Internet 来源标记。客户端仍要求引擎验证账号、版本和挂载路径。
+- Windows 11 上使用临时 WinFsp 挂载和回环 WebDAV：旧打开方式在同一生成文件上退回选中，修复版实际打开了含中文、空格和 `#` 的原路径，并观察到记事本窗口。原内容与原路径的 ADS 保持不变，下载到 NTFS 的副本具有 `ZoneId=3`，过期连接版本被拒绝。回归另覆盖原文件既有 ADS 不被覆盖、非支持类型继续定位，以及客户端必须调用原件打开入口。旧客户端未通过打开入口的回归。实机测试未操作真实云端文件。
+
 ## TD-20261125-DAV-PACKAGE：独立 DAV Debian 开发测试包
 
 - 将 #72 的 DAV 开发测试包按维护者要求从客户端功能中拆出。通过现有 debhelper 与 dpkg-buildpackage、独立构建 profile 生成 twodrive-dav，保留便携 payload；稳定 twodrive 包不改变。
