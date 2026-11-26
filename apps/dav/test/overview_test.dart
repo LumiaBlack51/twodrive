@@ -102,6 +102,50 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
+  testWidgets('overview uses spare height for previews in a wide window', (
+    tester,
+  ) async {
+    viewport(tester, const Size(1320, 1080));
+    final client = OverviewClient();
+    addTearDown(client.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OverviewPage(
+            client: client,
+            onNavigate: (_) {},
+            onOpenMount: (_) async {},
+          ),
+        ),
+      ),
+    );
+
+    Rect preview(String label) => tester.getRect(
+      find
+          .ancestor(of: find.text(label), matching: find.byType(Container))
+          .first,
+    );
+    final tall = preview('传输概览');
+    expect(tall.bottom, preview('备份概览').bottom);
+    expect(find.text('缓存与排除规则').hitTestable(), findsOneWidget);
+
+    tester.view.physicalSize = const Size(1320, 650);
+    await tester.pump();
+    final short = preview('传输概览');
+    expect(tall.height, greaterThan(short.height + 40));
+    expect(short.bottom, preview('备份概览').bottom);
+
+    tester.view.physicalSize = const Size(620, 650);
+    await tester.pump();
+    await tester.scrollUntilVisible(find.text('传输概览'), 120);
+    await tester.scrollUntilVisible(find.text('备份概览'), 120);
+    expect(preview('备份概览').top, greaterThan(preview('传输概览').bottom));
+    await tester.scrollUntilVisible(find.text('缓存与排除规则'), 120);
+    expect(find.text('缓存与排除规则').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('transfer overview aligns with the second account card', (
     tester,
   ) async {
