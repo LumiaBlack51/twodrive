@@ -205,10 +205,13 @@ class StorageClient extends ChangeNotifier {
       action(paused ? tr('恢复同步') : tr('暂停同步'), () async {
         status = await request('pause', {'paused': !paused});
       });
-  Future<void> signOut() => action(tr('退出登录'), () async {
-    await request('sign_out', {'id': selected});
-    entries = [];
-    status = {};
+  Future<void> signOut(String id) => action(tr('退出登录'), () async {
+    await request('sign_out', {'id': id});
+    if (id == selected) {
+      _browseGeneration++;
+      entries = [];
+      status = {};
+    }
     await loadProfiles();
     await refreshStatus();
   });

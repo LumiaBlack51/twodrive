@@ -122,11 +122,15 @@ void main() {
         of: find.text('Other account'),
         matching: find.byType(ConnectionCard),
       );
-      final edit = find.descendant(
+      final menu = find.descendant(
         of: inactive,
-        matching: find.byIcon(Icons.edit_outlined),
+        matching: find.byTooltip('更多操作'),
       );
-      await tester.tap(edit);
+      await tester.ensureVisible(menu);
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      expect(find.text('退出登录…'), findsNothing);
+      await tester.tap(find.text('编辑'));
       await tester.pumpAndSettle();
       expect(find.text('编辑连接'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());

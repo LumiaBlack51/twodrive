@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/connection_card.dart';
+import 'package:twodrive_dav/main.dart';
+import 'package:twodrive_dav/workspace_navigation.dart';
 import 'package:twodrive_dav/storage_usage.dart';
 import 'package:twodrive_dav/tray_panel.dart';
 
@@ -42,8 +44,7 @@ class MultiClient extends StorageClient {
     'profile': active,
     'multi_connection': true,
     'connections': [
-      {'id': 'a'},
-      {'id': 'b'},
+      for (final profile in profiles) {'id': profile['id']},
     ],
   };
   @override
@@ -60,6 +61,12 @@ class MultiClient extends StorageClient {
     if (op == 'connect') {
       active = args['id'] as String;
       return {'retained': true};
+    }
+    if (op == 'sign_out') {
+      profiles = profiles
+          .where((profile) => profile['id'] != args['id'])
+          .toList();
+      return {};
     }
     if (op == 'status') return engineStatus();
     if (op == 'profiles') {
@@ -115,6 +122,63 @@ void main() {
           .load();
     }
   });
+  testWidgets('sign-out belongs to the account whose card menu was opened', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 920);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = MultiClient();
+    addTearDown(client.dispose);
+    await tester.pumpWidget(DavApp(client: client));
+    final navigation = find.byKey(const ValueKey('navigation'));
+    await tester.tap(
+      find.descendant(
+        of: navigation,
+        matching: find.text(WorkspacePage.connections.label),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('添加连接'), findsOneWidget);
+    expect(find.text('退出登录'), findsNothing);
+
+    final card = find.byKey(const ValueKey('connection-b'));
+    final menu = find.descendant(of: card, matching: find.byTooltip('更多操作'));
+    Future<void> openSignOut() async {
+      await tester.ensureVisible(menu);
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      expect(find.text('断开此连接'), findsOneWidget);
+      await tester.tap(find.text('退出登录…'));
+      await tester.pumpAndSettle();
+      expect(find.text('退出登录「OneDrive」？'), findsOneWidget);
+    }
+
+    await openSignOut();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(client.calls.where((call) => call['op'] == 'sign_out'), isEmpty);
+
+    await openSignOut();
+    client.path = '/Still browsing';
+    client.entries = [
+      {'name': 'Current account file'},
+    ];
+    await tester.tap(find.text('确认'));
+    await tester.pumpAndSettle();
+    final signOut = client.calls.singleWhere(
+      (call) => call['op'] == 'sign_out',
+    );
+    expect(signOut['id'], 'b');
+    expect(client.selected, 'a');
+    expect(client.path, '/Still browsing');
+    expect(client.entries.single['name'], 'Current account file');
+    expect(card, findsNothing);
+    expect(find.byKey(const ValueKey('connection-a')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   test(
     'switching view during download keeps transfer bound to its original account and restores each folder',
     () async {
