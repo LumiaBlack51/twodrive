@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:twodrive_dav/app_theme.dart';
 import 'package:twodrive_dav/client.dart';
 import 'package:twodrive_dav/main.dart';
 import 'package:twodrive_dav/cfapi_page.dart';
@@ -303,6 +304,63 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
+  for (final (width, scale, sideBySide) in [
+    (1100.0, 1.0, true),
+    (1100.0, 2.0, true),
+    (380.0, 2.0, false),
+  ]) {
+    testWidgets('exclusion actions stay filled at $width and ${scale}x', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final client = Client();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: appTheme(platform: TargetPlatform.linux),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: SingleChildScrollView(child: SyncPolicyCard(client: client)),
+          ),
+        ),
+      );
+
+      final addLabel = find.text('添加排除项');
+      final saveLabel = find.text('保存排除规则');
+      if (sideBySide) {
+        expect(tester.getCenter(addLabel).dy, tester.getCenter(saveLabel).dy);
+      } else {
+        expect(tester.getTopLeft(addLabel).dx, tester.getTopLeft(saveLabel).dx);
+        expect(
+          tester.getTopLeft(saveLabel).dy,
+          greaterThan(tester.getBottomLeft(addLabel).dy),
+        );
+      }
+
+      final addSurface = find
+          .ancestor(of: addLabel, matching: find.byType(Material))
+          .first;
+      final saveSurface = find
+          .ancestor(of: saveLabel, matching: find.byType(Material))
+          .first;
+      final addBackground = tester.widget<Material>(addSurface).color;
+      expect(addBackground, isNotNull);
+      expect(addBackground, isNot(Colors.transparent));
+      expect(addBackground, tester.widget<Material>(saveSurface).color);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      client.dispose();
+    });
+  }
+
   testWidgets(
     'exclusion settings send validated engine configuration without altering profile grants',
     (tester) async {
