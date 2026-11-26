@@ -253,6 +253,14 @@ impl App {
             .filter(|n| !n.is_empty())
             .map(str::to_owned)
     }
+    fn require_native_sync_stopped(&mut self, id: &str) -> anyhow::Result<()> {
+        let native = self.native_runtime.status(&self.state)?;
+        ensure!(
+            native["profile"].as_str() != Some(id) || native["running"] != true,
+            "请先停止此账户的 CFAPI 原生同步"
+        );
+        Ok(())
+    }
     fn public_profiles(&self) -> Value {
         let profiles: Vec<_> = self
             .config
@@ -819,11 +827,7 @@ impl App {
                     matches!(p.network_route.as_str(), "auto" | "direct" | "system"),
                     "invalid network route"
                 );
-                let native = self.native_runtime.status(&self.state)?;
-                ensure!(
-                    native["profile"].as_str() != Some(&p.id) || native["running"] != true,
-                    "请先停止此账户的 CFAPI 原生同步"
-                );
+                self.require_native_sync_stopped(&p.id)?;
                 ensure!(!self.online(&p.id), "请先断开连接再编辑配置");
                 ensure!(
                     !p.name.trim().is_empty() && p.name.len() <= 120,
@@ -946,6 +950,7 @@ impl App {
             "sign_out" => {
                 let id = string(a, "id")?.to_owned();
                 let p = self.profile(&id)?;
+                self.require_native_sync_stopped(&id)?;
                 ensure!(self.cache(&p, false)?["pending"] == 0, "请先处理待上传缓存");
                 self.disconnect_profile(&id)?;
                 providers::sign_out(&p)?;
