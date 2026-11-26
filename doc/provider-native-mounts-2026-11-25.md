@@ -4,6 +4,8 @@ This change addresses the maintainer's feedback on [#74](https://github.com/Lumi
 
 Linux iCloud and Baidu use the existing TwoDriveFS and its SQLite metadata, durable local edits, recovery queue, cache leases and cache-aware GIO behavior. Rclone remains the iCloud protocol adapter and the existing Windows mount component. This introduces no new filesystem implementation or atomic-CAS capability.
 
+Linux does not fall back to an Rclone filesystem mount for either provider. The remaining Linux bridge is only for devices shared with a read-only grant; Windows WinFsp routing is unchanged.
+
 Providers without delta metadata return validated complete shallow listings. A transaction reconciles one directory, preserves stable local IDs when opaque provider snapshots change, retires obsolete cache references and protects dirty/error generations, queued namespace operations and deletion tombstones. Invalid/partial listings never authorize pruning. Completed empty directories are recorded too. Cached listings return immediately; refreshes coalesce by directory and use separate metadata workers. IPC can publish the same cached metadata before the authoritative refresh. Flutter retains successful responses and rejects obsolete account/path/revision events; it does not enumerate mounts.
 
 Migration refuses current-account dirty Rclone VFS metadata and editor recovery spools, leaving both untouched. Existing cache bindings remain checked. Disposable tests exercise the native filesystem; a user upgrade still requires inspecting the actual old queues before switching.

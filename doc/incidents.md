@@ -1,5 +1,12 @@
 # TwoDrive 故障记录
 
+## TD-20261126-04：Linux 云盘迁移后旧桥接仍包含云盘启动路径
+
+- 日期、范围与影响：2026-11-26，PR #98 的 Linux 开发引擎。常规挂载已使用 TwoDriveFS，但旧 Rclone 桥接的启动和 worker 仍保留百度、iCloud 分支。未观察到本机 0.4.0 通过它们挂载；此处是移除剩余入口，不是数据丢失修复。关联 TD-20261125-PROVIDERS。
+- 证据及修复：隔离用例直接请求旧桥接处理云盘，原实现已进入组件初始化，而不是按连接类型拒绝。Linux 桥接在启动及 worker 入口均只接受只读设备连接；百度、iCloud 在 Linux 只走 TwoDriveFS。Windows WinFsp、iCloud 的 Rclone 协议适配及百度官方 API 不变。
+- 数据保护：不删除或重写旧 VFS 内容和编辑恢复副本。两种旧 VFS 目录存在脏数据、或存在待恢复编辑时继续拒绝迁移；不回退到旧桥接。
+- 验证与本机部署：原实现的直调用回归失败，修复后通过；Linux 桌面引擎 51 项通过、4 项默认忽略，严格 Clippy 通过。另显式执行了 TwoDriveFS 浅目录、桥接 FUSE、只读设备双挂载和保存会话恢复检查，均用隔离合成数据。发布模式构建后仅替换本机 0.4.0 引擎，校验了运行进程的摘要，四个原挂载均恢复为 TwoDriveFS，确认账号绑定和旧缓存清单不变。未做真实云端写入或 Windows 原生验证。
+
 ## TD-20261125-DAV-PACKAGE：独立 DAV Debian 开发测试包
 
 - 将 #72 的 DAV 开发测试包按维护者要求从客户端功能中拆出。通过现有 debhelper 与 dpkg-buildpackage、独立构建 profile 生成 twodrive-dav，保留便携 payload；稳定 twodrive 包不改变。

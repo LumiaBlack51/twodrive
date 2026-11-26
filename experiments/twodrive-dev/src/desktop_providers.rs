@@ -63,13 +63,7 @@ pub fn mount_supported(p: &Profile) -> bool {
 }
 #[cfg(not(windows))]
 pub fn uses_readonly_bridge(p: &Profile) -> bool {
-    descriptor(&p.kind)
-        .map(|d| {
-            d["capabilities"]["mount"] == true
-                && (d["mount_backend"] == "readonly_bridge"
-                    || (!editable(p) && d["mount_backend"] != "twodrivefs"))
-        })
-        .unwrap_or(false)
+    p.kind == "peer" && !editable(p) && mount_supported(p)
 }
 pub fn prepare(p: &mut Profile, state: &twodrive_dev::state::State) -> anyhow::Result<()> {
     descriptor(&p.kind)?;

@@ -1,4 +1,4 @@
-//! Owned account mount: Linux FUSE or Windows WinFsp over the Provider bridge.
+//! Windows WinFsp and Linux read-only peer mounts over the Provider bridge.
 use super::*;
 use std::path::Component;
 #[cfg(windows)]
@@ -110,6 +110,8 @@ fn validate_target(path: &Path, private: &Path, protected: &[PathBuf]) -> anyhow
     Ok(())
 }
 pub(super) fn start(app: &App, p: &Profile, cancel: &AtomicBool) -> anyhow::Result<Process> {
+    #[cfg(target_os = "linux")]
+    require_linux_bridge_profile(p)?;
     ensure!(installed(), "{}", missing_driver());
     rclone_drive::binary()?;
     validate_target(
@@ -312,7 +314,19 @@ fn start_component(
     }
     Ok((component, control))
 }
+
+#[cfg(target_os = "linux")]
+fn require_linux_bridge_profile(p: &Profile) -> anyhow::Result<()> {
+    ensure!(
+        providers::uses_readonly_bridge(p),
+        "Linux 挂载桥只支持只读设备连接"
+    );
+    Ok(())
+}
+
 pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    require_linux_bridge_profile(p)?;
     lifecycle("worker-start");
     #[cfg(target_os = "linux")]
     install_worker_termination_handler()?;
@@ -332,6 +346,8 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     }))?;
     let _lock = cache.run_lock()?;
     let writable = backend.manual_upload_supported();
+    #[cfg(target_os = "linux")]
+    ensure!(!writable, "Linux 挂载桥不能获得写入权限");
     let persistent = State::new(account_cache(app, p, &binding).join("vfs"))?;
     let recovery = account_cache(app, p, &binding).join("write-recovery");
     let legacy_dirty = dirty_cache(&persistent.dir)?;
@@ -340,6 +356,9 @@ pub(super) fn worker(app: &App, p: &Profile) -> anyhow::Result<()> {
     }
     #[cfg(target_os = "linux")]
     let _target = LinuxTarget::prepare(&p.mount_path)?;
+    #[cfg(target_os = "linux")]
+    let bridge = Bridge::start(backend, &cache.dir)?;
+    #[cfg(windows)]
     let bridge = if matches!(p.kind.as_str(), "icloud" | "baidu") {
         Bridge::start_indexed(
             backend,
@@ -824,6 +843,70 @@ pub(super) fn ensure_native_migration(mount: &Path, binding: &str) -> anyhow::Re
 #[cfg(all(test, target_os = "linux"))]
 mod migration_tests {
     use super::*;
+
+    #[test]
+    fn linux_bridge_only_accepts_supported_read_only_connections() {
+        for kind in [
+            "baidu", "icloud", "onedrive", "google", "dav", "smb", "peer",
+        ] {
+            for writable in [false, true] {
+                let profile = Profile {
+                    kind: kind.into(),
+                    writable,
+                    ..Default::default()
+                };
+                let expects_bridge = kind == "peer" && !writable;
+                assert_eq!(providers::uses_readonly_bridge(&profile), expects_bridge);
+            }
+        }
+    }
+
+    #[test]
+    fn linux_cloud_mounts_cannot_start_the_old_bridge_directly() {
+        let root = tempfile::tempdir().unwrap();
+        let state = State::new(root.path().join("state")).unwrap();
+        let app = App {
+            args: Args {
+                tdlink_server: false,
+                state: state.dir.clone(),
+                peer_bin: PathBuf::new(),
+                launcher: PathBuf::new(),
+                mount_worker: None,
+                backup_worker: None,
+                native_local_fixture_root: None,
+            },
+            state,
+            config: Config::default(),
+            connected: None,
+            backend: None,
+            gateway: None,
+            mounted: None,
+            backup: None,
+            network: Arc::default(),
+            inactive: HashMap::new(),
+            jobs: HashMap::new(),
+            native_fixture: local_files::NativeFixture::default(),
+            native_runtime: cfapi_runtime::Runtime::default(),
+        };
+        for kind in ["baidu", "icloud"] {
+            let profile = Profile {
+                kind: kind.into(),
+                mount_path: root.path().join("must-not-create/mount"),
+                ..Default::default()
+            };
+            for result in [
+                start(&app, &profile, &AtomicBool::new(false)).map(drop),
+                worker(&app, &profile),
+            ] {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "Linux 挂载桥只支持只读设备连接"
+                );
+            }
+            assert!(!profile.mount_path.parent().unwrap().exists());
+        }
+    }
+
     #[test]
     fn migration_refuses_dirty_metadata_and_editor_recovery_without_removing_either() {
         let root = tempfile::tempdir().unwrap();
@@ -834,9 +917,17 @@ mod migration_tests {
         let dirty = account.join("vfs/vfsMeta/namespace/file");
         fs::write(&dirty, b"{\"Dirty\":true}").unwrap();
         assert!(ensure_native_migration(mount, binding).is_err());
-        assert!(dirty.is_file());
+        assert_eq!(fs::read(&dirty).unwrap(), b"{\"Dirty\":true}");
         fs::write(&dirty, b"{\"Dirty\":false}").unwrap();
         assert!(ensure_native_migration(mount, binding).is_ok());
+        assert_eq!(fs::read(&dirty).unwrap(), b"{\"Dirty\":false}");
+        let legacy = mount.join("linux-readonly/vfs/vfsMeta/namespace");
+        fs::create_dir_all(&legacy).unwrap();
+        let legacy_dirty = legacy.join("file");
+        fs::write(&legacy_dirty, b"{\"Dirty\":true}").unwrap();
+        assert!(ensure_native_migration(mount, binding).is_err());
+        assert_eq!(fs::read(&legacy_dirty).unwrap(), b"{\"Dirty\":true}");
+        fs::write(&legacy_dirty, b"{\"Dirty\":false}").unwrap();
         fs::create_dir_all(account.join("write-recovery")).unwrap();
         let edited = account.join("write-recovery/edit.content");
         fs::write(&edited, b"unsynchronized").unwrap();
