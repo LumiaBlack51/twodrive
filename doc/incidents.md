@@ -1,5 +1,11 @@
 # TwoDrive 故障记录
 
+## TD-20261125-DAV-PACKAGE：独立 DAV Debian 开发测试包
+
+- 将 #72 的 DAV 开发测试包按维护者要求从客户端功能中拆出。通过现有 debhelper 与 dpkg-buildpackage、独立构建 profile 生成 twodrive-dav，保留便携 payload；稳定 twodrive 包不改变。
+- 测试包校验覆盖依赖、原始文件摘要及 .buildinfo/.changes。完整发布仍须另行生成并校验源码包、二进制/调试包，不能用此测试包代替。说明测试包不安装便携安装器的 Nautilus 徽标资产。
+- 本机 Debian policy 和九项合成包校验回归通过；正式 CI 构建及安装结果以 PR 为准，合成包不代表实机安装。
+
 ## TD-20261125-MOUNT-ROOT-BADGES：Google Drive / OneDrive 根目录角标缺失
 
 - 用户截图中百度和 iCloud 根目录显示云标记，Google Drive / OneDrive 没有。既有 native_states 仅在 files 表有对应行时返回状态；原生 FUSE 的合成根目录不一定有该行，因此漏掉角标。
@@ -13,7 +19,9 @@
 - 公开备份 provider 入口对六个中断边界及完成回执重试新增回归；另覆盖缺口期间出现外来目标和本地源改变的保留行为。旧入口稳定失败于第二步之后“云端文件已移除”。验证使用合成提供者，未操作真实云端。
 - 同次移除 TwoDriveFS 把启动展示快照当成新权威根列表的捷径；回归确认权威查询不发布旧展示数据。真实网络加载耗时另行部署后测量。
 
-- 后续 worker 审查补充：原 hash-only 的 reconcile_intent 可把相同字节的外来对象当成已确认备份，绕过 provider 日志身份检查。iCloud 声明需校验暂存身份后，worker 保留意图与旧基线并交给替换日志恢复，不按摘要独立确认；不同本地代次先拒绝且保留旧意图。新增 worker 层“同字节、不同对象身份”回归；公开入口的外来目标测试也使用相同字节，必须仍拒绝。百度及既有条件上传的恢复逻辑保留。
+2026-11-25 审查补记：上述回归从 provider 入口验证恢复。上层 worker 会先运行 reconcile_intent；目标版本改变且内容摘要相同时，它可在核对暂存对象身份前更新备份基线。仍需覆盖由另一客户端写入同内容对象时的 worker 恢复和冲突保留。本次核对代码，未向真实服务写入。[审查记录](https://github.com/LumiaBlack51/twodrive/pull/98#issuecomment-7164303211)
+
+2026-11-26 修复补记：原 hash-only 的 reconcile_intent 可把相同字节的外来对象当成已确认备份，绕过 provider 日志身份检查。iCloud 声明需校验暂存身份后，worker 保留意图与旧基线并交给替换日志恢复，不按摘要独立确认；不同本地代次先拒绝且保留旧意图。新增 worker 层“同字节、不同对象身份”回归；公开入口的外来目标测试也使用相同字节，必须仍拒绝。百度及既有条件上传的恢复逻辑保留。 旧 hash-only 逻辑在新增回归中稳定失败，修复后全套与严格 Clippy 通过。
 
 ## TD-20261125-DIRECTORY-ORDER：跨进程浅目录响应倒序覆盖
 

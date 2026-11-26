@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=TwoDrive DAV
+Comment=Browse cloud files and manage backups
+Exec=/usr/bin/twodrive-dav
+Icon=twodrive-dav
+Terminal=false
+Categories=Network;FileTransfer;
+StartupWMClass=app.twodrive.twodrive_dav
