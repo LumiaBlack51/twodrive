@@ -26,6 +26,7 @@ class SyncPolicyCard extends StatefulWidget {
 }
 
 class _SyncPolicyCardState extends State<SyncPolicyCard> {
+  final addButtonFocus = FocusNode();
   late final rules = {
     for (final type in RuleType.values)
       type: List<String>.from(
@@ -34,6 +35,13 @@ class _SyncPolicyCardState extends State<SyncPolicyCard> {
   };
   bool saving = false;
   String? message;
+
+  @override
+  void dispose() {
+    addButtonFocus.dispose();
+    super.dispose();
+  }
+
   Future<void> add(RuleType type) async {
     String? value;
     if (type == RuleType.folder) {
@@ -119,16 +127,25 @@ class _SyncPolicyCardState extends State<SyncPolicyCard> {
               ),
           Wrap(
             spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              PopupMenuButton<RuleType>(
-                enabled: !saving,
-                onSelected: add,
-                itemBuilder: (_) => [
+              MenuAnchor(
+                childFocusNode: addButtonFocus,
+                menuChildren: [
                   for (final type in RuleType.values)
-                    PopupMenuItem(value: type, child: Text(type.label)),
+                    MenuItemButton(
+                      onPressed: saving ? null : () => add(type),
+                      child: Text(type.label),
+                    ),
                 ],
-                child: Padding(
-                  padding: EdgeInsets.all(12),
+                builder: (context, controller, child) => FilledButton.tonal(
+                  focusNode: addButtonFocus,
+                  onPressed: saving
+                      ? null
+                      : () => controller.isOpen
+                            ? controller.close()
+                            : controller.open(),
                   child: Text(tr('添加排除项')),
                 ),
               ),
