@@ -1,5 +1,8 @@
 """Profile edits with a retained native link; no account login/registration."""
 import argparse
+import ctypes
+from ctypes import wintypes
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -48,6 +51,83 @@ def run(engine_path, peer_path):
                       'binding_change_rejected': True, 'root_registered': False,
                       'cloud_requests': False}))
 
+def check_sign_out(engine_path, peer_path):
+    import nt
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel.CreateEventW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+
+    with tempfile.TemporaryDirectory(prefix='td-native-signout-') as private:
+        root = Path(private)
+        state = root / 'client'
+        native_state = state / 'native-fixture'
+        native_state.mkdir(parents=True)
+        profiles = []
+        tokens = {}
+        for profile_id in ('owner', 'other'):
+            account = root / profile_id
+            account.mkdir()
+            tokens[profile_id] = account / 'tokens.json'
+            tokens[profile_id].write_bytes(b'disposable sign-out test data')
+            profiles.append({'id': profile_id, 'revision': f'{profile_id}-revision',
+                             'name': profile_id, 'kind': 'onedrive', 'network_route': 'system',
+                             'mount_path': str(root / f'mount-{profile_id}'),
+                             'onedrive_state': str(account)})
+        profile_file = state / 'profiles.json'
+        profile_file.write_text(json.dumps({'profiles': profiles, 'selected': 'other'}))
+        profile_before = profile_file.read_bytes()
+        owner_token = tokens['owner'].read_bytes()
+        link_file = state / 'native-desktop.json'
+        link_file.write_text(json.dumps({'profile': 'owner', 'revision': 'owner-revision',
+                                        'root': str(root / 'unregistered-native'),
+                                        'state': str(native_state), 'auto_start': False}))
+        link_before = link_file.read_bytes()
+
+        # Exercise the same OS signal a separate native worker holds. No root
+        # registration, credentials, or cloud connection is needed.
+        canonical = nt._getfinalpathname(str(native_state))
+        digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+        name = 'Local\\TwoDriveDevNativeStop-' + digest
+        engine = desktop.Engine(engine_path, peer_path, root)
+        try:
+            event = kernel.CreateEventW(None, True, False, name)
+            if not event:
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                cfapi = engine.call('status')['cfapi']
+                assert cfapi['running'] and cfapi['profile'] == 'owner', cfapi
+                assert engine.call('profiles')['selected'] == 'other'
+                error = engine.call('sign_out', {'id': 'owner'}, failure=True)
+                assert '请先停止此账户的 CFAPI 原生同步' in error, error
+                assert profile_file.read_bytes() == profile_before
+                assert tokens['owner'].read_bytes() == owner_token
+                assert link_file.read_bytes() == link_before
+
+                engine.call('sign_out', {'id': 'other'})
+                assert not tokens['other'].exists()
+                remaining = engine.call('profiles')['profiles']
+                assert [p['id'] for p in remaining] == ['owner']
+                assert engine.call('status')['cfapi']['running']
+                assert tokens['owner'].read_bytes() == owner_token
+            finally:
+                assert kernel.CloseHandle(event), 'Failed to close fixture event'
+
+            assert engine.call('status')['cfapi']['running'] is False
+            engine.call('sign_out', {'id': 'owner'})
+            assert not tokens['owner'].exists()
+            assert not engine.call('profiles')['profiles']
+            assert not (root / 'unregistered-native').exists()
+        finally:
+            engine.close()
+
+    print(json.dumps({'native_owner_sign_out_blocked': True,
+                      'other_account_sign_out_allowed': True,
+                      'owner_sign_out_after_stop_allowed': True}))
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -55,3 +135,4 @@ if __name__ == '__main__':
     parser.add_argument('--peer', required=True)
     args = parser.parse_args()
     run(args.engine, args.peer)
+    check_sign_out(args.engine, args.peer)

@@ -14,6 +14,7 @@ class ConnectionCard extends StatelessWidget {
     this.issue,
     this.onSelect,
     this.onDisconnect,
+    this.onSignOut,
     this.onEdit,
     this.onDelete,
     this.onRefresh,
@@ -28,7 +29,12 @@ class ConnectionCard extends StatelessWidget {
   final String connectLabel;
   final Json? usage;
   final String? issue;
-  final VoidCallback? onSelect, onDisconnect, onEdit, onDelete, onRefresh;
+  final VoidCallback? onSelect,
+      onDisconnect,
+      onSignOut,
+      onEdit,
+      onDelete,
+      onRefresh;
   final VoidCallback? onMount, onOpenMount;
   @override
   Widget build(BuildContext context) {
@@ -86,22 +92,33 @@ class ConnectionCard extends StatelessWidget {
               label: Text(mounted ? tr('卸载') : tr('挂载')),
             ),
           ),
-        if (online)
-          IconButton(
-            tooltip: tr('断开此连接'),
-            onPressed: onDisconnect,
-            icon: const Icon(Icons.link_off),
+      ],
+    );
+    final managementActions = {
+      if (online) '断开此连接': (Icons.link_off, onDisconnect),
+      '编辑': (Icons.edit_outlined, onEdit),
+      '删除配置': (Icons.delete_outline, onDelete),
+      if (online) '退出登录…': (Icons.logout, onSignOut),
+    };
+    final menu = PopupMenuButton<String>(
+      tooltip: tr('更多操作'),
+      icon: const Icon(Icons.more_horiz),
+      enabled: managementActions.values.any((action) => action.$2 != null),
+      onSelected: (label) => managementActions[label]?.$2?.call(),
+      itemBuilder: (context) => [
+        for (final MapEntry(key: label, value: (icon, callback))
+            in managementActions.entries)
+          PopupMenuItem<String>(
+            value: label,
+            enabled: callback != null,
+            child: Row(
+              children: [
+                Icon(icon, size: 18),
+                const SizedBox(width: 10),
+                Flexible(child: Text(tr(label))),
+              ],
+            ),
           ),
-        IconButton(
-          tooltip: tr('编辑'),
-          onPressed: onEdit,
-          icon: const Icon(Icons.edit_outlined),
-        ),
-        IconButton(
-          tooltip: tr('删除配置'),
-          onPressed: onDelete,
-          icon: const Icon(Icons.delete_outline),
-        ),
       ],
     );
     final details = Column(
@@ -170,6 +187,7 @@ class ConnectionCard extends StatelessWidget {
                     Expanded(child: details),
                     const SizedBox(width: 24),
                     actions,
+                    menu,
                   ],
                 );
               }
@@ -183,6 +201,7 @@ class ConnectionCard extends StatelessWidget {
                       icon,
                       const SizedBox(width: 12),
                       Expanded(child: details),
+                      menu,
                     ],
                   ),
                   const SizedBox(height: 12),

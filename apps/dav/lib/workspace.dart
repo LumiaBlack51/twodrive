@@ -312,12 +312,18 @@ class _WorkspaceState extends State<Workspace>
   }
 
   Future<void> signOut() async {
-    await openDashboardFromTray(2);
+    final profile = c.profile;
+    if (profile == null) return;
+    await openDashboardFromTray(WorkspacePage.connections.index);
+    if (mounted) await confirmSignOut(profile);
+  }
+
+  Future<void> confirmSignOut(Json profile) async {
     if (await confirm(
-      tr('退出登录？'),
-      tr('断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。'),
+      tr('退出登录「{arg0}」？', [profile['name']]),
+      tr('此操作会断开连接并移除保存的登录信息和连接配置。服务器文件、备份源和设备配对状态会保留。'),
     )) {
-      await c.signOut();
+      await c.signOut(profile['id'] as String);
     }
   }
 
@@ -1087,27 +1093,6 @@ class _WorkspaceState extends State<Workspace>
         );
   Widget connectionsPage() => ListView(
     children: [
-      if (c.connected)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 16),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              onPressed: c.busy
-                  ? null
-                  : () async {
-                      if (await confirm(
-                        tr('退出登录？'),
-                        tr('断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。'),
-                      )) {
-                        await c.signOut();
-                      }
-                    },
-              icon: const Icon(Icons.logout),
-              label: Text(tr('退出登录')),
-            ),
-          ),
-        ),
       Align(
         alignment: Alignment.centerLeft,
         child: FilledButton.icon(
@@ -1172,6 +1157,7 @@ class _WorkspaceState extends State<Workspace>
           onDisconnect: c.busy || !c.available
               ? null
               : () => unawaited(c.disconnect(p['id'] as String)),
+          onSignOut: c.busy || !c.available ? null : () => confirmSignOut(p),
           onEdit:
               c.busy || !c.available || c.isProfileConnected(p['id'] as String)
               ? null

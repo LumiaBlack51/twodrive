@@ -135,6 +135,7 @@ const _english = <String, String>{
   '卸载': 'Unmount',
   '挂载': 'Mount',
   '断开此连接': 'Disconnect this account',
+  '更多操作': 'More actions',
   '编辑': 'Edit',
   '删除配置': 'Remove connection',
   '当前使用': 'Selected',
@@ -307,9 +308,9 @@ const _english = <String, String>{
   '无法打开浏览器，请复制发布地址打开': 'Copy the release address into your browser.',
   '系统托盘不可用，关闭窗口将退出客户端。':
       'System tray unavailable. Closing the window will quit TwoDrive.',
-  '退出登录？': 'Sign out?',
-  '断开此账号并移除客户端中保存的登录信息。服务器文件、备份源和独立的设备配对状态会保留。':
-      'Remove saved sign-in details for this account. Remote files, backup sources and device pairings are kept.',
+  '退出登录「{arg0}」？': 'Sign out of {arg0}?',
+  '此操作会断开连接并移除保存的登录信息和连接配置。服务器文件、备份源和设备配对状态会保留。':
+      'This disconnects the account and removes its saved sign-in details and connection profile. Remote files, backup sources and device pairings are kept.',
   '名称': 'Name',
   '请输入有效的单个文件名': 'Enter a valid file name',
   '确定': 'OK',
