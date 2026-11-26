@@ -6,6 +6,7 @@ import 'updates.dart';
 import 'desktop_preferences.dart';
 import 'language.dart';
 import 'file_manager.dart';
+part 'client_transfer_history.dart';
 
 typedef Json = Map<String, dynamic>;
 
@@ -13,24 +14,44 @@ class AuthorizationExpired extends StateError {
   AuthorizationExpired(super.message);
 }
 
-enum TransferPhase { running, completed, failed }
+enum TransferPhase { running, completed, failed, unconfirmed }
 
 class Transfer {
-  Transfer(this.id, this.operation, this.args);
+  Transfer(this.id, this.operation, this.args, {this.account});
   final int id;
   final String operation;
   final Json args;
+  final String? account;
   int done = 0;
   int total = 0;
   TransferPhase phase = TransferPhase.running;
-  String get state => switch (phase) {
-    TransferPhase.running => tr('传输中'),
-    TransferPhase.completed => tr('已完成'),
-    TransferPhase.failed => tr('未完成'),
+  String get stateKey => switch (phase) {
+    TransferPhase.running => '传输中',
+    TransferPhase.completed => '已完成',
+    TransferPhase.failed => '未完成',
+    TransferPhase.unconfirmed => '结果未确认',
   };
+  String get state => tr(stateKey);
+  set state(String value) {
+    phase = switch (value) {
+      '传输中' => TransferPhase.running,
+      '已完成' => TransferPhase.completed,
+      '未完成' => TransferPhase.failed,
+      '结果未确认' => TransferPhase.unconfirmed,
+      _ => throw ArgumentError.value(value, 'state'),
+    };
+  }
+
   String? error;
   String get name => (args['path'] as String).split('/').last;
+  bool get upload => operation == 'upload';
+  bool get view => operation == 'view';
 }
+
+typedef TransferRow = ({Json info, Transfer? manual});
+typedef _DirectoryOwner = ({String? profile, Object revision});
+typedef _DirectoryKey = ({_DirectoryOwner owner, String path});
+typedef _DirectorySnapshot = ({List<Json> entries, DateTime checked});
 
 class StorageClient extends ChangeNotifier {
   StorageClient() {
@@ -80,6 +101,8 @@ class StorageClient extends ChangeNotifier {
   Process? _process;
   final Map<int, Completer<Json>> _pending = {};
   final List<Transfer> transfers = [];
+  final _TransferHistory _transferHistory = _TransferHistory();
+  String? transferHistoryError;
   List<Json> profiles = [];
   List<Json> providers = [];
   List<Json> entries = [];
@@ -87,7 +110,9 @@ class StorageClient extends ChangeNotifier {
   final Map<String, DateTime> _quotaChecked = {};
   final Map<String, dynamic> _quotaVersions = {};
   final Map<String, Future<void>> _quotaRequests = {};
-  final Map<String, Json> _views = {};
+  final Map<String, ({_DirectoryOwner owner, String path, bool stale})> _views =
+      {};
+  final Map<_DirectoryKey, _DirectorySnapshot> _directories = {};
   Json status = {};
   String? selected;
   String path = '/';
@@ -124,31 +149,65 @@ class StorageClient extends ChangeNotifier {
   bool _disposed = false;
   DateTime? _directoryChecked;
   bool _directoryStale = true;
+  String? _directoryError;
+  String? get directoryError => _directoryError;
+  bool get directoryLoaded => _directoryChecked != null || entries.isNotEmpty;
+  bool get directoryLoading => _directoryRead?.generation == _browseGeneration;
+  bool get directoryReady =>
+      directoryLoaded &&
+      !directoryLoading &&
+      _directoryError == null &&
+      (_directoryChecked == null || !_directoryStale);
+  bool get needsDirectoryRead =>
+      connected &&
+      available &&
+      !busy &&
+      !quitting &&
+      !_disposed &&
+      _selectingProfile == null &&
+      !directoryLoading &&
+      _directoryError == null &&
+      _directoryChecked == null &&
+      entries.isEmpty;
   bool available = false;
   bool quitting = false;
   int _id = 0;
   int _browseGeneration = 0;
   int _selectionEpoch = 0;
   String? _selectingProfile;
-  int? _directoryRequest;
+  ({int id, int generation, Future<void> future})? _directoryRead;
   int? activeId;
   bool _showFiles = false;
+  int _filesViewEpoch = 0;
   bool _showQuota = false;
   bool _viewVisible = false;
   bool get viewVisible => _viewVisible;
   int _visibilityEpoch = 0;
   int get visibilityEpoch => _visibilityEpoch;
+  Timer? _transferRefresh;
   int _statusVersion = 0;
 
   void setView({
     required bool visible,
     bool files = false,
     bool quota = false,
+    bool transfers = false,
   }) {
     if (_viewVisible != visible) _visibilityEpoch++;
     _viewVisible = visible;
-    _showFiles = visible && files;
+    final showFiles = visible && files;
+    if (_showFiles != showFiles) _filesViewEpoch++;
+    _showFiles = showFiles;
     _showQuota = visible && quota;
+    if (visible && transfers) {
+      _transferRefresh ??= Timer.periodic(
+        const Duration(seconds: 3),
+        (_) => unawaited(refreshView()),
+      );
+    } else {
+      _transferRefresh?.cancel();
+      _transferRefresh = null;
+    }
   }
 
   Future<void> refreshView({
@@ -189,10 +248,83 @@ class StorageClient extends ChangeNotifier {
     if (status['overall'] is Map)
       ...((status['overall']?['active'] as List?) ?? [])
     else ...[
-      ...((status['backup']?['active'] as List?) ?? []),
+      for (final item
+          in ((status['backup']?['active'] as List?) ?? []).whereType<Map>())
+        {...item, 'source': 'backup', 'profile': selected},
       ...((status['mount_activity']?['active'] as List?) ?? []),
     ],
-  ].map((v) => Map<String, dynamic>.from(v as Map)).toList();
+  ].whereType<Map>().map((v) => Map<String, dynamic>.from(v)).toList();
+  Json transferInfo(Transfer task) => {
+    'id': task.id,
+    'profile': task.args['profile'],
+    'revision': task.args['revision'],
+    'name': task.name,
+    'kind': task.upload ? 'upload' : 'download',
+    'view': task.view,
+    'source': 'manual',
+    'state': task.stateKey,
+    'path': task.args['path'],
+    'local_path': task.args[task.upload ? 'source' : 'output'],
+    'bytes_done': task.done,
+    'bytes_total': task.total,
+    'account':
+        task.account ??
+        profiles
+            .where(
+              (p) =>
+                  p['id'] == task.args['profile'] &&
+                  p['revision'] == task.args['revision'],
+            )
+            .firstOrNull?['name'] ??
+        '原连接',
+  };
+  List<TransferRow> get transferRows => [
+    for (final task in transfers.where(
+      (task) => task.phase == TransferPhase.running,
+    ))
+      (info: transferInfo(task), manual: task),
+    for (final item in syncActivity) (info: item, manual: null),
+    for (final task in transfers.where(
+      (task) => task.phase != TransferPhase.running,
+    ))
+      (info: transferInfo(task), manual: task),
+    for (final item
+        in ((status['overall']?['recent'] as List?) ??
+                (status['backup']?['recent'] as List?) ??
+                [])
+            .whereType<Map>())
+      (
+        info: {'source': 'backup', ...Map<String, dynamic>.from(item)},
+        manual: null,
+      ),
+  ];
+
+  String transferState(Json item) =>
+      item['state']?.toString() ??
+      (paused
+          ? '已暂停'
+          : item['source'] == 'backup'
+          ? '正在备份'
+          : '传输中');
+
+  bool transferShowsProgress(Json item) {
+    final state = transferState(item);
+    final total = item['bytes_total'] as num? ?? 0;
+    final done = item['bytes_done'] as num? ?? 0;
+    return (state == '传输中' || state == '正在备份') && (total <= 0 || done < total);
+  }
+
+  String transferLabel(Json item) {
+    final source = switch (item['source']) {
+      'backup' => '备份',
+      'manual' when item['view'] == true => '查看',
+      'manual' => item['kind'] == 'download' ? '下载' : '上传',
+      _ => '后台同步',
+    };
+    final account = item['account']?.toString();
+    return account == null || account.isEmpty ? source : '$source · $account';
+  }
+
   bool get syncing =>
       status['overall']?['syncing'] == true ||
       busy ||
@@ -206,8 +338,10 @@ class StorageClient extends ChangeNotifier {
         status = await request('pause', {'paused': !paused});
       });
   Future<void> signOut() => action(tr('退出登录'), () async {
-    await request('sign_out', {'id': selected});
-    entries = [];
+    final id = selected;
+    await request('sign_out', {'id': id});
+    _invalidateDirectories(id);
+    _showDirectory('/');
     status = {};
     await loadProfiles();
     await refreshStatus();
@@ -359,6 +493,8 @@ class StorageClient extends ChangeNotifier {
     'profile': selected,
     'revision': profile?['revision'] ?? '',
   };
+  _DirectoryOwner get _directoryOwner =>
+      (profile: selected, revision: profile?['revision'] ?? '');
   bool get proxyFallback => connected && status['route_fallback'] == true;
   void requireProfile(Json args) {
     final id = args['profile'] as String? ?? selected;
@@ -379,6 +515,20 @@ class StorageClient extends ChangeNotifier {
     bool server = false,
     String? nativeFixtureRoot,
   }) async {
+    try {
+      final saved = await _transferHistory.load(
+        File('$state/transfer-history.json'),
+      );
+      if (_disposed) return;
+      transfers.addAll(saved);
+      for (final task in saved) {
+        if (task.id > _id) _id = task.id;
+      }
+    } catch (_) {
+      transferHistoryError = '无法读取本机传输记录';
+    }
+    if (_disposed) return;
+    notifyListeners();
     try {
       await preferences.load(File('$state/desktop-settings.json'));
       desktopLocale.value = preferences.language;
@@ -452,9 +602,16 @@ class StorageClient extends ChangeNotifier {
     if (id > _id) _id = id;
     if (message['event'] == 'operation') {
       if (message['op'] == 'upload' || message['op'] == 'download') {
-        if (message['running'] != true &&
-            (message['profile'] == null || message['profile'] == selected)) {
-          _directoryStale = true;
+        // Tracked uploads refresh on their reply. The completion event can
+        // precede that reply, so starting both reads cancels useful work.
+        if (message['op'] == 'upload' &&
+            message['running'] != true &&
+            !transfers.any((task) => task.id == id)) {
+          final profile = message['profile'] as String?;
+          _invalidateDirectories(profile);
+          if (_showFiles && (profile == null || profile == selected)) {
+            unawaited(refreshView());
+          }
         }
         notifyListeners();
         return;
@@ -479,8 +636,9 @@ class StorageClient extends ChangeNotifier {
         if (message['status'] is Map) {
           _applyStatus(Map<String, dynamic>.from(message['status'] as Map));
         }
-        _directoryStale = true;
-        _browseGeneration++;
+        if (const ['mkdir', 'rename', 'delete'].contains(message['op'])) {
+          _invalidateDirectories(message['profile'] as String?);
+        }
         if (!quitting &&
             message['op'] != 'quit' &&
             (_showFiles || message['status'] is! Map)) {
@@ -490,9 +648,30 @@ class StorageClient extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (message['event'] == 'directory_snapshot') {
+      if (_directoryRead?.id == id &&
+          _directoryRead?.generation == _browseGeneration &&
+          message['profile'] == selected &&
+          message['revision'] == profile?['revision'] &&
+          message['path'] == path &&
+          message['entries'] is List) {
+        entries = (message['entries'] as List)
+            .map(
+              (entry) => {
+                ...Map<String, dynamic>.from(entry as Map),
+                ...target,
+              },
+            )
+            .toList();
+        _directoryChecked = DateTime.now();
+        _directoryStale = true;
+        notifyListeners();
+      }
+      return;
+    }
     if (message['event'] == 'progress') {
       final task = transfers.where((t) => t.id == id).firstOrNull;
-      if (task != null) {
+      if (task != null && task.phase == TransferPhase.running) {
         task.done = message['done'] as int;
         task.total = message['total'] as int;
         notifyListeners();
@@ -523,6 +702,9 @@ class StorageClient extends ChangeNotifier {
     status = {};
     entries = [];
     _views.clear();
+    _directories.clear();
+    _directoryChecked = null;
+    _directoryError = null;
     _selectingProfile = null;
     _selectionEpoch++;
     _browseGeneration++;
@@ -559,13 +741,14 @@ class StorageClient extends ChangeNotifier {
   int reserveRequestId() => ++_id;
 
   void _applyProfiles(Json result) {
+    final previous = _directoryOwner;
     profiles = (result['profiles'] as List).cast<Json>();
     providers = ((result['providers'] as List?) ?? []).cast<Json>();
-    _views.removeWhere(
-      (id, view) => !profiles.any(
-        (p) => p['id'] == id && p['revision'] == view['revision'],
-      ),
+    bool hasOwner(_DirectoryOwner owner) => profiles.any(
+      (p) => p['id'] == owner.profile && p['revision'] == owner.revision,
     );
+    _views.removeWhere((_, view) => !hasOwner(view.owner));
+    _directories.removeWhere((key, _) => !hasOwner(key.owner));
     for (final id in quotas.keys.toList()) {
       if (!profiles.any(
         (p) => p['id'] == id && p['revision'] == _quotaVersions[id],
@@ -581,6 +764,10 @@ class StorageClient extends ChangeNotifier {
     selected = connected
         ? status['profile'] as String?
         : result['selected'] as String?;
+    if (connected && previous != _directoryOwner) {
+      _browseGeneration++;
+      _showDirectory('/');
+    }
   }
 
   Future<void> loadProfiles() async {
@@ -593,34 +780,26 @@ class StorageClient extends ChangeNotifier {
     final previous = status['profile'];
     final wasConnected = connected;
     if (wasConnected && previous is String && previous != next['profile']) {
-      _views[previous] = {
-        'path': path,
-        'entries': entries.map((e) => Map<String, dynamic>.from(e)).toList(),
-        'revision': profiles
-            .where((p) => p['id'] == previous)
-            .firstOrNull?['revision'],
-        'checked': _directoryChecked,
-        'stale': _directoryStale,
-      };
+      _views[previous] = (
+        owner: _directoryOwner,
+        path: path,
+        stale: _directoryStale,
+      );
     }
     status = next;
-    _views.removeWhere(
-      (id, view) =>
-          !isProfileConnected(id) ||
-          !profiles.any(
-            (p) => p['id'] == id && p['revision'] == view['revision'],
-          ),
-    );
+    _views.removeWhere((id, _) => !isProfileConnected(id));
+    _directories.removeWhere((key, _) {
+      final id = key.owner.profile;
+      return id == null || !isProfileConnected(id);
+    });
     if (connected) selected = status['profile'] as String? ?? selected;
     if (!connected ||
         previous != status['profile'] ||
         wasConnected != connected) {
-      final view = connected ? _views[status['profile']] : null;
-      entries = ((view?['entries'] as List?) ?? []).cast<Json>();
-      path = view?['path'] as String? ?? '/';
-      _directoryChecked = view?['checked'] as DateTime?;
       _browseGeneration++;
-      _directoryStale = view?['stale'] as bool? ?? true;
+      final view = connected ? _views[selected] : null;
+      _showDirectory(view?.path ?? '/');
+      if (view?.stale == true) _directoryStale = true;
     }
     _pollError = status['gateway_failed'] == true
         ? tr('配对连接已断开，请重连。')
@@ -702,45 +881,55 @@ class StorageClient extends ChangeNotifier {
 
   Future<void> pollNow({bool forceDirectory = false}) {
     if (forceDirectory) _directoryStale = true;
-    return _polling ??= _pollOnce();
+    if (_showFiles) return _pollOnce(filesEpoch: _filesViewEpoch);
+    return _polling ??= _pollOnce().whenComplete(() => _polling = null);
   }
 
-  Future<void> _pollOnce() async {
-    final wasShowingFiles = _showFiles;
+  Future<void> _pollOnce({int? filesEpoch}) async {
+    bool viewIsCurrent() =>
+        filesEpoch == null || (_showFiles && filesEpoch == _filesViewEpoch);
     await Future<void>.value();
     try {
-      if (busy ||
-          !available ||
-          quitting ||
-          _disposed ||
-          (wasShowingFiles && !_showFiles)) {
+      if (busy || !available || quitting || _disposed || !viewIsCurrent()) {
         return;
       }
       final previous = selected;
+      final owner = _directoryOwner;
       final epoch = _selectionEpoch;
-      await refreshStatus();
-      if (_disposed || quitting || !available || epoch != _selectionEpoch) {
-        return;
-      }
-      if (selected != previous) await loadProfiles();
-      if (!busy &&
-          connected &&
-          available &&
-          !quitting &&
-          (!wasShowingFiles || _showFiles) &&
-          (_directoryStale ||
-              _directoryChecked == null ||
-              DateTime.now().difference(_directoryChecked!) >=
-                  const Duration(seconds: 15))) {
-        await readDirectory(path);
+      // Directory reads coalesce by the current path and generation. A
+      // previous view's status or listing cannot own a reopened Files view.
+      final listFirst = filesEpoch != null && connected;
+      final listing = listFirst ? _refreshCurrentDirectory() : null;
+      try {
+        await refreshStatus();
+        if (_disposed ||
+            quitting ||
+            !available ||
+            !viewIsCurrent() ||
+            epoch != _selectionEpoch) {
+          return;
+        }
+        if (selected != previous) await loadProfiles();
+        if (viewIsCurrent() && (!listFirst || owner != _directoryOwner)) {
+          await _refreshCurrentDirectory();
+        }
+      } finally {
+        await listing;
       }
     } catch (e) {
       if (!_disposed && !quitting) {
         _pollError = '$e'.replaceFirst('Bad state: ', '');
         notifyListeners();
       }
-    } finally {
-      _polling = null;
+    }
+  }
+
+  Future<void> _refreshCurrentDirectory() async {
+    if (_directoryStale ||
+        _directoryChecked == null ||
+        DateTime.now().difference(_directoryChecked!) >=
+            const Duration(seconds: 15)) {
+      await browse(path);
     }
   }
 
@@ -802,9 +991,7 @@ class StorageClient extends ChangeNotifier {
         selected = id;
         if (result['entries'] is List) {
           path = '/';
-          entries = (result['entries'] as List)
-              .map((e) => {...e as Json, ...target})
-              .toList();
+          _saveDirectory(result['entries'] as List, target);
         }
         _directoryStale = result['entries'] is! List;
         if (!_directoryStale) _directoryChecked = DateTime.now();
@@ -817,10 +1004,6 @@ class StorageClient extends ChangeNotifier {
             'revision': profile?['revision'],
           }, activeId);
           await refreshStatus();
-        }
-        if (result['entries'] is List) {
-          _directoryChecked = DateTime.now();
-          _directoryStale = false;
         }
       } finally {
         await refreshStatus();
@@ -839,13 +1022,9 @@ class StorageClient extends ChangeNotifier {
     _selectingProfile = id;
     _browseGeneration++; // Invalidate the previous display before cancelling it.
     error = null;
-    final oldRead = _directoryRequest;
+    final oldRead = _directoryRead?.id;
     if (oldRead != null) {
-      try {
-        await request('cancel', {'id': oldRead});
-      } catch (_) {
-        /* selection reports errors */
-      }
+      await _cancelDirectoryRead(oldRead);
     }
     try {
       final result = await request('select', {'id': id, 'revision': revision});
@@ -862,7 +1041,7 @@ class StorageClient extends ChangeNotifier {
       if (!_disposed && epoch == _selectionEpoch) {
         _selectingProfile = null;
         notifyListeners();
-        if (_showFiles) unawaited(refreshView());
+        if (_showFiles) unawaited(_refreshCurrentDirectory());
       }
     }
   }
@@ -951,57 +1130,125 @@ class StorageClient extends ChangeNotifier {
     _selectionEpoch++;
     _selectingProfile = null;
     await request('disconnect', {'id': ?id});
+    _invalidateDirectories(id);
     if (id == selected) {
-      _browseGeneration++;
-      entries = [];
-      path = '/';
+      _showDirectory('/');
     }
     await refreshStatus();
   });
-  Future<void> browse(String target) =>
-      action(tr('读取目录'), () => readDirectory(target));
-  Future<void> readDirectory(String target) async {
-    final generation = ++_browseGeneration;
-    final identity = this.target;
-    final requestId = ++_id;
-    _directoryRequest = requestId;
-    try {
-      final result = await request('list', {
-        'path': target,
-        ...identity,
-      }, requestId);
-      if (generation != _browseGeneration ||
-          !available ||
-          _disposed ||
-          quitting) {
-        return;
+
+  void _showDirectory(String directory) {
+    path = directory;
+    final key = (owner: _directoryOwner, path: directory);
+    final cached = _directories.remove(key);
+    if (cached != null) _directories[key] = cached;
+    entries = cached?.entries ?? [];
+    _directoryChecked = cached?.checked;
+    _directoryStale = cached == null;
+    _directoryError = null;
+  }
+
+  void _saveDirectory(List listing, Json identity) {
+    entries = listing.map((e) => {...e as Json, ...identity}).toList();
+    final checked = DateTime.now();
+    _directoryChecked = checked;
+    _directoryStale = false;
+    _directoryError = null;
+    final owner = _directoryOwner;
+    final key = (owner: owner, path: path);
+    _directories.remove(key);
+    // Bound the memory used by revisited directories. The current view can
+    // still display a listing too large to retain.
+    if (owner.profile != null &&
+        owner.revision != '' &&
+        entries.length <= 2000) {
+      _directories[key] = (entries: entries, checked: checked);
+      if (_directories.length > 32) {
+        _directories.remove(_directories.keys.first);
       }
-      _directoryChecked = DateTime.now();
-      _directoryStale = false;
-      path = target;
-      entries = (result['entries'] as List)
-          .map((e) => {...e as Json, ...identity})
-          .toList();
-      notifyListeners();
+    }
+  }
+
+  void _invalidateDirectories(String? id) {
+    _directories.removeWhere((key, _) => id == null || key.owner.profile == id);
+    if (id == null || id == selected) {
+      _directoryStale = true;
+      _browseGeneration++;
+    }
+  }
+
+  Future<void> _cancelDirectoryRead(int id) async {
+    try {
+      await request('cancel', {'id': id});
     } catch (_) {
-      if (generation == _browseGeneration &&
-          !_disposed &&
-          available &&
-          !quitting) {
+      // Only the current navigation may update the view.
+    }
+  }
+
+  Future<void> browse(String directory) async {
+    if (busy) return;
+    try {
+      await readDirectory(directory);
+    } catch (_) {
+      // readDirectory publishes failures for the current directory.
+    }
+  }
+
+  Future<void> readDirectory(String directory) {
+    if (!connected ||
+        !available ||
+        quitting ||
+        _disposed ||
+        _selectingProfile != null) {
+      return Future.value();
+    }
+    final previous = _directoryRead;
+    if (directory == path && directoryLoading) return previous!.future;
+    if (directory != path) _showDirectory(directory);
+    _directoryError = null;
+    final generation = ++_browseGeneration;
+    final requestId = ++_id;
+    if (previous != null) unawaited(_cancelDirectoryRead(previous.id));
+    final future = _readDirectory(directory, target, requestId, generation);
+    _directoryRead = (id: requestId, generation: generation, future: future);
+    notifyListeners();
+    return future;
+  }
+
+  Future<void> _readDirectory(
+    String directory,
+    Json identity,
+    int requestId,
+    int generation,
+  ) async {
+    bool current() =>
+        generation == _browseGeneration && available && !_disposed && !quitting;
+    try {
+      final result = await Future.sync(
+        () => request('list', {'path': directory, ...identity}, requestId),
+      );
+      if (current()) _saveDirectory(result['entries'] as List, identity);
+    } catch (e) {
+      if (current()) {
+        _directoryStale = true;
+        _directoryError = '$e'.replaceFirst('Bad state: ', '');
         rethrow;
       }
     } finally {
-      if (_directoryRequest == requestId) _directoryRequest = null;
+      if (_directoryRead?.id == requestId) _directoryRead = null;
+      if (current()) notifyListeners();
     }
   }
 
   Future<void> mutate(String op, Json args) => action(tr('正在更新文件'), () async {
     requireProfile(args);
+    final id = (args['profile'] ?? selected) as String?;
     await request(op, {...target, ...args});
-    await readDirectory(path);
+    _invalidateDirectories(id);
+    if (id == selected) await readDirectory(path);
   });
   Future<void> transfer(String op, Json args) async {
-    if (busy) return;
+    if (busy || quitting || _disposed) return;
     try {
       requireProfile(args);
     } catch (e) {
@@ -1009,30 +1256,115 @@ class StorageClient extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    args = {...target, ...args};
+    final profile = args['profile'] ?? selected;
+    final owner = profiles.where((p) => p['id'] == profile).firstOrNull;
+    args = {
+      ...args,
+      'profile': profile,
+      'revision': args['revision'] ?? owner?['revision'] ?? '',
+    };
     final id = ++_id;
-    final task = Transfer(id, op, args);
+    final task = Transfer(id, op, args, account: owner?['name'] as String?);
     transfers.insert(0, task);
-    if (transfers.length > 100) {
-      final old = transfers.last;
-      if (old.phase != TransferPhase.running) transfers.removeLast();
-    }
+    _pruneTransfers(task.upload);
+    final started = _saveTransferHistory();
     notifyListeners();
+    await started;
     try {
-      await request(op, args, id);
-      task.phase = TransferPhase.completed;
-      task.done = task.total;
-      if (op == 'upload' && selected == args['profile'] && connected) {
-        await readDirectory(path);
+      requireProfile(args);
+      final result = await request(task.view ? 'download' : op, args, id);
+      if ((result['size'] ?? result['bytes']) case final int size) {
+        task.total = size;
       }
+      if (task.view) await openViewedFile(args['output'] as String);
+      task.state = '已完成';
+      task.done = task.total;
+      if (task.upload) _invalidateDirectories(profile);
     } catch (e) {
-      task.phase = TransferPhase.failed;
+      task.state = available ? '未完成' : '结果未确认';
       task.error = '$e'.replaceFirst('Bad state: ', '');
       if (selected == args['profile']) error = task.error;
     } finally {
+      _pruneTransfers(task.upload);
+      await _saveTransferHistory();
       if (!_disposed) notifyListeners();
     }
+    if (task.upload &&
+        task.phase == TransferPhase.completed &&
+        selected == args['profile'] &&
+        connected &&
+        !_disposed &&
+        !quitting) {
+      try {
+        await readDirectory(path);
+      } catch (_) {
+        _directoryStale = true;
+        if (!_disposed && !quitting && selected == args['profile']) {
+          _pollError = '上传已完成，目录刷新失败';
+          notifyListeners();
+        }
+      }
+    }
   }
+
+  void _pruneTransfers(bool upload) {
+    var count = 0;
+    transfers.removeWhere(
+      (task) =>
+          task.upload == upload &&
+          ++count > _TransferHistory.limit &&
+          task.phase != TransferPhase.running,
+    );
+  }
+
+  Future<void> _saveTransferHistory() async {
+    if (!_transferHistory.ready) return;
+    try {
+      await _transferHistory.save(transfers);
+      transferHistoryError = null;
+    } catch (_) {
+      transferHistoryError = '无法保存本机传输记录';
+    }
+  }
+
+  bool canRetryTransfer(Transfer task) {
+    final profile = task.args['profile'];
+    return !busy &&
+        !quitting &&
+        profile is String &&
+        isProfileConnected(profile) &&
+        profiles.any(
+          (p) => p['id'] == profile && p['revision'] == task.args['revision'],
+        );
+  }
+
+  Future<void> viewCloudFile(Json file) async {
+    if (busy || quitting || _disposed) return;
+    try {
+      requireProfile(file);
+      final id = file['profile'] as String;
+      if (!isProfileMounted(id)) throw StateError('此连接尚未挂载，请使用下载操作');
+      final verified = await request('mounted_file', {
+        'profile': id,
+        'revision': file['revision'],
+        'path': file['path'],
+      });
+      requireProfile(file);
+      if (!isProfileMounted(id)) throw StateError('挂载已改变，请重试');
+      await openMountedOriginal(verified['path'] as String);
+    } catch (e) {
+      if (!_disposed) {
+        error = '$e'.replaceFirst('Bad state: ', '');
+        notifyListeners();
+      }
+    }
+  }
+
+  @protected
+  Future<void> openViewedFile(String path) => openLocalFile(path);
+
+  @protected
+  Future<void> openMountedOriginal(String path) => openMountedFile(path);
 
   Future<void> cancelTransfer(int id) =>
       request('cancel', {'id': id}).then((_) {});
@@ -1068,6 +1400,66 @@ class StorageClient extends ChangeNotifier {
     }
     await (openDirectory ?? openLocalDirectory)(mount['path'] as String);
   });
+
+  String? mountedTransferPath(Json info) {
+    final profile = info['profile'];
+    final revision = info['revision'];
+    final remote = info['path'];
+    if (profile is! String ||
+        revision is! String ||
+        remote is! String ||
+        !remote.startsWith('/') ||
+        remote.contains('\\') ||
+        remote.contains('\u0000')) {
+      return null;
+    }
+    final mount = mountForProfile(profile);
+    final root = mount?['path'];
+    if (root is! String ||
+        root.isEmpty ||
+        mount?['failed'] == true ||
+        mount?['revision'] != revision) {
+      return null;
+    }
+    final parts = remote.substring(1).split('/');
+    if (parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
+      return null;
+    }
+    if (root.startsWith('dav://')) {
+      final uri = Uri.tryParse(root);
+      if (uri == null ||
+          uri.host != '127.0.0.1' ||
+          !uri.hasPort ||
+          uri.path != '/' ||
+          uri.hasQuery ||
+          uri.hasFragment ||
+          !RegExp(r'^iCloud-[a-zA-Z0-9_-]{8}$').hasMatch(uri.userInfo)) {
+        return null;
+      }
+      return uri.replace(pathSegments: parts).toString();
+    }
+    try {
+      return Directory(
+        root,
+      ).uri.resolveUri(Uri(pathSegments: parts)).toFilePath();
+    } on UnsupportedError {
+      return null;
+    }
+  }
+
+  Future<bool> revealTransferFile(String path) async {
+    if (Platform.isLinux && path.startsWith('dav://')) {
+      return revealGnomeFile(Uri.parse(path));
+    }
+    final type = await FileSystemEntity.type(path, followLinks: false).timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => FileSystemEntityType.notFound,
+    );
+    if (type == FileSystemEntityType.notFound) {
+      throw StateError('文件已移动或该位置暂不可用');
+    }
+    return revealLocalFile(path);
+  }
 
   Future<String?> save(Json profile) async {
     String? id;
@@ -1114,6 +1506,8 @@ class StorageClient extends ChangeNotifier {
   @protected
   Future<void> closeTransport() async => _process?.stdin.close();
 
+  List<Json> quitBlockers = const [];
+
   Future<bool> shutdown() {
     final existing = _shutdown;
     if (existing != null) return existing;
@@ -1128,6 +1522,7 @@ class StorageClient extends ChangeNotifier {
   }
 
   Future<bool> _shutdownOnce() async {
+    quitBlockers = const [];
     if ((busy && !_restoringStartup) || runningTransfers.isNotEmpty) {
       error = tr('请先完成或取消当前操作，再退出。');
       notifyListeners();
@@ -1137,11 +1532,18 @@ class StorageClient extends ChangeNotifier {
     activity = tr('正在退出，正在收尾连接…');
     notifyListeners();
     try {
+      if (_transferHistory.flushed case final writes?) await writes;
       if (available) {
         if (_restoringStartup && activeId != null) {
           await request('cancel', {'id': activeId});
         }
-        await request('quit');
+        final reply = await request('quit', {'mount_confirmation': true});
+        quitBlockers =
+            (reply['quit_blockers'] as List?)?.cast<Json>() ?? const [];
+        if (quitBlockers.isNotEmpty) {
+          _resumeAfterQuitRefusal();
+          return false;
+        }
       }
       updates.dispose();
       available = false;
@@ -1152,17 +1554,22 @@ class StorageClient extends ChangeNotifier {
       } catch (_) {}
       return true;
     } catch (e) {
-      quitting = false;
-      activity = '';
-      error = '$e';
-      notifyListeners();
+      _resumeAfterQuitRefusal('$e'.replaceFirst('Bad state: ', ''));
       return false;
     }
+  }
+
+  void _resumeAfterQuitRefusal([String? message]) {
+    quitting = false;
+    activity = '';
+    error = message;
+    notifyListeners();
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _transferRefresh?.cancel();
     if (!quitting) updates.dispose();
     super.dispose();
   }

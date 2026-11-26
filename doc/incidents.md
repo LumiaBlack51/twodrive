@@ -1,10 +1,24 @@
 # TwoDrive 故障记录
 
+## TD-20261126-WINDOWS-VIEW：打开挂载原文件时退回 Explorer 选中
+
+- 关联 [上游 #96 的审查](https://github.com/LumiaBlack51/twodrive/pull/96#issuecomment-7163794572) 和 TD-20261125-WINDOWS-VIEW。Windows 将引擎验证的挂载原路径交给下载副本打开函数，后者尝试写入 `Zone.Identifier`。本机 WinFsp 拒绝该数据流，旧逻辑随即退回 Explorer 选中，未打开文件。
+- 挂载原件使用独立入口，支持的文档和媒体直接通过 Explorer 打开，其他类型继续定位。下载副本打开前保留 Internet 来源标记。客户端仍要求引擎验证账号、版本和挂载路径。
+- Windows 11 上使用临时 WinFsp 挂载和回环 WebDAV：旧打开方式在同一生成文件上退回选中，修复版实际打开了含中文、空格和 `#` 的原路径，并观察到记事本窗口。原内容与原路径的 ADS 保持不变，下载到 NTFS 的副本具有 `ZoneId=3`，过期连接版本被拒绝。回归另覆盖原文件既有 ADS 不被覆盖、非支持类型继续定位，以及客户端必须调用原件打开入口。旧客户端未通过打开入口的回归。实机测试未操作真实云端文件。
+
 ## TD-20261125-DAV-PACKAGE：独立 DAV Debian 开发测试包
 
 - 将 #72 的 DAV 开发测试包按维护者要求从客户端功能中拆出。通过现有 debhelper 与 dpkg-buildpackage、独立构建 profile 生成 twodrive-dav，保留便携 payload；稳定 twodrive 包不改变。
 - 测试包校验覆盖依赖、原始文件摘要及 .buildinfo/.changes。完整发布仍须另行生成并校验源码包、二进制/调试包，不能用此测试包代替。说明测试包不安装便携安装器的 Nautilus 徽标资产。
 - 本机 Debian policy 和九项合成包校验回归通过；正式 CI 构建及安装结果以 PR 为准，合成包不代表实机安装。
+
+## TD-20261125-CLIENT：目录加载、传输历史与挂载文件查看职责
+
+- 关联上游 #72 的维护者审查。目录读取不再等待聚合状态；保留最后成功响应作展示状态，并拒绝过期账号、配置及目录结果。手动传输历史持久化并区分上传、下载、备份及挂载活动，后续目录刷新失败不改写传输结果。
+- 已挂载文件由后端验证原挂载路径后打开；未挂载时使用显式下载。客户端不枚举挂载目录、不创建 viewed-files 副本。正常退出只报告占用程序和路径，提示保存并正常关闭后重试，不发送 SIGTERM。
+- 提取自已验证的本机修复，保留当前上游 Dashboard、连接页面主题。宽屏概览卡片共享底边。拆分后的独立回归和 CI 结果以 PR 为准；Linux 用合成提供者，Windows NTFS/Explorer 尚未实机验证。
+
+2026-11-25 审查补记：Windows 对挂载原件使用与下载副本相同的打开函数。查看 PDF 等文件时会尝试写入 Zone.Identifier，写入被拒后仅在 Explorer 中选中。该路径已通过源码核对。原生 Windows 验证及只读打开修复仍待完成。[审查记录](https://github.com/LumiaBlack51/twodrive/pull/96#issuecomment-7163794572)
 
 ## TD-20261125-03：Development 托盘弹窗边缘阴影间歇消失
 

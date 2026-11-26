@@ -16,6 +16,14 @@ String tr(String key, [List<Object?> values = const []]) {
 }
 
 const _english = <String, String>{
+  '选择上方的网盘，或前往连接页添加新账号。':
+      'Choose a drive above, or add an account in Connections.',
+  '前往连接页选择存储提供者，再添加账号或设备。': 'Add an account or device in Connections.',
+  '未挂载': 'Not mounted',
+  '重新登录': 'Sign in again',
+  '更多操作': 'More actions',
+  '选择网盘': 'Choose a drive',
+  '查看网盘': 'Browse drive',
   '网盘': 'Drive',
   '备份需要处理，请查看该网盘的备份状态': 'Check the backup status for this drive.',
   '挂载进程已退出，请卸载后重试': 'The mount stopped. Unmount it and try again.',

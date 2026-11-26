@@ -14,6 +14,7 @@ pub(super) struct FileContext {
     pub profile: Profile,
     pub backend: Backend,
     pub state: State,
+    mounted: bool,
 }
 pub(super) struct Job {
     profile: String,
@@ -34,15 +35,17 @@ pub(super) fn aggregate_accounts(accounts: &[Value]) -> Value {
     for account in accounts {
         let owner = |mut item: Value| {
             item["profile"] = account["profile"].clone();
-            item["revision"] = account["revision"].clone();
+            if item["source"] != "backup" || !item["revision"].is_string() {
+                item["revision"] = account["revision"].clone();
+            }
             item["account"] = account["name"].clone();
             item
         };
-        for (source, kind) in [
-            (&account["backup"]["active"], 0),
-            (&account["mount_activity"]["active"], 0),
-            (&account["cache"]["waiting"], 1),
-            (&account["backup"]["recent"], 2),
+        for (source, kind, is_backup) in [
+            (&account["backup"]["active"], 0, true),
+            (&account["mount_activity"]["active"], 0, false),
+            (&account["cache"]["waiting"], 1, false),
+            (&account["backup"]["recent"], 2, true),
         ] {
             if let Some(items) = source.as_array() {
                 let destination = match kind {
@@ -50,7 +53,14 @@ pub(super) fn aggregate_accounts(accounts: &[Value]) -> Value {
                     1 => &mut waiting,
                     _ => &mut recent,
                 };
-                destination.extend(items.iter().filter(|v| v.is_object()).cloned().map(owner));
+                destination.extend(items.iter().filter(|v| v.is_object()).cloned().map(
+                    |mut item| {
+                        if is_backup {
+                            item["source"] = json!("backup");
+                        }
+                        owner(item)
+                    },
+                ));
             }
         }
         let count = account["cache"]["pending"].as_u64().unwrap_or(0);
@@ -320,6 +330,11 @@ impl App {
             profile: profile.clone(),
             backend: backend.context("请先连接服务器")?.clone(),
             state: self.state.clone(),
+            mounted: if self.connected.as_ref().is_some_and(|p| p.id == id) {
+                self.mounted.is_some()
+            } else {
+                self.inactive.get(id).is_some_and(|p| p.mounted.is_some())
+            },
         })
     }
     pub(super) fn disconnect_profile(&mut self, id: &str) -> anyhow::Result<()> {
@@ -349,6 +364,18 @@ impl App {
         }
         result
     }
+    #[cfg(target_os = "linux")]
+    pub(super) fn mounted_profiles(&self) -> impl Iterator<Item = &Profile> {
+        self.connected
+            .iter()
+            .filter(|_| self.mounted.is_some())
+            .chain(
+                self.inactive
+                    .values()
+                    .filter_map(|parked| parked.mounted.as_ref().map(|_| &parked.profile)),
+            )
+    }
+
     pub(super) fn disconnect_all(&mut self) -> anyhow::Result<()> {
         self.finish_quota_jobs(None);
         ensure!(
@@ -547,6 +574,33 @@ impl FileContext {
                     a["etag"].as_str(),
                     progress,
                 )?))
+            }
+            "mounted_file" => {
+                ensure!(self.mounted, "此连接尚未挂载，请使用下载操作");
+                twodrive_dev::provider::valid_path(path)?;
+                ensure!(path != "/", "请选择文件");
+                #[cfg(target_os = "linux")]
+                let mount = linux_twodrive_fuse_mount_id(&self.profile.mount_path)?
+                    .context("此连接尚未挂载，请使用下载操作")?;
+                #[cfg(not(any(windows, target_os = "linux")))]
+                ensure!(
+                    is_mount(&self.profile.mount_path)?,
+                    "此连接尚未挂载，请使用下载操作"
+                );
+                let mut local = self.profile.mount_path.clone();
+                for component in path.trim_start_matches('/').split('/') {
+                    local.push(component);
+                    let meta = fs::symlink_metadata(&local)?;
+                    ensure!(!meta.is_symlink(), "文件路径包含链接，请从文件管理器打开");
+                }
+                ensure!(fs::symlink_metadata(&local)?.is_file(), "请选择文件");
+                #[cfg(target_os = "linux")]
+                ensure!(
+                    linux_twodrive_fuse_mount_id(&self.profile.mount_path)?.as_ref()
+                        == Some(&mount),
+                    "挂载已改变，请重试"
+                );
+                Ok(json!({"path":local}))
             }
             "download" => {
                 let output = PathBuf::from(string(a, "output")?);
