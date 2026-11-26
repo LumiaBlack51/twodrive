@@ -31,7 +31,7 @@ impl BaiduDrive {
         progress: Progress,
     ) -> anyhow::Result<MetadataEntry> {
         let (root, _lock) = self.mutation_lock()?;
-        let remote = self.remote(path)?;
+        self.remote(path)?;
         ensure!(path != "/", "不能覆盖根目录");
         let size = std::fs::metadata(source)?.len();
         ensure!(size <= 64 * 1024 * 1024 * 1024, "文件超过当前上传预算");
@@ -44,7 +44,46 @@ impl BaiduDrive {
             expected.as_ref(),
             &mut || progress(0, size),
         )?;
-        let source = recovery.edited.as_ref().unwrap();
+        let m = self.transfer_file(
+            path,
+            recovery.edited.as_ref().unwrap(),
+            expected.is_some(),
+            &progress,
+            || {
+                // Check the last observed version immediately before a manual commit.
+                write_recovery::snapshot(self, path, id, version)?;
+                Ok(())
+            },
+        )?;
+        recovery.verify(self, &m, &mut || progress(size, size))?;
+        recovery.complete(path)?;
+        Ok(m)
+    }
+    pub(super) fn put_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        let (_root, _lock) = self.mutation_lock()?;
+        ensure!(
+            self.get_metadata_by_path(path)?.is_none(),
+            "备份版本路径已存在"
+        );
+        self.transfer_file(path, source, false, &progress, || Ok(()))?;
+        Ok(())
+    }
+    fn transfer_file(
+        &self,
+        path: &str,
+        source: &Path,
+        replace: bool,
+        progress: &Progress,
+        before_commit: impl FnOnce() -> anyhow::Result<()>,
+    ) -> anyhow::Result<MetadataEntry> {
+        let remote = self.remote(path)?;
+        let size = std::fs::metadata(source)?.len();
+        ensure!(size <= 64 * 1024 * 1024 * 1024, "文件超过当前上传预算");
         let mut input = File::open(source)?;
         let mut hashes = Vec::new();
         let mut buffer = vec![0u8; BLOCK];
@@ -61,8 +100,9 @@ impl BaiduDrive {
         }
         let blocks = serde_json::to_string(&hashes)?;
         let size_text = size.to_string();
-        let revision = if expected.is_some() { "1" } else { "0" };
-        let rtype = if expected.is_some() { "3" } else { "0" };
+        let revision = if replace { "1" } else { "0" };
+        // rtype=0 asks the create endpoint to fail on a name collision.
+        let rtype = if replace { "3" } else { "0" };
         let pre = self.post(
             &[("method", "precreate")],
             &[
@@ -101,9 +141,7 @@ impl BaiduDrive {
             );
             progress(((index + 1) as u64 * BLOCK as u64).min(size), size)?;
         }
-        // Check again after transferring temporary blocks, immediately before
-        // publishing. This is a preflight, not an atomic cloud CAS.
-        write_recovery::snapshot(self, path, id, version)?;
+        before_commit()?;
         progress(size, size)?;
         let created = self.post(
             &[("method", "create")],
@@ -125,8 +163,6 @@ impl BaiduDrive {
             .get_metadata_by_path(path)?
             .context("百度未返回新文件，恢复副本保留")?;
         ensure!(m.size == size, "百度保存大小不一致，恢复副本保留");
-        recovery.verify(self, &m, &mut || progress(size, size))?;
-        recovery.complete(path)?;
         Ok(m)
     }
     pub(super) fn mkdir_manual(&self, path: &str) -> anyhow::Result<MetadataEntry> {

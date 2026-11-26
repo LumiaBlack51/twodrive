@@ -399,6 +399,20 @@ impl Provider for BaiduDrive {
     fn manual_upload_supported(&self) -> bool {
         self.writable
     }
+    fn recoverable_backup(&self) -> bool {
+        true
+    }
+    fn versioned_backup(&self) -> bool {
+        self.writable
+    }
+    fn upload_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        self.put_backup_version(path, source, progress)
+    }
     fn manual_upload(
         &self,
         path: &str,
@@ -487,8 +501,22 @@ impl Provider for BaiduDrive {
     }
 }
 impl CloudBackend for BaiduDrive {
-    fn is_conflict_error(&self, _: &anyhow::Error) -> bool {
-        false
+    fn metadata_for_download(
+        &self,
+        _id: &str,
+        known: &MetadataEntry,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        self.get_metadata_by_path(&known.path)
+    }
+    fn uses_directory_metadata(&self) -> bool {
+        true
+    }
+    fn directory_metadata(&self, path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+        Provider::list_directory(self, path)
+    }
+
+    fn is_conflict_error(&self, error: &anyhow::Error) -> bool {
+        error.is::<crate::provider_guard::VersionConflict>()
     }
     fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>> {
         let mut queue = VecDeque::from(["/".to_owned()]);

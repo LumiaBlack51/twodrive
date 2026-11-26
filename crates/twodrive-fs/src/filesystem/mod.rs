@@ -35,6 +35,10 @@ pub struct TwoDriveFs<B: CloudBackend> {
     pub(crate) cache_controls: Option<crate::cache_controls::CacheControls>,
     pub(crate) refresh_signal: Option<std::sync::mpsc::SyncSender<()>>,
     read_pool: ReadPool,
+    directory_pool: ReadPool,
+    directory_refresh: Option<Arc<crate::directory_refresh::DirectoryRefresh<B>>>,
+    directory_events: std::sync::mpsc::Receiver<DirectoryEvent>,
+    directory_sender: std::sync::mpsc::Sender<DirectoryEvent>,
     hydrating: Mutex<HashSet<String>>,
     inodes: InodeTable,
     read_handles: HashMap<u64, ReadHandle>,
@@ -58,6 +62,13 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         let _ = clear_activity_file(&cache_dir);
         db.finish_pending_releases()?;
         let backend = Arc::new(backend);
+        let directory_refresh = backend.uses_directory_metadata().then(|| {
+            Arc::new(crate::directory_refresh::DirectoryRefresh::new(
+                db.clone(),
+                backend.clone(),
+            ))
+        });
+        let (directory_sender, directory_events) = std::sync::mpsc::channel();
         let upload_pool = UploadPool::new(
             db.clone(),
             cache_dir.clone(),
@@ -72,6 +83,10 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             cache_controls: None,
             refresh_signal: None,
             read_pool: ReadPool::new(),
+            directory_pool: ReadPool::new(),
+            directory_refresh,
+            directory_sender,
+            directory_events,
             hydrating: Mutex::new(HashSet::new()),
             inodes: InodeTable::new(&records),
             read_handles: HashMap::new(),
@@ -79,6 +94,41 @@ impl<B: CloudBackend> TwoDriveFs<B> {
             next_fh: 1,
             directory_handles: HashMap::new(),
         })
+    }
+
+    fn import_directory_events(&mut self) {
+        while let Ok(event) = self.directory_events.try_recv() {
+            match event {
+                DirectoryEvent::Lookup(ino, record) => self.inodes.replace_ino_record(ino, record),
+                DirectoryEvent::Snapshot {
+                    ino,
+                    path,
+                    fh,
+                    records,
+                } => {
+                    self.inodes.refresh_children(&path, records);
+                    let entries = self.directory_snapshot(ino, &path);
+                    self.directory_handles.insert(fh, entries);
+                }
+            }
+        }
+    }
+    fn directory_snapshot(&self, ino: u64, path: &str) -> Vec<(u64, FileType, String)> {
+        let mut entries = vec![
+            (ino, FileType::Directory, ".".into()),
+            (
+                self.inodes.parent_ino(path).unwrap_or(ROOT_INO),
+                FileType::Directory,
+                "..".into(),
+            ),
+        ];
+        entries.extend(
+            self.inodes
+                .children_for_ino(ino)
+                .into_iter()
+                .map(|(ino, r)| (ino, file_type(&r.metadata), r.metadata.name)),
+        );
+        entries
     }
 
     pub(crate) fn record_for_ino(&self, ino: u64) -> Option<FileRecord> {
@@ -180,6 +230,16 @@ impl<B: CloudBackend> TwoDriveFs<B> {
         result
     }
 }
+enum DirectoryEvent {
+    Lookup(u64, FileRecord),
+    Snapshot {
+        ino: u64,
+        path: String,
+        fh: u64,
+        records: Vec<FileRecord>,
+    },
+}
+
 #[derive(Debug)]
 struct ReadHandle {
     open_attr: FileAttr,

@@ -6,6 +6,8 @@ mod cache_controls;
 mod cache_io;
 mod conflicts;
 #[cfg(unix)]
+mod directory_refresh;
+#[cfg(unix)]
 mod filesystem;
 mod hydration;
 #[cfg(unix)]

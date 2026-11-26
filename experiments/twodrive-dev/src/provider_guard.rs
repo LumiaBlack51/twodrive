@@ -18,6 +18,15 @@ pub(crate) fn write_permit_allowed(path: &Path, token: &str) -> bool {
         .is_some_and(|v| v == token)
 }
 
+#[derive(Debug)]
+pub(crate) struct VersionConflict(pub &'static str);
+impl std::fmt::Display for VersionConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for VersionConflict {}
+
 pub(crate) fn snapshot(
     backend: &dyn CloudBackend,
     path: &str,
@@ -28,11 +37,11 @@ pub(crate) fn snapshot(
     match &current {
         Some(m) => ensure!(
             !m.is_dir && Some(m.remote_id.as_str()) == id && Some(m.etag.as_str()) == version,
-            "云端文件已改变，未开始覆盖；请刷新后重试"
+            VersionConflict("云端文件已改变，未开始覆盖；请刷新后重试")
         ),
         None => ensure!(
             id.is_none() && version.is_none(),
-            "云端文件已移除，未重新创建"
+            VersionConflict("云端文件已移除，未重新创建")
         ),
     }
     Ok(current)

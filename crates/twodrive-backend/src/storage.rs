@@ -19,6 +19,15 @@ pub trait CloudBackend: Send + Sync + 'static {
             })
     }
 
+    /// Providers without a reliable delta feed refresh complete shallow directories.
+    /// A failed or partial listing must return Err, never a deletion snapshot.
+    fn uses_directory_metadata(&self) -> bool {
+        false
+    }
+    fn directory_metadata(&self, _path: &str) -> anyhow::Result<Vec<MetadataEntry>> {
+        anyhow::bail!("shallow directory metadata unavailable")
+    }
+
     fn list_all(&self) -> anyhow::Result<Vec<MetadataEntry>>;
     fn get_metadata(&self, remote_id: &str) -> anyhow::Result<Option<MetadataEntry>> {
         Ok(self

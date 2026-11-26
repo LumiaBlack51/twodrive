@@ -74,7 +74,7 @@ if 'rcd' in args:
     host,port=address.rsplit(':',1)
     http.server.HTTPServer((host,int(port)),Handler).serve_forever()
 s['launches']=s.get('launches',0)+1
-op=next((v for v in args if v in ['lsjson','moveto']),None)
+op=next((v for v in args if v in ['lsjson','moveto','copyto']),None)
 assert op is not None
 s['ops'].append(op)
 p.write_text(json.dumps(s))
@@ -85,10 +85,19 @@ if op=='lsjson':
     def row(path,v):
         return dict(v,Name=path.rsplit('/',1)[1],Path=path.rsplit('/',1)[1])
     if '--stat' in args:
+        if s.get('synthetic_dir_stat') and (source not in s['files'] or s['files'][source]['IsDir']):
+            print(json.dumps({'IsDir':True,'Size':-1}));sys.exit(0)
         if source not in s['files']: sys.exit(3)
         print(json.dumps(row(source,s['files'][source])))
     else:
         print(json.dumps([row(k,v) for k,v in s['files'].items() if k.rsplit('/',1)[0]==source.rstrip('/')]))
+elif op=='copyto':
+    dest='/' + args[i+2].removeprefix('twodrive:').lstrip('/')
+    assert '--immutable' in args and '--ignore-existing' in args
+    assert dest not in s['files']
+    content=pathlib.Path(args[i+1]).read_bytes()
+    s['files'][dest]={'ID':'new-version','Size':len(content),'IsDir':False,'ModTime':'2026-11-18T00:00:00Z'}
+    p.write_text(json.dumps(s))
 else:
     dest='/' + args[i+2].removeprefix('twodrive:').lstrip('/')
     assert '--ignore-existing' in args
@@ -102,6 +111,59 @@ else:
     backend.exe = exe;
     backend.initial_root=vec![backend.entry("/before.txt", &serde_json::json!({"ID":"synthetic-object","IsDir":false,"Size":7,"ModTime":"2026-10-28T00:00:00Z"})).unwrap()];
     (root, backend, data)
+}
+#[test]
+fn icloud_backup_upload_uses_an_immutable_copy_and_refuses_known_destinations() {
+    let (root, backend, data) = fixture();
+    let backend = Backend::new(backend);
+    let source = root.path().join("spool");
+    fs::write(&source, b"backup version").unwrap();
+    let progress: crate::provider::Progress = Arc::new(|_, _| Ok(()));
+    assert!(backend.backup_supported());
+    assert!(!backend.capabilities().conditional_upload);
+    assert!(
+        backend
+            .upload_backup_version("/before.txt", &source, progress.clone())
+            .is_err()
+    );
+    let path = "/before.twodrive-version.txt";
+    backend
+        .upload_backup_version(path, &source, progress.clone())
+        .unwrap();
+    assert!(
+        backend
+            .upload_backup_version(path, &source, progress)
+            .is_err()
+    );
+    let result: Value = serde_json::from_slice(&fs::read(data).unwrap()).unwrap();
+    assert_eq!(result["files"]["/before.txt"]["ID"], "synthetic-object");
+    assert_eq!(result["files"][path]["Size"], 14);
+    assert_eq!(
+        result["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| **event == "copyto")
+            .count(),
+        1
+    );
+}
+#[test]
+fn icloud_resolves_directory_stat_placeholders_through_the_parent_listing() {
+    let (_root, backend, data) = fixture();
+    let mut fixture: Value = serde_json::from_slice(&fs::read(&data).unwrap()).unwrap();
+    fixture["synthetic_dir_stat"] = serde_json::json!(true);
+    fixture["files"]["/backup"] = serde_json::json!({"ID":"stable-dir", "IsDir":true, "Size":0});
+    fs::write(data, serde_json::to_vec(&fixture).unwrap()).unwrap();
+    let directory = backend.get_metadata_by_path("/backup").unwrap().unwrap();
+    assert!(directory.is_dir);
+    assert_eq!(
+        Snapshot::decode(&directory.remote_id, &backend.binding)
+            .unwrap()
+            .id,
+        "stable-dir"
+    );
+    assert!(backend.get_metadata_by_path("/missing").unwrap().is_none());
 }
 #[test]
 fn mounted_same_directory_rename_uses_one_fresh_preflight_and_one_confirmation() {

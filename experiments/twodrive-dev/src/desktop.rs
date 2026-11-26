@@ -435,6 +435,13 @@ impl App {
                 && let Some(session) = self.saved_session(p)
                 && let Some(binding) = session["binding"].as_str()
             {
+                if self
+                    .backend
+                    .as_ref()
+                    .is_some_and(|backend| backend.uses_directory_metadata())
+                {
+                    native_mount::ensure_native_migration(&self.mount_state(p), binding)?;
+                }
                 stale_mount::recover(&p.mount_path, &self.mount_state(p), binding)?;
             }
             ensure!(
@@ -571,12 +578,15 @@ impl App {
             .backend
             .as_ref()
             .context("请先连接")?
-            .capabilities()
-            .backup()
+            .backup_supported()
         {
             return Ok(());
         }
-        if !backup::prepare_worker(&self.state, p)? {
+        let session = self.saved_session(p);
+        let binding = session
+            .as_ref()
+            .and_then(|session| session["binding"].as_str());
+        if !backup::prepare_worker(&self.state, p, binding)? {
             return Ok(());
         }
         let mut cmd = Command::new(std::env::current_exe()?);
@@ -622,7 +632,9 @@ impl App {
             .map(|b| b.capabilities())
             .unwrap_or_default();
         let mut value = serde_json::to_value(c).unwrap();
-        value["backup"] = json!(c.backup());
+        value["backup"] = json!(self.backend.as_ref().is_some_and(Backend::backup_supported));
+        value["versioned_backup"] =
+            json!(self.backend.as_ref().is_some_and(Backend::versioned_backup));
         value["manual_upload"] = json!(
             self.backend
                 .as_ref()
@@ -641,6 +653,12 @@ impl App {
                     .connected
                     .as_ref()
                     .is_some_and(providers::uses_readonly_bridge)
+                || (self
+                    .backend
+                    .as_ref()
+                    .is_some_and(|b| b.uses_directory_metadata())
+                    && c.rename
+                    && c.delete)
                 || (c.backup() && c.rename && c.delete));
         value["mount"] =
             json!(supported_mount && self.backend.as_ref().is_some_and(|b| b.supports_mount()));
@@ -932,16 +950,45 @@ impl App {
                     let folders: Vec<backup::Folder> =
                         serde_json::from_value(a["folders"].clone())?;
                     backup::validate(&folders, &p, &self.state, &providers::protected_paths(&p)?)?;
+                    if let Some(mode) = a["strategy"].as_str() {
+                        ensure!(matches!(mode, "replace" | "versioned"), "无效备份模式");
+                        ensure!(
+                            mode != "versioned"
+                                || public["capabilities"]["versioned_backup"] == true,
+                            "此连接不支持版本备份"
+                        );
+                    }
                     if self.connected.as_ref().is_some_and(|v| v.id == p.id) {
                         self.backup.take();
                         backup::cleanup_spool(&self.state, &p)?;
+                    }
+                    if let Some(mode) = a["strategy"].as_str() {
+                        for saved in self
+                            .config
+                            .profiles
+                            .iter_mut()
+                            .filter(|saved| saved.id == p.id)
+                        {
+                            saved.options.insert("backup_strategy".into(), json!(mode));
+                        }
+                        if let Some(current) =
+                            self.connected.as_mut().filter(|current| current.id == p.id)
+                        {
+                            current
+                                .options
+                                .insert("backup_strategy".into(), json!(mode));
+                        }
+                        self.state.save("profiles.json", &self.config)?;
                     }
                     backup::save_folders(&self.state, &p, &folders)?;
                     if self.connected.as_ref().is_some_and(|v| v.id == p.id) {
                         self.start_backup()?;
                     }
                 }
-                Ok(json!({"folders":backup::folders(&self.state, &p)?}))
+                let current = self.profile(&p.id)?;
+                Ok(
+                    json!({"folders":backup::folders(&self.state, &current)?,"strategy":if current.option("backup_strategy")=="versioned" {"versioned"} else {"replace"}}),
+                )
             }
             "sign_out" => {
                 let id = string(a, "id")?.to_owned();
@@ -1083,10 +1130,13 @@ pub fn run() -> anyhow::Result<()> {
         let (backend, binding) =
             providers::restore_session(&p, &session, &app.state.dir.join("paused"))?;
         let writable = backend.capabilities().upload;
+        if backend.uses_directory_metadata() {
+            native_mount::ensure_native_migration(&app.mount_state(&p), &binding)?;
+        }
         return mount::mount(
             State::new(app.mount_state(&p))?,
             p.mount_path,
-            backend,
+            backend.for_mount(),
             binding,
             writable,
         );

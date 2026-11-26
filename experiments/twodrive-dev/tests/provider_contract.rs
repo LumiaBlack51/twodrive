@@ -93,3 +93,52 @@ fn unsafe_legacy_upload_defaults_and_mutations_are_not_offered() {
     assert!(b.delete_path("/").is_err());
     assert!(b.entry("/../escape").is_err());
 }
+
+#[test]
+fn native_mount_recovery_does_not_advertise_atomic_conditions_and_honors_cancellation() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    std::fs::write(&source, b"new").unwrap();
+    let mut provider = OpaqueProvider::default();
+    provider.recoverable = true;
+    provider.caps.conditional_upload = false;
+    let old = provider.upload("/file", b"old".to_vec()).unwrap();
+    let backend = Backend::new(provider.clone());
+    assert!(backend.backup_replace_supported());
+    assert!(!backend.capabilities().conditional_upload);
+    assert!(
+        backend
+            .upload_file_with_version(
+                "/file",
+                &source,
+                Some(&old.remote_id),
+                Some(&old.etag),
+                &mut |_, _| Ok(())
+            )
+            .is_err()
+    );
+    let mount = backend.for_mount();
+    assert!(
+        mount
+            .upload_file_with_version(
+                "/file",
+                &source,
+                Some(&old.remote_id),
+                Some(&old.etag),
+                &mut |_, _| anyhow::bail!("cancelled")
+            )
+            .is_err()
+    );
+    assert_eq!(provider.download(&old.remote_id).unwrap(), b"old");
+    let saved = mount
+        .upload_file_with_version(
+            "/file",
+            &source,
+            Some(&old.remote_id),
+            Some(&old.etag),
+            &mut |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(provider.download(&saved.remote_id).unwrap(), b"new");
+    assert!(!mount.capabilities().conditional_upload);
+}

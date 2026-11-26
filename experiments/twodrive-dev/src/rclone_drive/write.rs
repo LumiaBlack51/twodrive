@@ -1,5 +1,5 @@
 use super::*;
-use crate::write_recovery::{self, Recovery};
+use crate::write_recovery::Recovery;
 impl RcloneDrive {
     pub fn with_writable(mut self, yes: bool) -> Self {
         self.writable = yes;
@@ -31,6 +31,18 @@ impl RcloneDrive {
         )?;
         Ok(())
     }
+    pub(super) fn resume_manual(
+        &self,
+        path: &str,
+        source: &Path,
+        version: Option<&str>,
+        progress: Progress,
+    ) -> anyhow::Result<Option<MetadataEntry>> {
+        let (root, _lock) = self.mutation_lock()?;
+        valid_path(path)?;
+        ensure!(path != "/", "不能写入根目录");
+        crate::recoverable_replace::resume(self, &root, path, source, version, progress)
+    }
     pub(super) fn put_manual(
         &self,
         path: &str,
@@ -42,36 +54,39 @@ impl RcloneDrive {
         let (root, _lock) = self.mutation_lock()?;
         valid_path(path)?;
         ensure!(path != "/", "不能写入根目录");
+        crate::recoverable_replace::replace(self, &root, path, source, id, version, progress)
+    }
+    pub(super) fn put_backup_version(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: Progress,
+    ) -> anyhow::Result<()> {
+        let (_root, _lock) = self.mutation_lock()?;
+        self.put_backup_version_unlocked(path, source, &progress)
+    }
+    fn put_backup_version_unlocked(
+        &self,
+        path: &str,
+        source: &Path,
+        progress: &Progress,
+    ) -> anyhow::Result<()> {
         let size = fs::metadata(source)?.len();
-        let mut check = || progress(0, size);
-        let expected = write_recovery::snapshot(self, path, id, version)?;
-        let recovery = Recovery::prepare(
-            self,
-            &root.dir,
-            path,
-            Some(source),
-            expected.as_ref(),
-            &mut check,
-        )?;
-        write_recovery::snapshot(self, path, id, version)?;
-        check()?;
-        let remote = format!("twodrive:{}", path.trim_start_matches('/'));
+        progress(0, size)?;
+        ensure!(
+            self.get_metadata_by_path(path)?.is_none(),
+            "备份版本路径已存在"
+        );
         let mut cmd = command(&self.exe, &self.state, &self.pass, &self.route);
+        // The worker allocates an unpredictable filename for each attempt and
+        // never retries a previously exposed name. Immutable mode also stops
+        // at an existing destination found by the component's initial lookup.
         cmd.arg("copyto")
-            .arg(recovery.edited.as_ref().unwrap())
-            .arg(&remote)
-            .arg("--ignore-times");
-        if expected.is_none() {
-            cmd.arg("--ignore-existing");
-        }
-        self.mutate(cmd, &mut check)?;
-        let entry = self
-            .get_metadata_by_path(path)?
-            .context("iCloud 尚未返回已保存文件，恢复副本保留")?;
-        recovery.verify(self, &entry, &mut check)?;
-        recovery.complete(path)?;
-        progress(size, size)?;
-        Ok(entry)
+            .arg(source)
+            .arg(format!("twodrive:{}", path.trim_start_matches('/')))
+            .args(["--immutable", "--ignore-existing"]);
+        self.mutate(cmd, &mut || progress(0, size))?;
+        progress(size, size)
     }
     pub(super) fn mkdir_manual(&self, path: &str) -> anyhow::Result<MetadataEntry> {
         let (_root, _lock) = self.mutation_lock()?;
@@ -94,6 +109,9 @@ impl RcloneDrive {
     }
     pub(super) fn rename_manual(&self, id: &str, to: &str) -> anyhow::Result<MetadataEntry> {
         let (_root, _lock) = self.mutation_lock()?;
+        self.rename_unlocked(id, to)
+    }
+    fn rename_unlocked(&self, id: &str, to: &str) -> anyhow::Result<MetadataEntry> {
         let s = Snapshot::decode(id, &self.binding)?;
         valid_path(to)?;
         ensure!(
@@ -183,6 +201,19 @@ impl RcloneDrive {
         if let Some(recovery) = recovery {
             recovery.complete(&s.path)?;
         }
+        Ok(())
+    }
+}
+
+impl crate::recoverable_replace::Operations for RcloneDrive {
+    fn identity(&self, entry: &MetadataEntry) -> anyhow::Result<String> {
+        Ok(Snapshot::decode(&entry.remote_id, &self.binding)?.id)
+    }
+    fn create_staged(&self, path: &str, source: &Path, progress: &Progress) -> anyhow::Result<()> {
+        self.put_backup_version_unlocked(path, source, progress)
+    }
+    fn move_staged(&self, entry: &MetadataEntry, to: &str) -> anyhow::Result<()> {
+        self.rename_unlocked(&entry.remote_id, to)?;
         Ok(())
     }
 }
