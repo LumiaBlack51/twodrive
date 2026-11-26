@@ -176,6 +176,7 @@ void main() {
     ];
     c.status = {
       'connected': true,
+      'profile': 'p',
       'backup': {'folders': 1, 'completed_scan': false, 'active': []},
     };
     Future<void> show() => tester.pumpWidget(
@@ -197,7 +198,7 @@ void main() {
     await tester.pump();
     expect(find.text('已备份和同步'), findsOneWidget);
     c.transfers.add(
-      Transfer(1, 'download', {'path': '/example.txt'})
+      Transfer(1, 'download', {'profile': 'p', 'path': '/example.txt'})
         ..done = 25
         ..total = 100,
     );

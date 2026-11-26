@@ -165,6 +165,8 @@ const _english = <String, String>{
   '有状态需要处理': 'Needs attention',
   '同步已暂停': 'Sync paused',
   '正在同步': 'Syncing',
+  '等待同步': 'Waiting to sync',
+  '正在扫描备份': 'Scanning backup folders',
   '当前无传输活动': 'No active transfers',
   '同步状态': 'Sync status',
   '未连接': 'Disconnected',

@@ -22,12 +22,14 @@ class StorageUsageView extends StatelessWidget {
     this.onRefresh,
     this.ring = false,
     this.shared = false,
+    this.compact = false,
   });
   final Json? value;
   final bool connected;
   final VoidCallback? onRefresh;
   final bool ring;
   final bool shared;
+  final bool compact;
   @override
   Widget build(BuildContext context) {
     final usage = value?['usage'] as Map?;
@@ -97,14 +99,23 @@ class StorageUsageView extends StatelessWidget {
               capacityBytes(used),
               capacityBytes(total),
             ]),
+            maxLines: compact ? 1 : null,
+            overflow: compact ? TextOverflow.ellipsis : null,
             style: const TextStyle(fontSize: 12),
           ),
           Text(
             tr('剩余 {arg0}', [capacityBytes(free)]),
+            maxLines: compact ? 1 : null,
+            overflow: compact ? TextOverflow.ellipsis : null,
             style: const TextStyle(fontSize: 12, color: Colors.blueGrey),
           ),
         ] else
-          Text(text, style: const TextStyle(fontSize: 12)),
+          Text(
+            text,
+            maxLines: compact ? 1 : null,
+            overflow: compact ? TextOverflow.ellipsis : null,
+            style: const TextStyle(fontSize: 12),
+          ),
         if (!ring && ratio != null)
           Padding(
             padding: const EdgeInsets.only(top: 7),
@@ -174,7 +185,9 @@ class StorageUsageView extends StatelessWidget {
               ),
               const SizedBox(width: 14),
             ],
-            Expanded(child: details),
+            Expanded(
+              child: compact ? Tooltip(message: text, child: details) : details,
+            ),
           ],
         ),
       );
