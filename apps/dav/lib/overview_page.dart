@@ -94,8 +94,7 @@ class _OverviewPageState extends State<OverviewPage> {
         ? tr('正在同步')
         : tr('当前无传输活动');
     final active = activity;
-    return ListView(
-      key: const ValueKey('sync-overview'),
+    final overviewHeader = SliverList.list(
       children: [
         LayoutBuilder(
           builder: (context, constraints) {
@@ -308,82 +307,101 @@ class _OverviewPageState extends State<OverviewPage> {
           },
         ),
         const SizedBox(height: 14),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final transfers = panel(
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  section(
-                    tr('传输概览'),
-                    tr('查看全部'),
-                    () => go(WorkspacePage.transfers),
-                  ),
-                  if (active.isEmpty)
-                    Padding(
-                      padding: EdgeInsets.symmetric(vertical: 18),
-                      child: Text(tr('当前无传输活动'), style: muted),
-                    ),
-                  for (final item in active.take(3)) transferRow(item),
-                ],
+      ],
+    );
+    final previews = SliverLayoutBuilder(
+      builder: (context, constraints) {
+        final sideBySide = constraints.crossAxisExtent >= fourColumnWidth;
+        // Leave room for the footer's button row and its vertical padding.
+        final double? minHeight = sideBySide
+            ? (constraints.viewportMainAxisExtent -
+                      constraints.precedingScrollExtent -
+                      82)
+                  .clamp(0.0, 224.0)
+            : null;
+        final transfers = panel(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              section(
+                tr('传输概览'),
+                tr('查看全部'),
+                () => go(WorkspacePage.transfers),
               ),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            );
-            final backup = panel(
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  section(
-                    tr('备份概览'),
-                    tr('管理备份'),
-                    () => go(WorkspacePage.backup),
-                  ),
-                  ...backupRows(),
-                ],
-              ),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            );
-            return constraints.maxWidth >= fourColumnWidth
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              if (active.isEmpty)
+                Padding(
+                  padding: EdgeInsets.symmetric(vertical: 18),
+                  child: Text(tr('当前无传输活动'), style: muted),
+                ),
+              for (final item in active.take(3)) transferRow(item),
+            ],
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          height: minHeight,
+        );
+        final backup = panel(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              section(tr('备份概览'), tr('管理备份'), () => go(WorkspacePage.backup)),
+              ...backupRows(),
+            ],
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          height: minHeight,
+        );
+        return SliverToBoxAdapter(
+          child: sideBySide
+              ? IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Expanded(child: transfers),
                       const SizedBox(width: 12),
                       Expanded(child: backup),
                     ],
-                  )
-                : Column(
-                    children: [transfers, const SizedBox(height: 12), backup],
-                  );
-          },
+                  ),
+                )
+              : Column(
+                  children: [transfers, const SizedBox(height: 12), backup],
+                ),
+        );
+      },
+    );
+    return CustomScrollView(
+      key: const ValueKey('sync-overview'),
+      slivers: [
+        overviewHeader,
+        previews,
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 26, bottom: 8),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: () => go(WorkspacePage.settings),
+                  icon: const Icon(Icons.tune, size: 18),
+                  label: Text(tr('缓存与排除规则')),
+                ),
+                TextButton.icon(
+                  onPressed: () => go(WorkspacePage.backup),
+                  icon: const Icon(Icons.backup_outlined, size: 18),
+                  label: Text(tr('备份与上传来源')),
+                ),
+                Text(
+                  tr('已连接 {arg0} / {arg1} · 当前账户缓存 {arg2}', [
+                    c.connectedProfiles.length,
+                    c.profiles.length,
+                    size((c.status['cache']?['bytes'] as num?) ?? 0),
+                  ]),
+                  style: muted,
+                ),
+              ],
+            ),
+          ),
         ),
-        const SizedBox(height: 14),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 12,
-          runSpacing: 8,
-          children: [
-            TextButton.icon(
-              onPressed: () => go(WorkspacePage.settings),
-              icon: const Icon(Icons.tune, size: 18),
-              label: Text(tr('缓存与排除规则')),
-            ),
-            TextButton.icon(
-              onPressed: () => go(WorkspacePage.backup),
-              icon: const Icon(Icons.backup_outlined, size: 18),
-              label: Text(tr('备份与上传来源')),
-            ),
-            Text(
-              tr('已连接 {arg0} / {arg1} · 当前账户缓存 {arg2}', [
-                c.connectedProfiles.length,
-                c.profiles.length,
-                size((c.status['cache']?['bytes'] as num?) ?? 0),
-              ]),
-              style: muted,
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
       ],
     );
   }
