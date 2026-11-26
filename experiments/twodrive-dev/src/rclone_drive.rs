@@ -688,6 +688,9 @@ impl Provider for RcloneDrive {
     fn recoverable_backup(&self) -> bool {
         true
     }
+    fn backup_replacement_requires_identity(&self) -> bool {
+        true
+    }
     fn versioned_backup(&self) -> bool {
         self.writable
     }

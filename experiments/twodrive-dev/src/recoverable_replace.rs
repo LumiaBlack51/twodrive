@@ -519,7 +519,7 @@ mod tests {
             assert!(run().is_err());
             fixture.fail.store(0, Ordering::SeqCst);
             if foreign {
-                fixture.upload("/target", b"foreign".to_vec()).unwrap();
+                fixture.upload("/target", b"new".to_vec()).unwrap();
             } else {
                 std::fs::write(&source, b"different local generation").unwrap();
             }
@@ -540,7 +540,7 @@ mod tests {
             }
             if foreign {
                 let target = fixture.get_metadata_by_path("/target").unwrap().unwrap();
-                assert_eq!(fixture.download(&target.remote_id).unwrap(), b"foreign");
+                assert_eq!(fixture.download(&target.remote_id).unwrap(), b"new");
             } else {
                 assert!(fixture.get_metadata_by_path("/target").unwrap().is_none());
             }

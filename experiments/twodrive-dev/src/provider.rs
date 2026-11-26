@@ -115,6 +115,11 @@ pub trait Provider: CloudBackend {
     fn recoverable_backup(&self) -> bool {
         false
     }
+    /// Journaled replacements require their staged object identity on retry;
+    /// matching bytes alone cannot acknowledge an unrelated target object.
+    fn backup_replacement_requires_identity(&self) -> bool {
+        false
+    }
     fn versioned_backup(&self) -> bool {
         false
     }
@@ -378,6 +383,9 @@ impl Backend {
             || (self.capabilities().upload
                 && self.capabilities().mkdir
                 && self.inner.recoverable_backup())
+    }
+    pub fn backup_replacement_requires_identity(&self) -> bool {
+        self.inner.backup_replacement_requires_identity()
     }
     pub fn upload_backup_path(
         &self,

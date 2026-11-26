@@ -19,6 +19,7 @@ pub struct OpaqueProvider {
     pub caps: Capabilities,
     pub versioned: bool,
     pub recoverable: bool,
+    pub journaled: bool,
     pub download_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub metadata_lookups: Arc<Mutex<Vec<String>>>,
     pub directory_lookups: Arc<Mutex<Vec<String>>>,
@@ -34,6 +35,7 @@ impl Default for OpaqueProvider {
             files: Arc::default(),
             versioned: false,
             recoverable: false,
+            journaled: false,
             download_gate: None,
             metadata_lookups: Arc::default(),
             directory_lookups: Arc::default(),
@@ -225,6 +227,9 @@ impl CloudBackend for OpaqueProvider {
     }
 }
 impl Provider for OpaqueProvider {
+    fn backup_replacement_requires_identity(&self) -> bool {
+        self.journaled
+    }
     fn recoverable_backup(&self) -> bool {
         self.recoverable
     }

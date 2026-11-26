@@ -358,6 +358,11 @@ fn reconcile_intent(
     record: &mut Record,
     paused: &Path,
 ) -> anyhow::Result<()> {
+    if backend.backup_replacement_requires_identity() {
+        // Leave the pending intent and baseline for the provider journal. A
+        // same-content foreign object is not an acknowledgement of our write.
+        return Ok(());
+    }
     if let Some(intent) = &record.intent {
         // The previous process may have died after the provider committed upload.
         if let Some(meta) = backend.get_metadata_by_path(dest)?
@@ -677,8 +682,17 @@ pub fn run(
                                 }
                             })?;
                             if uploaded.is_none() {
+                                let journaled = backend.backup_replacement_requires_identity();
+                                ensure!(
+                                    !journaled
+                                        || record
+                                            .intent
+                                            .as_ref()
+                                            .is_none_or(|intent| intent == &hash),
+                                    "先前替换尚未确认且本地文件已改变，恢复内容已保留"
+                                );
                                 reconcile_intent(&backend, &dest, record, &paused)?;
-                                if record.hash != hash {
+                                if record.hash != hash || (journaled && record.intent.is_some()) {
                                     let etag = record.etag.clone();
                                     record.intent = Some(hash.clone());
                                     if was_confirmed {
@@ -1068,6 +1082,48 @@ mod tests {
             provider.download(&latest.remote_id).unwrap(),
             b"changed source"
         );
+    }
+
+    #[test]
+    fn journaled_worker_does_not_adopt_same_content_with_another_object_identity() {
+        let mut provider = OpaqueProvider::default();
+        provider.recoverable = true;
+        provider.journaled = true;
+        provider.caps.conditional_upload = false;
+        let original = provider.upload("/backup/file", b"old".to_vec()).unwrap();
+        provider
+            .rename(&original.remote_id, "/backup/retained-original")
+            .unwrap();
+        let foreign = provider.upload("/backup/file", b"new".to_vec()).unwrap();
+        assert_ne!(foreign.remote_id, original.remote_id);
+        let mut record = Record {
+            hash: format!("{:x}", Sha256::digest(b"old")),
+            etag: Some(original.etag.clone()),
+            intent: Some(format!("{:x}", Sha256::digest(b"new"))),
+            ..Default::default()
+        };
+        // Give the independent object a distinguishable version as real
+        // providers can; its bytes still exactly match our pending intent.
+        provider
+            .upload_with_etag("/backup/file", b"new".to_vec(), Some(&foreign.etag))
+            .unwrap();
+        let backend = Backend::new(provider.clone());
+        let temp = tempfile::tempdir().unwrap();
+        reconcile_intent(
+            &backend,
+            "/backup/file",
+            &mut record,
+            &temp.path().join("paused"),
+        )
+        .unwrap();
+        assert_eq!(record.hash, format!("{:x}", Sha256::digest(b"old")));
+        assert_eq!(record.etag.as_deref(), Some(original.etag.as_str()));
+        assert_eq!(
+            record.intent.as_deref(),
+            Some(format!("{:x}", Sha256::digest(b"new")).as_str())
+        );
+        assert!(!record.is_confirmed());
+        assert_eq!(provider.download(&foreign.remote_id).unwrap(), b"new");
     }
 
     #[test]
